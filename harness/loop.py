@@ -47,7 +47,10 @@ class HarnessLoop:
     def __init__(self, config: HarnessConfig) -> None:
         self.config = config
         self.llm = LLM(config)
-        self.registry = build_registry(config.allowed_tools or None)
+        self.registry = build_registry(
+            config.allowed_tools or None,
+            extra_tools=config.extra_tools or None,
+        )
         self.planner = Planner(self.llm, config)
         self.executor = Executor(self.llm, self.registry, config)
         self.evaluator = Evaluator(self.llm, config)
@@ -77,7 +80,11 @@ class HarnessLoop:
         # feedback_ctx accumulates per-iteration evaluator feedback; it is
         # separate from project_ctx so we can prepend project context to every
         # iteration without re-appending it on each pass.
+        # Cap: keep only the most recent _FEEDBACK_CTX_CHARS chars so that a
+        # long-running loop (many iterations, verbose feedback) doesn't crowd
+        # the actual task description and plan out of the context window.
         feedback_ctx = ""
+        _FEEDBACK_CTX_CHARS = 8_000  # ~2 000 tokens — enough for 3-4 rich feedbacks
 
         for i in range(1, self.config.max_iterations + 1):
             iter_start = time.monotonic()
@@ -140,12 +147,25 @@ class HarnessLoop:
             # Accumulate evaluator feedback for the next iteration's planner.
             # We keep this separate from project_ctx so the tree/git block is
             # not duplicated on every loop.
-            feedback_ctx += (
+            new_feedback = (
                 f"\n\n## Iteration {i} Feedback\n\n"
                 f"The previous attempt was rejected.\n"
                 f"Reason: {verdict.reason}\n"
                 f"Feedback: {verdict.feedback}\n"
             )
+            feedback_ctx += new_feedback
+            # Trim oldest feedback first to stay within the rolling budget.
+            if len(feedback_ctx) > _FEEDBACK_CTX_CHARS:
+                feedback_ctx = feedback_ctx[-_FEEDBACK_CTX_CHARS:]
+                # Re-align to the start of a section heading so we never send
+                # a partial feedback block to the planner.
+                boundary = feedback_ctx.find("\n\n## Iteration")
+                if boundary > 0:
+                    feedback_ctx = feedback_ctx[boundary:]
+                log.debug(
+                    "feedback_ctx trimmed to %d chars (cap=%d)",
+                    len(feedback_ctx), _FEEDBACK_CTX_CHARS,
+                )
 
         log.warning(
             "✗ Max iterations (%d) reached without passing  total=%.1fs",
