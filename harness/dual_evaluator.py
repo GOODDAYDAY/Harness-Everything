@@ -18,10 +18,28 @@ from harness.prompts import dual_evaluator as default_prompts
 log = logging.getLogger(__name__)
 
 
+_SCORE_MIN: float = 0.0
+_SCORE_MAX: float = 10.0
+
+
 def parse_score(text: str, pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)") -> float:
-    """Extract a numeric score from evaluator output.  Returns 0.0 if not found."""
+    """Extract a numeric score from evaluator output and clamp it to [0, 10].
+
+    Returns 0.0 when the pattern is not found.  Logs a warning when the raw
+    value is outside the expected range so misconfigured score patterns and
+    hallucinated values are visible in the run log.
+    """
     m = re.search(pattern, text, re.IGNORECASE)
-    return float(m.group(1)) if m else 0.0
+    if not m:
+        return 0.0
+    raw = float(m.group(1))
+    clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
+    if clamped != raw:
+        log.warning(
+            "parse_score: raw value %.2f is outside [%.0f, %.0f] — clamped to %.2f",
+            raw, _SCORE_MIN, _SCORE_MAX, clamped,
+        )
+    return clamped
 
 
 class DualEvaluator:

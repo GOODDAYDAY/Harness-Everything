@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 
 from harness.artifacts import ArtifactStore
@@ -79,27 +80,39 @@ class PipelineLoop:
             return PipelineResult(success=False, rounds_completed=0)
 
         log.info(
-            "Pipeline: %d outer rounds x %d phases x %d inner rounds",
+            "Pipeline: %d outer rounds × %d phases × %d inner rounds  [%s]",
             self.config.outer_rounds, len(phases), self.config.inner_rounds,
+            self.artifacts.run_dir,
         )
 
         prior_best: str | None = None
         best_round_score = 0.0
         no_improve_count = 0
         all_round_results: list[list[PhaseResult]] = []
+        pipeline_start = time.monotonic()
 
         for outer in range(self.config.outer_rounds):
-            log.info("=== Outer Round %d/%d ===", outer + 1, self.config.outer_rounds)
+            round_start = time.monotonic()
+            log.info(
+                "── Round %d/%d ──────────────────────────────────────",
+                outer + 1, self.config.outer_rounds,
+            )
 
+            round_score = 0.0
             try:
                 round_results, prior_best, round_score = await self._run_outer_round(
                     outer, phases, prior_best
                 )
                 all_round_results.append(round_results)
             except Exception as e:
-                log.error("Round %d failed: %s", outer + 1, e)
-                round_score = 0.0
+                log.error("Round %d failed: %s", outer + 1, e, exc_info=True)
                 all_round_results.append([])
+
+            round_elapsed = time.monotonic() - round_start
+            log.info(
+                "Round %d complete: score=%.1f  elapsed=%.1fs",
+                outer + 1, round_score, round_elapsed,
+            )
 
             # Write round summary
             self._write_round_summary(outer, all_round_results[-1], prior_best, round_score)
@@ -113,25 +126,36 @@ class PipelineLoop:
                 if round_score > best_round_score:
                     best_round_score = round_score
                     no_improve_count = 0
+                    log.info("  ↑ New best score: %.1f", best_round_score)
                 else:
                     no_improve_count += 1
+                    log.info(
+                        "  → No improvement (best=%.1f, no_improve=%d/%d)",
+                        best_round_score, no_improve_count, self.config.patience,
+                    )
 
                 if no_improve_count >= self.config.patience:
                     log.info(
-                        "Early stop: no improvement for %d rounds (best=%.1f)",
+                        "Early stop: no improvement for %d consecutive round(s) (best=%.1f)",
                         no_improve_count, best_round_score,
                     )
                     break
+
+        total_elapsed = time.monotonic() - pipeline_start
 
         # Final summary
         self.artifacts.write_final_summary(
             f"# Pipeline Complete\n\n"
             f"Rounds: {len(all_round_results)}\n"
-            f"Best score: {best_round_score:.1f}\n\n"
+            f"Best score: {best_round_score:.1f}\n"
+            f"Elapsed: {total_elapsed:.1f}s\n\n"
             f"## Final Proposal\n\n{prior_best or '(none)'}\n"
         )
 
-        log.info("Pipeline complete. Artifacts: %s", self.artifacts.run_dir)
+        log.info(
+            "Pipeline complete: rounds=%d  best=%.1f  total=%.1fs  artifacts=%s",
+            len(all_round_results), best_round_score, total_elapsed, self.artifacts.run_dir,
+        )
 
         return PipelineResult(
             success=True,
@@ -155,12 +179,12 @@ class PipelineLoop:
             if phase.should_skip(outer):
                 if not self.checkpoint.is_phase_skipped(outer, phase.label):
                     self.checkpoint.mark_phase_skipped(outer, phase.label)
-                log.info("Phase %s: skipped (outer=%d)", phase.label, outer + 1)
+                log.info("  phase=%s  status=skipped (skip_after_round=%s)", phase.label, phase.skip_after_round)
                 continue
 
             # Resume: skip completed phases
             if self.checkpoint.is_phase_done(outer, phase.label):
-                log.info("Phase %s: already done, loading synthesis", phase.label)
+                log.info("  phase=%s  status=resumed (already done)", phase.label)
                 segs = self.artifacts.phase_dir(outer, phase.label)
                 prior_best = self.artifacts.read(*segs, "synthesis.txt") or prior_best
                 # Recover the persisted best_score so that resumed rounds are not
@@ -171,15 +195,25 @@ class PipelineLoop:
                 )
                 if resumed_score is not None:
                     phase_scores.append(resumed_score)
+                    log.info("    ↳ recovered score=%.1f", resumed_score)
                 continue
 
+            phase_start = time.monotonic()
             try:
                 phase_result = await self.runner.run_phase(outer, phase, prior_best)
                 results.append(phase_result)
                 phase_scores.append(phase_result.best_score)
                 prior_best = phase_result.synthesis or prior_best
+                log.info(
+                    "  phase=%s  status=done  score=%.1f  elapsed=%.1fs",
+                    phase.label, phase_result.best_score, time.monotonic() - phase_start,
+                )
             except Exception as e:
-                log.error("Phase %s failed: %s", phase.label, e)
+                log.error(
+                    "  phase=%s  status=FAILED  elapsed=%.1fs  error=%s",
+                    phase.label, time.monotonic() - phase_start, e,
+                    exc_info=True,
+                )
 
         round_score = max(phase_scores) if phase_scores else 0.0
         return results, prior_best, round_score

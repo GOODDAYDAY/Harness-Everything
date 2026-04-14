@@ -13,6 +13,78 @@ from harness.prompts import evaluator as default_prompts
 
 log = logging.getLogger(__name__)
 
+# Tools whose output is usually large and low-signal for the evaluator — we
+# keep only a short snippet instead of 200 chars.
+_VERBOSE_TOOLS = frozenset({"read_file", "bash", "tree", "list_directory", "grep_search", "glob_search"})
+# Tools whose output is always useful in full (up to the per-entry cap).
+_IMPORTANT_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "move_file", "copy_file", "file_patch"})
+_ENTRY_CAP_IMPORTANT = 300   # chars kept per important tool output
+_ENTRY_CAP_VERBOSE = 80      # chars kept per verbose tool output
+_MAX_LOG_ENTRIES = 40        # cap total entries shown (avoids 30-turn loops flooding the prompt)
+
+
+def _build_log_summary(execution_log: list[dict]) -> str:
+    """Build a compact, signal-dense execution log for the evaluator.
+
+    Strategy:
+    - File-mutating tool calls (write, edit, delete, move, copy, patch) are shown
+      with up to _ENTRY_CAP_IMPORTANT chars of output — these are what the
+      evaluator most needs to verify.
+    - Read/search/bash calls are collapsed to a one-liner with a short snippet so
+      the evaluator can see what was inspected without drowning in file contents.
+    - When the log exceeds _MAX_LOG_ENTRIES, excess read/search entries are
+      replaced with a count summary to keep the prompt tight.
+    - Error results are always shown in full (up to 400 chars) regardless of
+      tool type, because errors are high-signal for the evaluator.
+    """
+    if not execution_log:
+        return "(no tool calls)"
+
+    lines: list[str] = []
+    verbose_count = 0
+    verbose_suppressed = 0
+
+    shown = execution_log[:_MAX_LOG_ENTRIES]
+    suppressed_tail = len(execution_log) - len(shown)
+
+    for entry in shown:
+        tool = entry["tool"]
+        inp = entry.get("input", {})
+        out = str(entry.get("output", ""))
+        is_error = out.lower().startswith("error") or "[error]" in out.lower()
+
+        # Build a concise key for the input
+        key = (
+            inp.get("path")
+            or inp.get("source")
+            or inp.get("destination")
+            or (f"$ {inp['command'][:60]}" if "command" in inp else None)
+            or (f"pattern={inp['pattern']!r}" if "pattern" in inp else None)
+            or ""
+        )
+
+        if is_error:
+            snippet = out[:400]
+            lines.append(f"  ✗ {tool}({key}) → {snippet}")
+        elif tool in _IMPORTANT_TOOLS:
+            snippet = out[:_ENTRY_CAP_IMPORTANT].replace("\n", " ↵ ")
+            lines.append(f"  ✓ {tool}({key}) → {snippet}")
+        else:
+            # Verbose tool — suppress after a threshold
+            verbose_count += 1
+            if verbose_count > 8:
+                verbose_suppressed += 1
+                continue
+            snippet = out[:_ENTRY_CAP_VERBOSE].replace("\n", " ↵ ")
+            lines.append(f"  · {tool}({key}) → {snippet}")
+
+    if suppressed_tail:
+        lines.append(f"  … {suppressed_tail} more tool call(s) not shown (total={len(execution_log)})")
+    if verbose_suppressed:
+        lines.append(f"  … {verbose_suppressed} read/search call(s) collapsed (not shown)")
+
+    return "\n".join(lines)
+
 
 @dataclass
 class Verdict:
@@ -41,17 +113,10 @@ class Evaluator:
 
         Returns a Verdict with pass/fail and feedback.
         """
-        # Build a comprehensive summary for the evaluator
-        log_summary = "\n".join(
-            f"- {entry['tool']}({', '.join(f'{k}={v!r}' for k, v in entry['input'].items())})"
-            f"\n  → {entry['output'][:200]}"
-            for entry in result.log
-        )
-
         user_message = (
             f"## Original Task\n\n{task}\n\n"
             f"## Plan That Was Executed\n\n{plan}\n\n"
-            f"## Execution Log\n\n{log_summary}\n\n"
+            f"## Execution Log\n\n{_build_log_summary(result.log)}\n\n"
             f"## Executor Summary\n\n{result.text}\n\n"
             f"## Files Changed\n\n{', '.join(result.files_changed) or '(none)'}\n\n"
             "Please evaluate whether the task was completed correctly."
@@ -67,21 +132,37 @@ class Evaluator:
         )
 
         # Parse the merged verdict
-        merged = three_way.merged.upper()
-        passed = "VERDICT: PASS" in merged
-
-        # Extract feedback
-        feedback = ""
-        for line in three_way.merged.split("\n"):
-            if line.strip().upper().startswith("FEEDBACK:"):
-                feedback = line.split(":", 1)[1].strip()
-                break
+        merged_upper = three_way.merged.upper()
+        passed = "VERDICT: PASS" in merged_upper
 
         reason = ""
-        for line in three_way.merged.split("\n"):
+        feedback = ""
+        lines = three_way.merged.split("\n")
+
+        # Extract REASON (single-line)
+        for line in lines:
             if line.strip().upper().startswith("REASON:"):
                 reason = line.split(":", 1)[1].strip()
                 break
+
+        # Extract FEEDBACK — supports both:
+        #   single-line: "FEEDBACK: some text"
+        #   multi-line:  "FEEDBACK:\nline1\nline2\nEND_FEEDBACK"
+        feedback_lines: list[str] = []
+        in_feedback = False
+        for line in lines:
+            stripped_upper = line.strip().upper()
+            if stripped_upper == "END_FEEDBACK":
+                break
+            if in_feedback:
+                feedback_lines.append(line)
+            elif stripped_upper.startswith("FEEDBACK:"):
+                rest = line.split(":", 1)[1].strip()
+                if rest:
+                    # Single-line form: "FEEDBACK: text on same line"
+                    feedback_lines.append(rest)
+                in_feedback = True
+        feedback = "\n".join(feedback_lines).strip()
 
         log.info("Evaluator: passed=%s reason=%s", passed, reason)
 
