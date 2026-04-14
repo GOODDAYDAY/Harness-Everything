@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,35 +56,60 @@ class HarnessLoop:
         context = ""
         iterations: list[IterationRecord] = []
 
+        run_start = time.monotonic()
+
         for i in range(1, self.config.max_iterations + 1):
-            log.info("=== Iteration %d/%d ===", i, self.config.max_iterations)
+            iter_start = time.monotonic()
+            log.info("── Iteration %d/%d ──────────────────────────────", i, self.config.max_iterations)
 
             # 1. Plan
-            log.info("Planning...")
+            t0 = time.monotonic()
             plan = await self.planner.plan(task, context)
-            log.info("Plan ready (%d chars)", len(plan))
+            log.info(
+                "plan: %d chars  (%.1fs)",
+                len(plan),
+                time.monotonic() - t0,
+            )
 
             # 2. Execute
-            log.info("Executing...")
+            t0 = time.monotonic()
             result = await self.executor.execute(plan, context)
-            log.info("Execution done: %d tool calls, %d files changed",
-                     len(result.log), len(result.files_changed))
+            log.info(
+                "execute: tool_calls=%d files_changed=%d  (%.1fs)",
+                len(result.log),
+                len(result.files_changed),
+                time.monotonic() - t0,
+            )
+            if result.files_changed:
+                log.info("  changed: %s", ", ".join(result.files_changed))
 
             # 3. Evaluate
-            log.info("Evaluating...")
+            t0 = time.monotonic()
             verdict = await self.evaluator.evaluate(task, plan, result)
-            log.info("Verdict: passed=%s reason=%s", verdict.passed, verdict.reason)
+            log.info(
+                "evaluate: passed=%s  reason=%r  (%.1fs)",
+                verdict.passed,
+                verdict.reason,
+                time.monotonic() - t0,
+            )
 
             record = IterationRecord(
                 iteration=i, plan=plan, result=result, verdict=verdict
             )
             iterations.append(record)
 
+            iter_elapsed = time.monotonic() - iter_start
             if verdict.passed:
-                log.info("Task completed successfully after %d iteration(s).", i)
+                log.info(
+                    "✓ Task completed after %d iteration(s)  total=%.1fs",
+                    i,
+                    time.monotonic() - run_start,
+                )
                 return HarnessResult(
                     success=True, iterations=iterations, final_result=result
                 )
+
+            log.info("✗ Iteration %d failed (%.1fs) — feedback: %s", i, iter_elapsed, verdict.feedback[:200])
 
             # Feed evaluation feedback into the next iteration
             context += (
@@ -93,5 +119,9 @@ class HarnessLoop:
                 f"Feedback: {verdict.feedback}\n"
             )
 
-        log.warning("Max iterations (%d) reached without passing.", self.config.max_iterations)
+        log.warning(
+            "✗ Max iterations (%d) reached without passing  total=%.1fs",
+            self.config.max_iterations,
+            time.monotonic() - run_start,
+        )
         return HarnessResult(success=False, iterations=iterations)
