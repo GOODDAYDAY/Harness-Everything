@@ -135,16 +135,23 @@ class PipelineLoop:
             # Write round summary
             self._write_round_summary(outer, all_round_results[-1], prior_best, round_score)
 
-            # Early stopping — evaluated for every round regardless of score.
-            # The old guard `round_score > 0` caused zero-scoring rounds (e.g.
-            # all phases failed or all score parses returned 0.0) to be silently
-            # skipped, so patience never fired when all rounds scored 0 and the
-            # full outer_rounds budget was always consumed.
+            # Early stopping — always update best_round_score, but only count
+            # non-improvement from round 2 onwards.  Round 1 (outer == 0)
+            # establishes the baseline; penalising it as a "no improvement"
+            # event is wrong because there is nothing to compare against yet.
+            # The old guard `round_score > 0` caused zero-scoring rounds to be
+            # silently skipped, so patience never fired when all rounds scored
+            # 0.0.  We now track unconditionally but skip the increment on the
+            # first round.
             if self.config.patience > 0:
                 if round_score > best_round_score:
                     best_round_score = round_score
                     no_improve_count = 0
                     log.info("  ↑ New best score: %.1f", best_round_score)
+                elif outer == 0:
+                    # First round: record the baseline, do not penalise.
+                    best_round_score = round_score
+                    log.info("  ↑ Baseline score: %.1f", best_round_score)
                 else:
                     no_improve_count += 1
                     log.info(
@@ -258,7 +265,7 @@ class PipelineLoop:
                     exc_info=True,
                 )
 
-        round_score = max(phase_scores) if phase_scores else 0.0
+        round_score = (sum(phase_scores) / len(phase_scores)) if phase_scores else 0.0
         return results, prior_best, round_score
 
     def _write_round_summary(
