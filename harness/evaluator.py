@@ -1,13 +1,32 @@
-"""Evaluator — three-way evaluation of execution results."""
+"""Evaluator — three-way evaluation of execution results.
+
+Augmented with *static analysis*: before passing execution results to the
+LLM, we run objective code-quality checks (syntax validation, import
+resolution, symbol existence, structural regression) on every changed Python
+file.  The findings are injected into the evaluation prompt so the LLM verdict
+is grounded in facts, not just opinion.
+
+Key behaviour change
+--------------------
+* If static analysis finds **ERROR** findings (syntax errors, missing
+  symbols), the verdict is forced to FAIL immediately — no LLM call needed.
+  This prevents the LLM from rationalising away hard compile-time errors.
+* **WARN** findings (unknown imports, removed names) are included in the
+  prompt as advisory context; the LLM can weigh them appropriately.
+* When there are no changed Python files, static analysis is a no-op (empty
+  block) and the existing three-way resolution runs unchanged.
+"""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from harness.config import HarnessConfig
 from harness.executor import ExecutionResult
 from harness.llm import LLM
+from harness.static_analysis import StaticReport, run_static_checks
 from harness.three_way import ThreeWayResolver
 from harness.prompts import evaluator as default_prompts
 
@@ -86,6 +105,54 @@ def _build_log_summary(execution_log: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _extract_before_snapshots(execution_log: list[dict]) -> dict[str, str]:
+    """Extract pre-execution file content from read_file calls in the log.
+
+    The executor is instructed to ``read_file`` every file before editing it.
+    We harvest those reads to build a ``{rel_path: source_before}`` snapshot
+    dictionary that enables the structural-regression check in static analysis.
+
+    Only the *first* read of each path is kept (subsequent reads may be
+    post-edit verification reads, which would give us the *after* state).
+
+    Args:
+        execution_log: The tool call log from ``ExecutionResult.log``.
+
+    Returns:
+        A mapping of file path → content-before-execution.
+    """
+    snapshots: dict[str, str] = {}
+    for entry in execution_log:
+        if entry.get("tool") != "read_file":
+            continue
+        path = entry.get("input", {}).get("path", "")
+        output = entry.get("output", "")
+        if not path or not output:
+            continue
+        # Normalise path separators and skip already-seen paths
+        norm = str(Path(path))
+        if norm in snapshots:
+            continue  # keep first (pre-edit) read only
+        # Strip the line-number header emitted by ReadFileTool:
+        #   "[filename.py] lines 1-N of M\n     1\tline content..."
+        # We want raw source text for AST parsing, not the annotated form.
+        lines = output.split("\n")
+        # The header is always the first line when produced by ReadFileTool
+        if lines and lines[0].startswith("[") and "] lines " in lines[0]:
+            raw_lines: list[str] = []
+            for ln in lines[1:]:
+                # Each content line is: "   N\t<actual code line>"
+                tab_pos = ln.find("\t")
+                if tab_pos >= 0:
+                    raw_lines.append(ln[tab_pos + 1:])
+                else:
+                    raw_lines.append(ln)
+            snapshots[norm] = "\n".join(raw_lines)
+        else:
+            snapshots[norm] = output
+    return snapshots
+
+
 @dataclass
 class Verdict:
     """Evaluation outcome."""
@@ -93,10 +160,21 @@ class Verdict:
     passed: bool
     reason: str
     feedback: str  # actionable feedback for the next iteration
+    static_report: StaticReport | None = None  # attached for downstream use
 
 
 class Evaluator:
-    """Evaluate execution results via three-way resolution."""
+    """Evaluate execution results via static analysis + three-way resolution.
+
+    Static analysis runs first and provides objective findings (syntax errors,
+    missing imported symbols, structural regressions).  These findings are
+    injected into the LLM evaluation prompt so the reviewer is anchored to
+    facts rather than guessing.
+
+    Auto-fail rule: when the static analysis report contains ERROR findings,
+    the verdict is forced to FAIL without making an LLM call.  This prevents
+    the LLM from rationalising away hard compile-time errors and saves tokens.
+    """
 
     def __init__(self, llm: LLM, config: HarnessConfig) -> None:
         self.llm = llm
@@ -111,19 +189,75 @@ class Evaluator:
     ) -> Verdict:
         """Evaluate whether the execution fulfilled the task.
 
-        Returns a Verdict with pass/fail and feedback.
+        Steps:
+        1. Run static analysis on all changed Python files.
+        2. If there are ERROR findings → force FAIL immediately.
+        3. Inject the static report into the LLM prompt.
+        4. Run three-way resolution as before.
+        5. Return a Verdict with the static report attached.
+
+        Returns a Verdict with pass/fail, reason, feedback, and the
+        StaticReport so callers can surface objective findings if needed.
         """
-        user_message = (
-            f"## Original Task\n\n{task}\n\n"
-            f"## Plan That Was Executed\n\n{plan}\n\n"
-            f"## Execution Log\n\n{_build_log_summary(result.log)}\n\n"
-            f"## Executor Summary\n\n{result.text}\n\n"
-            f"## Files Changed\n\n{', '.join(result.files_changed) or '(none)'}\n\n"
-            "Please evaluate whether the task was completed correctly."
+        # Step 1: static analysis
+        before_snapshots = _extract_before_snapshots(result.log)
+        static_report = run_static_checks(
+            result.files_changed,
+            self.config.workspace,
+            before_snapshots=before_snapshots,
         )
+
+        # Step 2: auto-fail on objective errors (syntax, missing symbols)
+        if static_report.has_errors:
+            error_summary = "\n".join(
+                f"  [{f.file}:{f.line or '?'}] {f.message}"
+                for f in static_report.errors
+            )
+            reason = (
+                f"Static analysis found {len(static_report.errors)} error(s) "
+                f"that prevent execution: {static_report.errors[0].message[:120]}"
+            )
+            feedback = (
+                "## Static Analysis Errors (fix these first)\n\n"
+                f"{error_summary}\n\n"
+                "The above errors are objective — they are not LLM opinions.\n"
+                "Fix all ERROR findings before attempting other improvements.\n\n"
+                f"Full static analysis report:\n\n{static_report.to_prompt_block()}"
+            )
+            log.warning(
+                "Evaluator: auto-FAIL due to %d static error(s): %s",
+                len(static_report.errors),
+                "; ".join(f.message[:80] for f in static_report.errors[:3]),
+            )
+            return Verdict(
+                passed=False,
+                reason=reason,
+                feedback=feedback,
+                static_report=static_report,
+            )
+
+        # Step 3: build LLM evaluation message, prepending static analysis block
+        static_block = static_report.to_prompt_block()
+        user_message_parts: list[str] = []
+
+        if static_block:
+            user_message_parts.append(static_block)
+            user_message_parts.append("")  # blank line separator
+
+        user_message_parts += [
+            f"## Original Task\n\n{task}",
+            f"## Plan That Was Executed\n\n{plan}",
+            f"## Execution Log\n\n{_build_log_summary(result.log)}",
+            f"## Executor Summary\n\n{result.text}",
+            f"## Files Changed\n\n{', '.join(result.files_changed) or '(none)'}",
+            "Please evaluate whether the task was completed correctly.",
+        ]
+
+        user_message = "\n\n".join(user_message_parts)
 
         cfg = self.config.evaluator
 
+        # Step 4: three-way resolution
         three_way = await self.resolver.resolve(
             user_message,
             conservative_system=cfg.conservative_system or default_prompts.CONSERVATIVE_SYSTEM,
@@ -164,12 +298,29 @@ class Evaluator:
                 in_feedback = True
         feedback = "\n".join(feedback_lines).strip()
 
-        log.info("Evaluator: passed=%s reason=%s", passed, reason)
+        # Append static warnings to feedback so the next iteration sees them
+        # even when the LLM verdict is PASS.
+        if static_report.warnings:
+            warn_lines = "\n".join(
+                f"  [{f.file}:{f.line or '?'}] {f.message}"
+                for f in static_report.warnings
+            )
+            warning_appendix = (
+                "\n\n## Static Analysis Warnings (advisory — not blocking)\n\n"
+                f"{warn_lines}"
+            )
+            feedback = (feedback + warning_appendix) if feedback else warning_appendix
+
+        log.info(
+            "Evaluator: passed=%s reason=%s  static=(%d err, %d warn)",
+            passed, reason, len(static_report.errors), len(static_report.warnings),
+        )
 
         return Verdict(
             passed=passed,
             reason=reason or "(no reason extracted)",
             feedback=feedback or three_way.merged,
+            static_report=static_report,
         )
 
 
@@ -181,7 +332,7 @@ def build_evaluator(
     """Factory: return the appropriate evaluator based on mode.
 
     Args:
-        mode: ``"three_way"`` for ThreeWayResolver-based evaluation,
+        mode: ``"three_way"`` for ThreeWayResolver-based evaluation (default),
               ``"dual_isolated"`` for DualEvaluator (import separately).
     """
     if mode == "dual_isolated":

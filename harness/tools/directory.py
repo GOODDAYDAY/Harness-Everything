@@ -110,13 +110,17 @@ class TreeTool(Tool):
         if depth >= max_depth:
             return
         entries = sorted(directory.iterdir(), key=lambda e: (not e.is_dir(), e.name))
-        for i, entry in enumerate(entries):
-            if entry.name.startswith("."):
-                continue
-            connector = "|-- " if i < len(entries) - 1 else "`-- "
+        # Filter hidden entries before computing connectors so that the last
+        # *visible* entry correctly receives the "`-- " (end) connector instead
+        # of "|-- " (continue).  Using the raw enumerate index from the
+        # unfiltered list was a bug when hidden files appeared at the end.
+        visible = [e for e in entries if not e.name.startswith(".")]
+        for i, entry in enumerate(visible):
+            is_last = i == len(visible) - 1
+            connector = "`-- " if is_last else "|-- "
             if entry.is_dir():
                 lines.append(f"{prefix}{connector}{entry.name}/")
-                extension = "|   " if i < len(entries) - 1 else "    "
+                extension = "    " if is_last else "|   "
                 self._walk(entry, prefix + extension, max_depth, depth + 1, lines)
             else:
                 lines.append(f"{prefix}{connector}{entry.name}")

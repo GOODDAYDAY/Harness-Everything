@@ -122,24 +122,29 @@ def _build_tree(
     except PermissionError:
         return lines
 
-    for i, entry in enumerate(entries):
+    # Filter to visible entries first so connector logic ("is this the last
+    # entry?") is based only on what will actually be displayed.  Using the
+    # raw enumerate index against the unfiltered list was a bug: a hidden file
+    # or noise dir near the end of the sorted list caused the last *visible*
+    # entry to receive "├── " (more items follow) instead of "└── " (last item).
+    visible = [
+        e for e in entries
+        if not e.name.startswith(".")
+        and e.name not in _TREE_SKIP_DIRS
+        and not e.name.endswith(".egg-info")
+    ]
+
+    for i, entry in enumerate(visible):
         if counter[0] >= _TREE_MAX_ENTRIES:
             lines.append(f"{prefix}... (truncated)")
             break
         name = entry.name
-        # Skip hidden and known-noise dirs
-        if name.startswith("."):
-            continue
-        # Check skip list (glob-style suffixes like *.egg-info not needed here;
-        # we match by exact name since the patterns in _TREE_SKIP_DIRS are names)
-        if name in _TREE_SKIP_DIRS or name.endswith(".egg-info"):
-            continue
-
-        connector = "├── " if i < len(entries) - 1 else "└── "
+        is_last = i == len(visible) - 1
+        connector = "└── " if is_last else "├── "
         if entry.is_dir():
             lines.append(f"{prefix}{connector}{name}/")
             counter[0] += 1
-            extension = "│   " if i < len(entries) - 1 else "    "
+            extension = "    " if is_last else "│   "
             lines.extend(
                 _build_tree(entry, prefix + extension, depth + 1, max_depth, counter)
             )

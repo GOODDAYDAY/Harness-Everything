@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
+import time
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -49,6 +52,126 @@ _TOTAL_CHAR_LIMIT = 60_000  # max characters for the entire file_context block
 _TAIL_LINES = 120           # when a file is truncated, keep this many tail lines
                             # (tail is usually more relevant than the top for large files)
 
+# ---------------------------------------------------------------------------
+# File relevance scoring
+# ---------------------------------------------------------------------------
+# Weights for the composite relevance score (must sum to 1.0).
+_W_KEYWORD  = 0.50   # keyword overlap between file path and phase keywords
+_W_RECENCY  = 0.35   # how recently the file was modified
+_W_SIZE     = 0.15   # inverse-size signal (prefer smaller files when keywords equal)
+
+# Recency half-life: files modified within this window score near 1.0 on
+# recency; older files decay exponentially.  24 h is a good default for
+# active development workflows.
+_RECENCY_HALF_LIFE_SECS: float = 24 * 3600   # 24 hours
+
+
+def _tokenise_path(path_str: str) -> set[str]:
+    """Split a file path into lowercase tokens for keyword matching.
+
+    Splits on directory separators, underscores, hyphens, dots, and
+    camelCase/PascalCase boundaries so that e.g.
+    ``"src/phase_runner.py"`` → ``{"src", "phase", "runner", "py"}``
+    and ``"harness/DualEvaluator.py"`` → ``{"harness", "dual", "evaluator", "py"}``.
+    """
+    # Replace separators and punctuation with spaces
+    raw = re.sub(r"[/\._\-]", " ", path_str)
+    # Split on camelCase / PascalCase boundaries
+    raw = re.sub(r"([a-z])([A-Z])", r" ", raw)
+    return {t.lower() for t in raw.split() if t}
+
+
+def _tokenise_phrase(phrase: str) -> set[str]:
+    """Tokenise a phase name or task description into lowercase keywords.
+
+    Strips common English stop-words so that ``"requirements analysis"``
+    becomes ``{"requirements", "analysis"}`` rather than including ``"a"``,
+    ``"the"``, ``"for"``, etc., which would match nearly every file.
+    """
+    _STOP_WORDS = frozenset({
+        "a", "an", "the", "and", "or", "of", "for", "in", "on", "at",
+        "to", "is", "it", "be", "as", "by", "we", "do", "up", "so",
+        "all", "new", "add", "use", "run", "get", "set", "with",
+    })
+    raw = re.sub(r"[^a-zA-Z0-9 _\-]", " ", phrase)
+    return {
+        t.lower()
+        for t in re.split(r"[\s_\-]+", raw)
+        if t and t.lower() not in _STOP_WORDS and len(t) > 1
+    }
+
+
+def score_file_relevance(
+    path_str: str,
+    keywords: set[str],
+    mtime: float,
+    now: float,
+    file_size: int = 0,
+) -> float:
+    """Compute a composite relevance score in [0, 1] for a source file.
+
+    Higher scores → file appears earlier in context injection.
+
+    Scoring signals
+    ---------------
+    **Keyword overlap** (weight 50%): Jaccard similarity between the set of
+    tokens in the file path and the set of ``keywords`` extracted from the
+    phase name / task description.  A file whose name or directory directly
+    mentions the phase's domain scores close to 1.0 on this dimension.
+
+    **Recency** (weight 35%): Exponential decay based on time since last
+    modification, with a half-life of ``_RECENCY_HALF_LIFE_SECS`` (24 h).
+    A file edited in the last hour scores ~1.0; one edited a week ago scores
+    ~0.06.
+
+    **Inverse size** (weight 15%): Files smaller than ``_FILE_CHAR_LIMIT``
+    get a small bonus over very large files.  This prevents a single enormous
+    file from crowding out several smaller, equally relevant files.
+
+    Args:
+        path_str:  Relative file path (e.g. ``"harness/phase_runner.py"``).
+        keywords:  Set of lowercase keyword tokens from the phase/task.
+        mtime:     File modification time as a Unix timestamp.
+        now:       Current time as a Unix timestamp (for recency calculation).
+        file_size: File size in bytes (0 = unknown, skips size signal).
+
+    Returns:
+        Composite score in [0.0, 1.0].
+    """
+    # --- keyword signal ---
+    path_tokens = _tokenise_path(path_str)
+    if keywords and path_tokens:
+        # Jaccard index: |intersection| / |union|
+        intersection = len(path_tokens & keywords)
+        union = len(path_tokens | keywords)
+        keyword_score = intersection / union if union > 0 else 0.0
+    else:
+        keyword_score = 0.0
+
+    # --- recency signal ---
+    age_secs = max(0.0, now - mtime)
+    # Exponential decay: score = 0.5^(age / half_life)
+    recency_score = math.pow(0.5, age_secs / _RECENCY_HALF_LIFE_SECS)
+
+    # --- inverse-size signal ---
+    if file_size > 0:
+        # Files at or below _FILE_CHAR_LIMIT score 1.0; larger files decay
+        # logarithmically (not linearly) so a 2× oversize file still gets ~0.7).
+        if file_size <= _FILE_CHAR_LIMIT:
+            size_score = 1.0
+        else:
+            # log₂(limit/size): negative for oversized files → clamp to [0,1]
+            ratio = _FILE_CHAR_LIMIT / file_size
+            size_score = max(0.0, min(1.0, 1.0 + math.log2(ratio)))
+    else:
+        size_score = 0.5  # neutral when size is unknown
+
+    return (
+        _W_KEYWORD * keyword_score
+        + _W_RECENCY * recency_score
+        + _W_SIZE    * size_score
+    )
+
 
 def _truncate_file_content(content: str, path_str: str) -> tuple[str, bool]:
     """Return (truncated_content, was_truncated).
@@ -88,24 +211,42 @@ def _truncate_file_content(content: str, path_str: str) -> tuple[str, bool]:
     return truncated, True
 
 
-def _read_source_files(workspace: str, glob_patterns: list[str]) -> str:
+def _read_source_files(
+    workspace: str,
+    glob_patterns: list[str],
+    keywords: set[str] | None = None,
+) -> str:
     """Read and concatenate source files matching glob patterns.
 
     Per-file limit: _FILE_CHAR_LIMIT chars (head + tail strategy).
     Total limit: _TOTAL_CHAR_LIMIT chars across all files.
-    Files are sorted by modification time (most-recently-changed first) so
-    that the most relevant files are included when the total budget is tight.
+
+    Ordering: when ``keywords`` are provided (extracted from the phase name
+    or task description), files are ranked by a composite relevance score
+    — keyword overlap × path tokens + recency decay + inverse-size signal —
+    so that the most task-relevant files are always injected first and fill
+    the context budget before less-relevant ones.  When ``keywords`` is
+    ``None`` or empty the function falls back to pure mtime ordering
+    (most-recently-changed first), preserving prior behaviour.
+
+    Args:
+        workspace:     Absolute path to the project workspace.
+        glob_patterns: List of glob patterns relative to ``workspace``.
+        keywords:      Optional set of lowercase keyword tokens from the
+                       phase name / task (see ``_tokenise_phrase``).  Pass
+                       ``None`` to use pure mtime ordering.
     """
     import glob as glob_mod
 
-    # Collect all matching files with their mtime for sorting.
+    # Collect all matching files with their mtime and size for scoring.
     # Use the resolved absolute path as the dedup key so that two glob patterns
     # that overlap (e.g. "**/*.py" and "src/**/*.py") never inject the same
     # file twice.  Without dedup the file would be read twice, counted against
     # the _TOTAL_CHAR_LIMIT twice, and sent to the LLM as duplicate context —
     # bumping other files out of the budget silently.
     seen_resolved: set[str] = set()
-    file_entries: list[tuple[float, str]] = []  # (mtime, rel_path)
+    # (mtime, size_bytes, rel_path)
+    file_entries: list[tuple[float, int, str]] = []
     for pattern in glob_patterns:
         for path_str in glob_mod.glob(pattern, recursive=True, root_dir=workspace):
             full = Path(workspace) / path_str
@@ -116,20 +257,43 @@ def _read_source_files(workspace: str, glob_patterns: list[str]) -> str:
                 continue
             seen_resolved.add(resolved)
             try:
-                mtime = full.stat().st_mtime
-                file_entries.append((mtime, path_str))
+                st = full.stat()
+                file_entries.append((st.st_mtime, st.st_size, path_str))
             except OSError:
                 continue
 
-    # Most recently modified first — most likely to be relevant
-    file_entries.sort(key=lambda e: e[0], reverse=True)
+    if not file_entries:
+        return "[No source files matched]\n"
+
+    # Sort by composite relevance score (descending) when keywords are provided;
+    # fall back to pure mtime (descending) otherwise.
+    if keywords:
+        now = time.time()
+        file_entries.sort(
+            key=lambda e: score_file_relevance(
+                e[2],           # rel_path
+                keywords,
+                e[0],           # mtime
+                now,
+                file_size=e[1], # bytes
+            ),
+            reverse=True,
+        )
+        log.debug(
+            "_read_source_files: ranking %d files by relevance (keywords=%s)",
+            len(file_entries),
+            sorted(keywords)[:8],   # cap log length
+        )
+    else:
+        # Legacy: most recently modified first
+        file_entries.sort(key=lambda e: e[0], reverse=True)
 
     parts: list[str] = []
     total_chars = 0
     truncated_files: list[str] = []
     skipped_files: list[str] = []
 
-    for _mtime, path_str in file_entries:
+    for _mtime, _size, path_str in file_entries:
         if total_chars >= _TOTAL_CHAR_LIMIT:
             skipped_files.append(path_str)
             continue
@@ -202,10 +366,23 @@ class PhaseRunner:
         label = phase.label
         n_inner = phase.inner_rounds or self.config.inner_rounds
 
-        # 1. Read source files once for the whole phase
-        file_context = _read_source_files(self.harness.workspace, phase.glob_patterns)
+        # 1. Read source files once for the whole phase.
+        # Extract relevance keywords from the phase name and falsifiable
+        # criterion so that the most task-relevant files are ranked highest
+        # when the total context budget is constrained.
+        phase_keywords = _tokenise_phrase(
+            f"{phase.name} {phase.falsifiable_criterion}"
+        )
+        file_context = _read_source_files(
+            self.harness.workspace,
+            phase.glob_patterns,
+            keywords=phase_keywords or None,
+        )
         log.info(
-            "Phase %s: injected %d chars from source files", label, len(file_context)
+            "Phase %s: injected %d chars from source files  (keywords=%s)",
+            label,
+            len(file_context),
+            sorted(phase_keywords)[:6] if phase_keywords else "[]",
         )
 
         # 2. Run inner rounds
