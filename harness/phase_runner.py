@@ -21,22 +21,144 @@ log = logging.getLogger(__name__)
 
 MIN_SYNTHESIS_CHARS = 150
 
+# Default system prompt used in debate-mode rounds when a phase has no plain
+# (non-template) system_prompt.  A concrete, opinionated default gets better
+# proposals than the previous "You are a senior software engineer" stub.
+_DEBATE_SYSTEM_DEFAULT = """\
+You are a senior software engineer tasked with producing a detailed, \
+actionable implementation proposal.
+
+REQUIREMENTS FOR YOUR PROPOSAL:
+1. Reference SPECIFIC code entities from the source context — actual function \
+   names, class names, file paths. Generic descriptions ("the helper function") \
+   score poorly.
+2. Cover EVERY stated requirement. If a requirement is ambiguous, state your \
+   interpretation explicitly.
+3. For each change, state: FILE, WHAT changes, and WHY it is the right approach.
+4. Anticipate at least one failure mode or edge case and explain how your \
+   proposal handles it.
+5. Keep the proposal concrete enough that another engineer could implement it \
+   without asking clarifying questions.
+
+DO NOT repeat the prior best verbatim — your goal is to strictly improve on it.
+"""
+
+_FILE_CHAR_LIMIT = 8_000    # max characters injected per individual file
+_TOTAL_CHAR_LIMIT = 60_000  # max characters for the entire file_context block
+_TAIL_LINES = 120           # when a file is truncated, keep this many tail lines
+                            # (tail is usually more relevant than the top for large files)
+
+
+def _truncate_file_content(content: str, path_str: str) -> tuple[str, bool]:
+    """Return (truncated_content, was_truncated).
+
+    Strategy: if the file exceeds _FILE_CHAR_LIMIT, keep the first half and
+    last _TAIL_LINES lines so that both the module header and the most-recently-
+    edited code at the bottom are visible.
+    """
+    if len(content) <= _FILE_CHAR_LIMIT:
+        return content, False
+
+    lines = content.splitlines(keepends=True)
+    # Always show at least the last _TAIL_LINES lines
+    tail = lines[-_TAIL_LINES:] if len(lines) > _TAIL_LINES else lines
+    tail_text = "".join(tail)
+
+    # Fill remaining budget from the top
+    budget = _FILE_CHAR_LIMIT - len(tail_text)
+    if budget > 0:
+        head_text = content[:budget]
+        # Don't cut in the middle of a line
+        last_nl = head_text.rfind("\n")
+        head_text = head_text[: last_nl + 1] if last_nl >= 0 else head_text
+        omitted = len(lines) - head_text.count("\n") - _TAIL_LINES
+        truncated = (
+            head_text
+            + f"\n... [{omitted} lines omitted — file truncated to fit context] ...\n\n"
+            + tail_text
+        )
+    else:
+        # File is so large that even the tail fills the budget — just show tail
+        truncated = (
+            f"... [file truncated — showing last {_TAIL_LINES} lines] ...\n\n"
+            + tail_text
+        )
+
+    return truncated, True
+
 
 def _read_source_files(workspace: str, glob_patterns: list[str]) -> str:
-    """Read and concatenate source files matching glob patterns."""
+    """Read and concatenate source files matching glob patterns.
+
+    Per-file limit: _FILE_CHAR_LIMIT chars (head + tail strategy).
+    Total limit: _TOTAL_CHAR_LIMIT chars across all files.
+    Files are sorted by modification time (most-recently-changed first) so
+    that the most relevant files are included when the total budget is tight.
+    """
     import glob as glob_mod
 
-    parts: list[str] = []
+    # Collect all matching files with their mtime for sorting
+    file_entries: list[tuple[float, str]] = []  # (mtime, rel_path)
     for pattern in glob_patterns:
-        for path_str in sorted(glob_mod.glob(pattern, recursive=True, root_dir=workspace)):
+        for path_str in glob_mod.glob(pattern, recursive=True, root_dir=workspace):
             full = Path(workspace) / path_str
             if full.is_file():
                 try:
-                    content = full.read_text(encoding="utf-8", errors="replace")
-                    parts.append(f"=== FILE: {path_str} ===\n{content}\n")
+                    mtime = full.stat().st_mtime
+                    file_entries.append((mtime, path_str))
                 except OSError:
                     continue
-    return "".join(parts) or "[No source files matched]\n"
+
+    # Most recently modified first — most likely to be relevant
+    file_entries.sort(key=lambda e: e[0], reverse=True)
+
+    parts: list[str] = []
+    total_chars = 0
+    truncated_files: list[str] = []
+    skipped_files: list[str] = []
+
+    for _mtime, path_str in file_entries:
+        if total_chars >= _TOTAL_CHAR_LIMIT:
+            skipped_files.append(path_str)
+            continue
+
+        full = Path(workspace) / path_str
+        try:
+            content = full.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        content, was_truncated = _truncate_file_content(content, path_str)
+        if was_truncated:
+            truncated_files.append(path_str)
+
+        # Check total budget after per-file truncation
+        remaining = _TOTAL_CHAR_LIMIT - total_chars
+        if len(content) > remaining:
+            content = content[:remaining]
+            skipped_files.append(path_str)  # partially included
+
+        block = f"=== FILE: {path_str} ===\n{content}\n"
+        parts.append(block)
+        total_chars += len(block)
+
+    if not parts:
+        return "[No source files matched]\n"
+
+    # Append a concise manifest so the LLM knows what it's missing
+    if truncated_files or skipped_files:
+        notes: list[str] = []
+        if truncated_files:
+            notes.append(
+                f"[Truncated to fit context: {', '.join(truncated_files)}]"
+            )
+        if skipped_files:
+            notes.append(
+                f"[Omitted (total context limit): {', '.join(skipped_files)}]"
+            )
+        parts.append("\n".join(notes) + "\n")
+
+    return "".join(parts)
 
 
 class PhaseRunner:
@@ -163,9 +285,19 @@ class PhaseRunner:
         """Debate mode: text-only proposal, no tool_use."""
         log.info("Phase %s inner %d: debating...", phase.label, inner + 1)
 
+        # Use the phase's own system_prompt as the debate system instruction when
+        # it is a plain string (not a Template with $variables) — i.e. the config
+        # author set a dedicated system prompt for the proposer role.  Fall back to
+        # a sensible default only when phase.system_prompt is empty or still
+        # contains un-substituted Template variables (which would be confusing as a
+        # system prompt).
+        _debate_system = _DEBATE_SYSTEM_DEFAULT
+        if phase.system_prompt and "$" not in phase.system_prompt:
+            _debate_system = phase.system_prompt
+
         resp = await self.llm.call(
             [{"role": "user", "content": prompt}],
-            system="You are a senior software engineer. Produce a detailed, actionable proposal.",
+            system=_debate_system,
         )
         proposal = resp.text
         self.artifacts.write(proposal, *segs, "proposal.txt")
