@@ -1,0 +1,11 @@
+[project]
+name = "harness-everything"
+version = "0.1.0"
+description = "Configurable three-way planner-executor-evaluator harness"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+]
+
+[project.scripts]
+harness = "main:main"
