@@ -87,7 +87,7 @@ def _tokenise_path(path_str: str) -> set[str]:
     # Replace separators and punctuation with spaces
     raw = re.sub(r"[/\._\-]", " ", path_str)
     # Split on camelCase / PascalCase boundaries
-    raw = re.sub(r"([a-z])([A-Z])", r" ", raw)
+    raw = re.sub(r"([a-z])([A-Z])", r"\1 \2", raw)
     return {t.lower() for t in raw.split() if t}
 
 
