@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -118,6 +119,16 @@ class PipelineLoop:
                 "Round %d complete: score=%.1f  elapsed=%.1fs",
                 outer + 1, round_score, round_elapsed,
             )
+            log.info(
+                "METRIC %s",
+                json.dumps({
+                    "event": "pipeline_round_complete",
+                    "round": outer + 1,
+                    "round_score": round(round_score, 2),
+                    "phases_run": len(all_round_results[-1]),
+                    "elapsed_s": round(round_elapsed, 2),
+                }),
+            )
 
             # Write round summary
             self._write_round_summary(outer, all_round_results[-1], prior_best, round_score)
@@ -221,10 +232,22 @@ class PipelineLoop:
                 prior_best = phase_result.synthesis or prior_best
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
+                _phase_elapsed = time.monotonic() - phase_start
                 log.info(
                     "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d",
-                    phase.label, phase_result.best_score, time.monotonic() - phase_start,
+                    phase.label, phase_result.best_score, _phase_elapsed,
                     self.memory.entry_count,
+                )
+                log.info(
+                    "METRIC %s",
+                    json.dumps({
+                        "event": "pipeline_phase_complete",
+                        "outer": outer + 1,
+                        "phase": phase.label,
+                        "best_score": round(phase_result.best_score, 2),
+                        "inner_results": len(phase_result.inner_results),
+                        "elapsed_s": round(_phase_elapsed, 2),
+                    }),
                 )
             except Exception as e:
                 log.error(
