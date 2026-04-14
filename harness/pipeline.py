@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from harness.artifacts import ArtifactStore
@@ -14,6 +15,21 @@ from harness.phase_runner import PhaseRunner
 from harness.tools import build_registry
 
 log = logging.getLogger(__name__)
+
+# Matches the "**Best**: 7.5" line written by PhaseRunner._write_phase_summary.
+_BEST_SCORE_RE = re.compile(r"^\*\*Best\*\*:\s*(\d+(?:\.\d+)?)", re.MULTILINE)
+
+
+def _read_best_score_from_summary(summary_text: str) -> float | None:
+    """Parse the best score written by PhaseRunner into phase_summary.txt.
+
+    Returns the score as a float, or ``None`` if the text is empty or the
+    pattern is absent (e.g., the file was never written).
+    """
+    if not summary_text:
+        return None
+    m = _BEST_SCORE_RE.search(summary_text)
+    return float(m.group(1)) if m else None
 
 
 @dataclass
@@ -88,8 +104,12 @@ class PipelineLoop:
             # Write round summary
             self._write_round_summary(outer, all_round_results[-1], prior_best, round_score)
 
-            # Early stopping
-            if self.config.patience > 0 and round_score > 0:
+            # Early stopping — evaluated for every round regardless of score.
+            # The old guard `round_score > 0` caused zero-scoring rounds (e.g.
+            # all phases failed or all score parses returned 0.0) to be silently
+            # skipped, so patience never fired when all rounds scored 0 and the
+            # full outer_rounds budget was always consumed.
+            if self.config.patience > 0:
                 if round_score > best_round_score:
                     best_round_score = round_score
                     no_improve_count = 0
@@ -143,6 +163,14 @@ class PipelineLoop:
                 log.info("Phase %s: already done, loading synthesis", phase.label)
                 segs = self.artifacts.phase_dir(outer, phase.label)
                 prior_best = self.artifacts.read(*segs, "synthesis.txt") or prior_best
+                # Recover the persisted best_score so that resumed rounds are not
+                # misreported as scoring 0.0 — which would cause the patience
+                # counter to fire falsely and abort remaining outer rounds.
+                resumed_score = _read_best_score_from_summary(
+                    self.artifacts.read(*segs, "phase_summary.txt")
+                )
+                if resumed_score is not None:
+                    phase_scores.append(resumed_score)
                 continue
 
             try:
