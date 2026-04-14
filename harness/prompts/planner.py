@@ -114,8 +114,10 @@ MERGE STRATEGY:
    - Creates a new inter-module import that did not exist before
 3. For each conflict, state explicitly which proposal you chose and why \
    (one sentence per conflict, inline with the step)
-4. After drafting all steps, run this SELF-CONSISTENCY CHECK and fix \
-   any violations before writing your final output:
+4. After drafting all steps, run these QUALITY GATES and fix any violations \
+   before writing your final output:
+
+   SELF-CONSISTENCY CHECK:
    a. Does any step reference a symbol that a later step will delete or rename?
    b. Does any step assume a file exists that is only created in a later step?
    c. Does every new symbol used in one step have a definition in this plan?
@@ -123,6 +125,17 @@ MERGE STRATEGY:
    e. For every changed public API, are all call sites in the source context \
       updated in a subsequent step?
    If you find a violation, reorder or rewrite the affected steps.
+
+   STEP COUNT CHECK:
+   Count your steps.  If there are more than 12, you have over-planned.
+   Merge sequential changes to the same file into one step.  A plan with
+   15 steps for a single-file change is a sign of padding, not thoroughness.
+   Target: 3–8 steps for typical tasks; never more than 12.
+
+   DUPLICATE DETECTION:
+   Scan your steps for near-duplicates — two steps that touch the same file
+   and function for similar reasons.  If found, merge them into one step.
+   Duplicate steps waste executor tool turns and confuse the evaluator.
 
 CALIBRATION RULE: prefer the conservative plan whenever both proposals \
 achieve the same functional outcome.  Aggressive restructuring that does not \

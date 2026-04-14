@@ -44,6 +44,48 @@ def _trim_feedback_ctx(ctx: str, cap: int) -> str:
     return trimmed
 
 
+def _format_iteration_feedback(
+    i: int,
+    verdict: "Verdict",
+    result: "ExecutionResult",
+) -> str:
+    """Format one iteration's feedback as a compact, signal-dense block.
+
+    Compared to the previous free-form string, this format:
+    * Leads with a machine-scannable header line the planner can orient by.
+    * Includes tool-call count and files-changed count as numeric signals so
+      the planner knows whether the executor was busy or idle.
+    * Includes the static-error count so the planner prioritises compile
+      fixes over logic fixes when both are present.
+    * Caps the feedback body at 3 000 chars so a single verbose iteration
+      cannot dominate the whole context window.
+
+    The ``## Iteration N Feedback`` heading is preserved so
+    ``_trim_feedback_ctx`` can re-align on section boundaries.
+    """
+    static_errs = len(verdict.static_report.errors) if verdict.static_report else 0
+    static_warns = len(verdict.static_report.warnings) if verdict.static_report else 0
+    files_changed = len(result.files_changed)
+    tool_calls = len(result.log)
+
+    header = (
+        f"\n\n## Iteration {i} Feedback\n"
+        f"<!-- stats: tool_calls={tool_calls} files_changed={files_changed} "
+        f"static_errors={static_errs} static_warnings={static_warns} -->\n"
+    )
+    body = (
+        f"**Result:** FAIL\n"
+        f"**Reason:** {verdict.reason}\n"
+    )
+    if static_errs:
+        body += f"**Static errors ({static_errs}):** fix these before anything else.\n"
+    feedback_body = verdict.feedback[:3_000]
+    if len(verdict.feedback) > 3_000:
+        feedback_body += "\n… (feedback truncated)"
+    body += f"\n**Feedback:**\n{feedback_body}\n"
+    return header + body
+
+
 @dataclass
 class IterationRecord:
     """What happened in one iteration."""
@@ -72,6 +114,8 @@ class HarnessLoop:
 
     def __init__(self, config: HarnessConfig) -> None:
         self.config = config
+        config.apply_log_level()
+        log.info(config.startup_banner())
         self.llm = LLM(config)
         self.registry = build_registry(
             config.allowed_tools or None,
@@ -202,12 +246,7 @@ class HarnessLoop:
             # Accumulate evaluator feedback for the next iteration's planner.
             # We keep this separate from project_ctx so the tree/git block is
             # not duplicated on every loop.
-            new_feedback = (
-                f"\n\n## Iteration {i} Feedback\n\n"
-                f"The previous attempt was rejected.\n"
-                f"Reason: {verdict.reason}\n"
-                f"Feedback: {verdict.feedback}\n"
-            )
+            new_feedback = _format_iteration_feedback(i, verdict, result)
             feedback_ctx += new_feedback
             feedback_ctx = _trim_feedback_ctx(feedback_ctx, _FEEDBACK_CTX_CHARS)
 

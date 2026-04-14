@@ -53,6 +53,8 @@ class PipelineLoop:
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
+        config.harness.apply_log_level()
+        log.info(config.harness.startup_banner())
         self.llm = LLM(config.harness)
         self.registry = build_registry(
             config.harness.allowed_tools or None,

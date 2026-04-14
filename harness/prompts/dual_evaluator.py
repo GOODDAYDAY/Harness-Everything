@@ -54,7 +54,23 @@ SCORE ARITHMETIC — show your work explicitly:
   Example: A=7, B=6, C=5, D=8, no penalties
     → (7×0.4)+(6×0.3)+(5×0.2)+(8×0.1) = 2.8+1.8+1.0+0.8 = 6.4
 
+PRIOR ROUND DELTA — if a "Prior Best" is present in the context:
+  Before writing your score, compare this proposal against the prior best on
+  each dimension.  For each dimension, note whether this round IMPROVED,
+  REGRESSED, or is UNCHANGED vs. the prior best.  State this explicitly as:
+    Δ Correctness: IMPROVED/REGRESSED/UNCHANGED — <one-line reason>
+  This delta analysis must precede your ANALYSIS block.  A proposal that
+  repeats a known defect flagged in the prior best's TOP DEFECT loses 1 extra
+  point on Correctness regardless of other qualities.
+
 OUTPUT — structure your response exactly as:
+DELTA VS PRIOR BEST: <present only when a prior best exists; omit section
+  entirely on round 1>
+  Δ Correctness: IMPROVED/REGRESSED/UNCHANGED — <reason>
+  Δ Completeness: IMPROVED/REGRESSED/UNCHANGED — <reason>
+  Δ Specificity: IMPROVED/REGRESSED/UNCHANGED — <reason>
+  Δ Architecture: IMPROVED/REGRESSED/UNCHANGED — <reason>
+
 ANALYSIS:
   A. Correctness (X/10): <one paragraph; quote the defective construct if any>
   B. Completeness (X/10): <one paragraph; name each missing requirement>
@@ -124,7 +140,21 @@ SCORE ARITHMETIC — show your work explicitly:
   Example: A=7, B=6, C=8, D=9, no penalties
     → (7×0.35)+(6×0.30)+(8×0.20)+(9×0.15) = 2.45+1.80+1.60+1.35 = 7.2
 
+PRIOR ROUND DELTA — if a "Prior Best" is present in the context:
+  Before writing your score, compare this proposal against the prior best on
+  each second-order dimension.  Note IMPROVED / REGRESSED / UNCHANGED with a
+  one-line reason for each.  A proposal that reintroduces a risk that was
+  already identified as the KEY RISK in the prior best loses 1 extra point on
+  Caller Impact — regression on a known risk is worse than a fresh risk.
+
 OUTPUT — structure your response exactly as:
+DELTA VS PRIOR BEST: <present only when a prior best exists; omit section
+  entirely on round 1>
+  Δ Caller impact: IMPROVED/REGRESSED/UNCHANGED — <reason>
+  Δ Maintenance debt: IMPROVED/REGRESSED/UNCHANGED — <reason>
+  Δ Emergent behaviour: IMPROVED/REGRESSED/UNCHANGED — <reason>
+  Δ Rollback safety: IMPROVED/REGRESSED/UNCHANGED — <reason>
+
 ANALYSIS:
   A. Caller impact (X/10): <one paragraph; name affected callers from source>
   B. Maintenance debt (X/10): <one paragraph; cite specific files/patterns>
