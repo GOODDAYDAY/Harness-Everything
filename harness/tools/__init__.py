@@ -11,6 +11,9 @@ from harness.tools.search_glob import GlobSearchTool
 from harness.tools.search_grep import GrepSearchTool
 from harness.tools.bash import BashTool
 from harness.tools.git import GitStatusTool, GitDiffTool, GitLogTool
+from harness.tools.code_analysis import CodeAnalysisTool
+from harness.tools.file_patch import FilePatchTool
+from harness.tools.test_runner import TestRunnerTool
 
 ALL_TOOLS: list[Tool] = [
     ReadFileTool(),
@@ -28,6 +31,9 @@ ALL_TOOLS: list[Tool] = [
     GitStatusTool(),
     GitDiffTool(),
     GitLogTool(),
+    CodeAnalysisTool(),
+    FilePatchTool(),
+    TestRunnerTool(),
 ]
 
 
