@@ -18,6 +18,8 @@ from harness.tools.file_patch import FilePatchTool
 from harness.tools.test_runner import TestRunnerTool
 from harness.tools.web_search import WebSearchTool
 from harness.tools.symbol_extractor import SymbolExtractorTool
+from harness.tools.python_eval import PythonEvalTool
+from harness.tools.find_replace import FindReplaceTool
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +44,8 @@ ALL_TOOLS: list[Tool] = [
     TestRunnerTool(),
     WebSearchTool(),
     SymbolExtractorTool(),
+    PythonEvalTool(),
+    FindReplaceTool(),
 ]
 
 # Map of every tool name → tool class for on-demand instantiation.
