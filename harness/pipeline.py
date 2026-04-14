@@ -53,7 +53,10 @@ class PipelineLoop:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         self.llm = LLM(config.harness)
-        self.registry = build_registry(config.harness.allowed_tools or None)
+        self.registry = build_registry(
+            config.harness.allowed_tools or None,
+            extra_tools=config.harness.extra_tools or None,
+        )
 
         # Artifact store: resume or create new
         existing = ArtifactStore.find_resumable(config.output_dir)

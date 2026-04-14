@@ -36,16 +36,22 @@ PENALTIES:
   -3 if no concrete function/class/file name from the source context is cited
   -2 if a required section is entirely absent
 
+SCORE ARITHMETIC — compute the weighted average explicitly:
+  SCORE = (A × 0.40) + (B × 0.30) + (C × 0.20) + (D × 0.10)
+  Example: A=8, B=7, C=6, D=9 → (8×0.4)+(7×0.3)+(6×0.2)+(9×0.1) = 3.2+2.1+1.2+0.9 = 7.4
+  Show your working in the ANALYSIS section, then state the final value after SCORE:.
+
 OUTPUT — structure your response as:
 ANALYSIS:
   A. Correctness (X/10): <one paragraph of findings>
   B. Completeness (X/10): <one paragraph of findings>
   C. Specificity (X/10): <one paragraph of findings>
   D. Architecture fit (X/10): <one paragraph of findings>
+  Weighted: (A×0.4)+(B×0.3)+(C×0.2)+(D×0.1) = <show arithmetic>
 
 TOP DEFECT: <the single most important issue, or "none" if score ≥ 9>
 
-SCORE: <weighted average, rounded to one decimal place>
+SCORE: <final weighted average, rounded to one decimal place>
 """
 
 DIFFUSION_SYSTEM = """\
@@ -85,14 +91,20 @@ NOTE: A balanced assessment includes both positive and negative findings. \
 If a change genuinely has minimal second-order effects, say so clearly \
 and score it high — do not manufacture negative findings.
 
+SCORE ARITHMETIC — compute the weighted average explicitly:
+  SCORE = (A × 0.35) + (B × 0.30) + (C × 0.20) + (D × 0.15)
+  Example: A=8, B=6, C=7, D=9 → (8×0.35)+(6×0.30)+(7×0.20)+(9×0.15) = 2.8+1.8+1.4+1.35 = 7.35
+  Show your working in the ANALYSIS section, then state the final value after SCORE:.
+
 OUTPUT — structure your response as:
 ANALYSIS:
   A. Caller impact (X/10): <one paragraph of findings>
   B. Maintenance debt (X/10): <one paragraph of findings>
   C. Emergent behaviour (X/10): <one paragraph of findings>
   D. Rollback safety (X/10): <one paragraph of findings>
+  Weighted: (A×0.35)+(B×0.30)+(C×0.20)+(D×0.15) = <show arithmetic>
 
 KEY RISK: <the most significant second-order concern, or "none" if score ≥ 9>
 
-SCORE: <weighted average, rounded to one decimal place>
+SCORE: <final weighted average, rounded to one decimal place>
 """

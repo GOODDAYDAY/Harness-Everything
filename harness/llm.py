@@ -195,19 +195,23 @@ class LLM:
                     {"id": block.id, "name": block.name, "input": block.input}
                 )
 
-        # Log usage when available (usage object may not exist in all SDK versions)
+        # Log usage when available (usage object may not exist in all SDK versions).
+        # Emit at INFO so token consumption is visible in normal (non-DEBUG) runs;
+        # latency alone is INFO-worthy for cost/performance monitoring.
         usage = getattr(resp, "usage", None)
         if usage is not None:
-            log.debug(
+            in_tok = getattr(usage, "input_tokens", None)
+            out_tok = getattr(usage, "output_tokens", None)
+            log.info(
                 "LLM call: model=%s stop=%s in_tok=%s out_tok=%s latency=%.1fs",
                 self.config.model,
                 resp.stop_reason,
-                getattr(usage, "input_tokens", "?"),
-                getattr(usage, "output_tokens", "?"),
+                in_tok if in_tok is not None else "?",
+                out_tok if out_tok is not None else "?",
                 elapsed,
             )
         else:
-            log.debug(
+            log.info(
                 "LLM call: model=%s stop=%s latency=%.1fs",
                 self.config.model,
                 resp.stop_reason,
@@ -238,9 +242,17 @@ class LLM:
         conversation = list(messages)
         execution_log: list[dict[str, Any]] = []
         loop_start = time.monotonic()
+        total_in_tokens: int = 0
+        total_out_tokens: int = 0
 
         for turn in range(max_turns):
             resp = await self.call(conversation, system=system, tools=tools_schema)
+            # Accumulate token counts for the end-of-loop summary
+            if resp.raw is not None:
+                _u = getattr(resp.raw, "usage", None)
+                if _u is not None:
+                    total_in_tokens += getattr(_u, "input_tokens", 0) or 0
+                    total_out_tokens += getattr(_u, "output_tokens", 0) or 0
             log.debug(
                 "tool_loop turn=%d stop=%s calls=%d total_tools=%d",
                 turn + 1,
@@ -278,12 +290,23 @@ class LLM:
 
             if not resp.tool_calls:
                 elapsed = time.monotonic() - loop_start
-                log.info(
-                    "tool_loop done: turns=%d tool_calls=%d elapsed=%.1fs",
-                    turn + 1,
-                    len(execution_log),
-                    elapsed,
-                )
+                if total_in_tokens or total_out_tokens:
+                    log.info(
+                        "tool_loop done: turns=%d tool_calls=%d "
+                        "total_in_tok=%d total_out_tok=%d elapsed=%.1fs",
+                        turn + 1,
+                        len(execution_log),
+                        total_in_tokens,
+                        total_out_tokens,
+                        elapsed,
+                    )
+                else:
+                    log.info(
+                        "tool_loop done: turns=%d tool_calls=%d elapsed=%.1fs",
+                        turn + 1,
+                        len(execution_log),
+                        elapsed,
+                    )
                 return resp.text, execution_log
 
             # Execute tools and build tool_result message
@@ -322,9 +345,12 @@ class LLM:
 
         elapsed = time.monotonic() - loop_start
         log.warning(
-            "tool_loop hit max_turns=%d after %.1fs (%d tool calls)",
+            "tool_loop hit max_turns=%d after %.1fs (%d tool calls, "
+            "total_in_tok=%d total_out_tok=%d)",
             max_turns,
             elapsed,
             len(execution_log),
+            total_in_tokens,
+            total_out_tokens,
         )
         return "(max tool turns reached)", execution_log
