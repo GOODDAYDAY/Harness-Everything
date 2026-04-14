@@ -20,6 +20,7 @@ Key behaviour change
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +41,23 @@ _IMPORTANT_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "move_fi
 _ENTRY_CAP_IMPORTANT = 300   # chars kept per important tool output
 _ENTRY_CAP_VERBOSE = 80      # chars kept per verbose tool output
 _MAX_LOG_ENTRIES = 40        # cap total entries shown (avoids 30-turn loops flooding the prompt)
+_VERBOSE_SHOW_LIMIT = 8      # max verbose-tool entries shown before collapsing
+
+# Regex that detects tool output lines that represent errors.  Matches
+# case-insensitively so "Error:", "ERROR:", "[Error]", "[ERROR]", etc. all
+# trigger the error display path.  The previous startswith("error") check
+# missed prefixed error strings like "[stderr]\nError: ...".
+_ERROR_PATTERN = re.compile(r"(^error\b|\[error\]|^stderr\b)", re.IGNORECASE | re.MULTILINE)
+
+
+def _is_tool_error(output: str) -> bool:
+    """Return True when *output* looks like a tool error response.
+
+    More robust than the previous ``output.lower().startswith("error")``
+    check, which missed error strings preceded by a prefix such as
+    ``"[stderr]\\nError: ..."`` and failed on ``"ERROR:"`` (exact case).
+    """
+    return bool(_ERROR_PATTERN.search(output[:500]))
 
 
 def _build_log_summary(execution_log: list[dict]) -> str:
@@ -70,7 +88,7 @@ def _build_log_summary(execution_log: list[dict]) -> str:
         tool = entry["tool"]
         inp = entry.get("input", {})
         out = str(entry.get("output", ""))
-        is_error = out.lower().startswith("error") or "[error]" in out.lower()
+        is_error = _is_tool_error(out)
 
         # Build a concise key for the input
         key = (
@@ -89,11 +107,14 @@ def _build_log_summary(execution_log: list[dict]) -> str:
             snippet = out[:_ENTRY_CAP_IMPORTANT].replace("\n", " ↵ ")
             lines.append(f"  ✓ {tool}({key}) → {snippet}")
         else:
-            # Verbose tool — suppress after a threshold
-            verbose_count += 1
-            if verbose_count > 8:
+            # Verbose tool — suppress after threshold.
+            # Use >= so that entries 1..LIMIT are shown and LIMIT+1 onward
+            # are collapsed.  The previous > check showed entries 1..LIMIT+1
+            # (one more than intended) before starting to suppress.
+            if verbose_count >= _VERBOSE_SHOW_LIMIT:
                 verbose_suppressed += 1
                 continue
+            verbose_count += 1
             snippet = out[:_ENTRY_CAP_VERBOSE].replace("\n", " ↵ ")
             lines.append(f"  · {tool}({key}) → {snippet}")
 
@@ -244,11 +265,20 @@ class Evaluator:
             user_message_parts.append(static_block)
             user_message_parts.append("")  # blank line separator
 
+        # Include executor STATUS field so reviewers can distinguish DONE vs
+        # PARTIAL without re-parsing the full summary text.
+        executor_status = _extract_executor_status(result.text)
+        executor_summary_block = result.text
+        if executor_status:
+            executor_summary_block = (
+                f"**Executor STATUS: {executor_status}**\n\n{result.text}"
+            )
+
         user_message_parts += [
             f"## Original Task\n\n{task}",
             f"## Plan That Was Executed\n\n{plan}",
             f"## Execution Log\n\n{_build_log_summary(result.log)}",
-            f"## Executor Summary\n\n{result.text}",
+            f"## Executor Summary\n\n{executor_summary_block}",
             f"## Files Changed\n\n{', '.join(result.files_changed) or '(none)'}",
             "Please evaluate whether the task was completed correctly.",
         ]
@@ -265,9 +295,18 @@ class Evaluator:
             merge_system=cfg.merge_system or default_prompts.MERGE_SYSTEM,
         )
 
-        # Parse the merged verdict
+        # Parse the merged verdict.
+        # Special case: if the executor reported STATUS: PARTIAL, treat the
+        # verdict as FAIL regardless of what the LLM said — a partial execution
+        # cannot pass by definition.  This prevents a lenient merger from
+        # passing an admittedly incomplete execution.
         merged_upper = three_way.merged.upper()
         passed = "VERDICT: PASS" in merged_upper
+        if executor_status == "PARTIAL" and passed:
+            log.info(
+                "Evaluator: overriding PASS → FAIL because executor STATUS=PARTIAL"
+            )
+            passed = False
 
         reason = ""
         feedback = ""
@@ -298,6 +337,18 @@ class Evaluator:
                 in_feedback = True
         feedback = "\n".join(feedback_lines).strip()
 
+        # When the executor was PARTIAL, prepend a clear note so the next
+        # planner iteration focuses on completing the skipped steps.
+        if executor_status == "PARTIAL":
+            partial_note = (
+                "## Execution Was Incomplete (STATUS: PARTIAL)\n\n"
+                "The executor reported that some plan steps were skipped or "
+                "encountered unresolved issues.  The next iteration must:\n"
+                "1. Re-read the ISSUES field in the executor summary above.\n"
+                "2. Complete every skipped step before attempting new changes.\n\n"
+            )
+            feedback = partial_note + feedback if feedback else partial_note + three_way.merged
+
         # Append static warnings to feedback so the next iteration sees them
         # even when the LLM verdict is PASS.
         if static_report.warnings:
@@ -312,8 +363,9 @@ class Evaluator:
             feedback = (feedback + warning_appendix) if feedback else warning_appendix
 
         log.info(
-            "Evaluator: passed=%s reason=%s  static=(%d err, %d warn)",
+            "Evaluator: passed=%s reason=%s  static=(%d err, %d warn)  executor_status=%s",
             passed, reason, len(static_report.errors), len(static_report.warnings),
+            executor_status or "DONE",
         )
 
         return Verdict(
@@ -322,6 +374,22 @@ class Evaluator:
             feedback=feedback or three_way.merged,
             static_report=static_report,
         )
+
+
+def _extract_executor_status(summary_text: str) -> str:
+    """Extract the STATUS field from the executor's summary text.
+
+    Returns ``"DONE"``, ``"PARTIAL"``, or ``""`` (if not found).
+    The executor is instructed to write ``STATUS: DONE`` or ``STATUS: PARTIAL``
+    as the last labelled field in its summary.
+    """
+    for line in summary_text.splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith("STATUS:"):
+            value = stripped.split(":", 1)[1].strip().upper()
+            if value in ("DONE", "PARTIAL"):
+                return value
+    return ""
 
 
 def build_evaluator(

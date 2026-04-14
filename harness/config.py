@@ -50,6 +50,12 @@ class HarnessConfig:
     # --- loop ---
     max_iterations: int = 5
 
+    # --- tool-use budget ---
+    max_tool_turns: int = 30
+    # Cap on the number of tool-use turns in a single executor call_with_tools
+    # loop.  Lower values reduce runaway token spend on simple tasks; higher
+    # values allow more complex multi-step executions.  Valid range: 1–200.
+
     # --- sub-configs ---
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     evaluator: EvaluatorConfig = field(default_factory=EvaluatorConfig)
@@ -85,6 +91,21 @@ class HarnessConfig:
         if not self.model or not self.model.strip():
             raise ValueError("HarnessConfig.model must not be empty")
 
+        # Warn when the model string looks like a raw Anthropic model ID rather
+        # than a LiteLLM-prefixed name.  The harness uses LiteLLM routing, so
+        # bare IDs like "claude-3-opus-20240229" will fail at runtime with a
+        # confusing auth error.  Valid forms: "bedrock/...", "anthropic/...",
+        # "vertex_ai/...", or any other LiteLLM provider prefix.
+        _model_stripped = self.model.strip()
+        if "/" not in _model_stripped and _model_stripped.startswith("claude"):
+            log.warning(
+                "HarnessConfig.model=%r looks like a bare Anthropic model ID "
+                "without a LiteLLM provider prefix.  Did you mean "
+                "'anthropic/%s' or 'bedrock/%s'?  "
+                "Bare IDs may cause auth errors at runtime.",
+                _model_stripped, _model_stripped, _model_stripped,
+            )
+
         # --- validate workspace exists ---
         ws_path = Path(self.workspace)
         if not ws_path.exists():
@@ -106,11 +127,32 @@ class HarnessConfig:
                     self.workspace,
                 )
 
+        # --- validate max_tool_turns ---
+        if self.max_tool_turns < 1:
+            raise ValueError(
+                f"HarnessConfig.max_tool_turns must be ≥ 1, got {self.max_tool_turns}"
+            )
+        if self.max_tool_turns > 200:
+            log.warning(
+                "HarnessConfig.max_tool_turns=%d is very large — "
+                "this may allow runaway tool loops and high token spend; "
+                "typical values are 10–50",
+                self.max_tool_turns,
+            )
+
         # --- validate extra_tools entries are non-empty strings ---
         bad_extra = [t for t in self.extra_tools if not isinstance(t, str) or not t.strip()]
         if bad_extra:
             raise ValueError(
                 f"HarnessConfig.extra_tools contains invalid entries: {bad_extra!r}. "
+                "All entries must be non-empty strings (tool names)."
+            )
+
+        # --- validate allowed_tools entries are non-empty strings ---
+        bad_allowed = [t for t in self.allowed_tools if not isinstance(t, str) or not t.strip()]
+        if bad_allowed:
+            raise ValueError(
+                f"HarnessConfig.allowed_tools contains invalid entries: {bad_allowed!r}. "
                 "All entries must be non-empty strings (tool names)."
             )
 
@@ -183,6 +225,15 @@ class DualEvaluatorConfig:
     diffusion_system: str = ""
     score_pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)"
 
+    def __post_init__(self) -> None:
+        import re as _re
+        try:
+            _re.compile(self.score_pattern)
+        except _re.error as exc:
+            raise ValueError(
+                f"DualEvaluatorConfig.score_pattern is not a valid regex: {exc}"
+            ) from exc
+
 
 @dataclass
 class PipelineConfig:
@@ -213,6 +264,23 @@ class PipelineConfig:
     min_synthesis_chars: int = 150
 
     def __post_init__(self) -> None:
+        # --- validate evaluation_mode (Literal enforcement at runtime) ---
+        _VALID_EVAL_MODES = ("three_way", "dual_isolated")
+        if self.evaluation_mode not in _VALID_EVAL_MODES:
+            raise ValueError(
+                f"PipelineConfig.evaluation_mode={self.evaluation_mode!r} is not valid.  "
+                f"Must be one of: {_VALID_EVAL_MODES}.  "
+                "Check for typos — common mistakes: 'dual_isolate', 'threeway', 'three-way'."
+            )
+
+        # --- validate output_dir is a non-empty string ---
+        if not isinstance(self.output_dir, str) or not self.output_dir.strip():
+            raise ValueError(
+                f"PipelineConfig.output_dir must be a non-empty string, "
+                f"got {self.output_dir!r}.  "
+                "Set it to a relative or absolute directory path, e.g. 'harness_output'."
+            )
+
         if self.outer_rounds < 1:
             raise ValueError(
                 f"PipelineConfig.outer_rounds must be ≥ 1, got {self.outer_rounds}"
@@ -229,6 +297,35 @@ class PipelineConfig:
             raise ValueError(
                 f"PipelineConfig.min_synthesis_chars must be ≥ 0, got {self.min_synthesis_chars}"
             )
+        if self.min_synthesis_chars > 10_000:
+            log.warning(
+                "PipelineConfig.min_synthesis_chars=%d is very large — "
+                "synthesis may always retry and fall back to the best inner result; "
+                "typical values are 100–1 000",
+                self.min_synthesis_chars,
+            )
+
+        # --- validate synthesis_system is a plain string (not an accidental list) ---
+        if not isinstance(self.synthesis_system, str):
+            raise ValueError(
+                f"PipelineConfig.synthesis_system must be a string, "
+                f"got {type(self.synthesis_system).__name__!r}"
+            )
+
+        # --- scale warnings for inner_rounds / outer_rounds ---
+        if self.outer_rounds > 20:
+            log.warning(
+                "PipelineConfig.outer_rounds=%d is very large — "
+                "consider using patience early-stopping instead",
+                self.outer_rounds,
+            )
+        if self.inner_rounds > 10:
+            log.warning(
+                "PipelineConfig.inner_rounds=%d is very large — "
+                "more than 5–6 inner rounds rarely improves synthesis quality",
+                self.inner_rounds,
+            )
+
         if not self.phases:
             log.warning(
                 "PipelineConfig.phases is empty — the pipeline will exit immediately"
