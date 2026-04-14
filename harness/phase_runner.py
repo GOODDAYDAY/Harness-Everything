@@ -97,17 +97,28 @@ def _read_source_files(workspace: str, glob_patterns: list[str]) -> str:
     """
     import glob as glob_mod
 
-    # Collect all matching files with their mtime for sorting
+    # Collect all matching files with their mtime for sorting.
+    # Use the resolved absolute path as the dedup key so that two glob patterns
+    # that overlap (e.g. "**/*.py" and "src/**/*.py") never inject the same
+    # file twice.  Without dedup the file would be read twice, counted against
+    # the _TOTAL_CHAR_LIMIT twice, and sent to the LLM as duplicate context —
+    # bumping other files out of the budget silently.
+    seen_resolved: set[str] = set()
     file_entries: list[tuple[float, str]] = []  # (mtime, rel_path)
     for pattern in glob_patterns:
         for path_str in glob_mod.glob(pattern, recursive=True, root_dir=workspace):
             full = Path(workspace) / path_str
-            if full.is_file():
-                try:
-                    mtime = full.stat().st_mtime
-                    file_entries.append((mtime, path_str))
-                except OSError:
-                    continue
+            if not full.is_file():
+                continue
+            resolved = str(full.resolve())
+            if resolved in seen_resolved:
+                continue
+            seen_resolved.add(resolved)
+            try:
+                mtime = full.stat().st_mtime
+                file_entries.append((mtime, path_str))
+            except OSError:
+                continue
 
     # Most recently modified first — most likely to be relevant
     file_entries.sort(key=lambda e: e[0], reverse=True)

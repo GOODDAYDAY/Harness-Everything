@@ -32,6 +32,8 @@ _RETRYABLE_EXCEPTIONS = (
     anthropic.InternalServerError,        # HTTP 500 — transient server error
     anthropic.APIConnectionError,         # network-level failure (no response)
     anthropic.APITimeoutError,            # SDK-level timeout wrapper
+    asyncio.TimeoutError,                 # asyncio.wait_for wall hit (slow network /
+                                          # overloaded model exceeding per-call timeout)
 )
 
 _MAX_RETRIES: int = 4           # up to 4 retries (5 total attempts)
@@ -247,7 +249,14 @@ class LLM:
                 len(execution_log),
             )
 
-            # Build assistant message content (text + tool_use blocks)
+            # Build assistant message content (text + tool_use blocks).
+            # The Anthropic API rejects messages whose content array is empty
+            # (HTTP 400 "messages must have non-empty content").  This can
+            # happen when the model produces neither text nor tool calls — an
+            # unusual but observed condition on certain stop-reason edge cases.
+            # Guard: if both resp.text and resp.tool_calls are absent, inject a
+            # synthetic text block so the conversation stays valid and the loop
+            # can continue (or exit cleanly on the next iteration check below).
             assistant_content: list[dict[str, Any]] = []
             if resp.text:
                 assistant_content.append({"type": "text", "text": resp.text})
@@ -255,6 +264,16 @@ class LLM:
                 assistant_content.append(
                     {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
                 )
+            if not assistant_content:
+                # Synthesise a minimal placeholder so the message is never empty.
+                # Log at WARNING so operators can see this degenerate condition.
+                log.warning(
+                    "tool_loop turn=%d: assistant returned empty content "
+                    "(stop_reason=%r) — injecting placeholder to keep conversation valid",
+                    turn + 1,
+                    resp.stop_reason,
+                )
+                assistant_content.append({"type": "text", "text": "(no output)"})
             conversation.append({"role": "assistant", "content": assistant_content})
 
             if not resp.tool_calls:
