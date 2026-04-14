@@ -12,6 +12,9 @@ from harness.tools.base import Tool, ToolResult
 async def _run_git(config: HarnessConfig, *args: str) -> ToolResult:
     """Run a git command in the workspace and return a ToolResult."""
     cmd = ["git", *args]
+    # Declare proc before the try so it is always in scope in the except block,
+    # even when create_subprocess_exec itself raises.
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -21,6 +24,11 @@ async def _run_git(config: HarnessConfig, *args: str) -> ToolResult:
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
     except asyncio.TimeoutError:
+        # Kill the child process and reap it so the OS does not keep a
+        # zombie entry and asyncio does not warn about an unclosed transport.
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
         return ToolResult(error="git command timed out", is_error=True)
     except Exception as exc:
         return ToolResult(error=str(exc), is_error=True)
