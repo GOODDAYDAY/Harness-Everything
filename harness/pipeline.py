@@ -14,6 +14,7 @@ from harness.llm import LLM
 from harness.phase import PhaseConfig, PhaseResult
 from harness.phase_runner import PhaseRunner
 from harness.tools import build_registry
+from harness.memory import MemoryStore
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class PipelineLoop:
         self.runner = PhaseRunner(
             self.llm, self.registry, config, self.artifacts, self.checkpoint
         )
+        self.memory = MemoryStore(self.artifacts)
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -200,13 +202,26 @@ class PipelineLoop:
 
             phase_start = time.monotonic()
             try:
-                phase_result = await self.runner.run_phase(outer, phase, prior_best)
+                # Inject memory context from prior rounds into the carry-forward
+                # text so the LLM can build on accumulated learnings.
+                memory_ctx = self.memory.format_context(phase.label, max_entries=8)
+                phase_prior = prior_best
+                if memory_ctx:
+                    phase_prior = (
+                        memory_ctx
+                        + ("\n\n" + prior_best if prior_best else "")
+                    )
+
+                phase_result = await self.runner.run_phase(outer, phase, phase_prior)
                 results.append(phase_result)
                 phase_scores.append(phase_result.best_score)
                 prior_best = phase_result.synthesis or prior_best
+                # Record learnings for future rounds
+                self.memory.record(outer, phase_result)
                 log.info(
-                    "  phase=%s  status=done  score=%.1f  elapsed=%.1fs",
+                    "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d",
                     phase.label, phase_result.best_score, time.monotonic() - phase_start,
+                    self.memory.entry_count,
                 )
             except Exception as e:
                 log.error(
