@@ -443,7 +443,11 @@ class WebSearchTool(Tool):
         if not query.strip():
             return ToolResult(error="query must not be empty", is_error=True)
 
-        loop = asyncio.get_event_loop()
+        # Use get_running_loop() (not the deprecated get_event_loop()) to
+        # obtain the loop that is currently executing this coroutine.  In
+        # Python >= 3.10, get_event_loop() emits DeprecationWarnings inside
+        # a running loop and may return a different loop object entirely.
+        loop = asyncio.get_running_loop()
 
         if action == "fetch":
             return await self._fetch(loop, query, max_chars, timeout)

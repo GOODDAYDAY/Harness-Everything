@@ -210,10 +210,14 @@ class ProjectContextBuilder:
         in parallel, then formats them into a single markdown-ish block.
         Returns ``""`` if nothing meaningful could be collected.
         """
-        # Fire all async tasks in parallel
-        tree_task = asyncio.get_event_loop().run_in_executor(
-            None, self._sync_tree
-        )
+        # Fire all async tasks in parallel.
+        # Use get_running_loop() (not the deprecated get_event_loop()) so that
+        # run_in_executor always targets the loop that is *currently executing*
+        # this coroutine.  get_event_loop() can return a different loop object
+        # in Python >= 3.10 when a loop is already running, causing executor
+        # tasks to be submitted to the wrong loop and triggering RuntimeErrors.
+        loop = asyncio.get_running_loop()
+        tree_task = loop.run_in_executor(None, self._sync_tree)
         git_log_task = _run_cmd(
             ["git", "log", f"-{_GIT_LOG_COUNT}", "--oneline", "--no-merges"],
             cwd=self._workspace,
@@ -222,7 +226,7 @@ class ProjectContextBuilder:
             ["git", "status", "--short"],
             cwd=self._workspace,
         )
-        inventory_task = asyncio.get_event_loop().run_in_executor(
+        inventory_task = loop.run_in_executor(
             None, lambda: _file_inventory(self._workspace)
         )
 
