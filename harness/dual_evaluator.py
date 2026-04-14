@@ -89,11 +89,23 @@ class DualEvaluator:
             }
         ]
 
-        # Run in parallel — key: neither sees the other's output
-        basic_task = self.llm.call(list(messages), system=basic_sys)
-        diffusion_task = self.llm.call(list(messages), system=diffusion_sys)
+        # Run in parallel — key: neither sees the other's output.
+        # Wrap coroutines in Tasks so that if one raises, we can explicitly
+        # cancel the other rather than leaving it as an abandoned background
+        # task that continues consuming API quota and logs an unhandled
+        # "Task exception was never retrieved" warning.
+        basic_task = asyncio.ensure_future(self.llm.call(list(messages), system=basic_sys))
+        diffusion_task = asyncio.ensure_future(self.llm.call(list(messages), system=diffusion_sys))
 
-        basic_resp, diffusion_resp = await asyncio.gather(basic_task, diffusion_task)
+        try:
+            basic_resp, diffusion_resp = await asyncio.gather(basic_task, diffusion_task)
+        except Exception:
+            # Cancel whichever task is still running so it does not linger
+            # as a background coroutine consuming API quota.
+            for t in (basic_task, diffusion_task):
+                if not t.done():
+                    t.cancel()
+            raise
 
         basic_score = parse_score(basic_resp.text, score_pattern)
         diffusion_score = parse_score(diffusion_resp.text, score_pattern)
