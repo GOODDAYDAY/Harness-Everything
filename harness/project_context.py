@@ -1,0 +1,284 @@
+"""project_context — lightweight project-structure snapshot for the Planner.
+
+Injects a compact, signal-dense block of project metadata into the Planner's
+user message so that both the conservative and aggressive proposers can reason
+about *what is already there* before deciding what to change.
+
+What is collected
+-----------------
+1. **Directory tree** (depth-limited, hidden dirs excluded) — gives the
+   proposers a map of the project layout so they reference real file paths.
+2. **Recent git log** (last N commits, one-line) — shows what has changed
+   recently so proposals don't re-do work or conflict with the latest state.
+3. **Git status** — current working-tree changes (M/A/D/?) so the proposer
+   knows what is already modified.
+4. **Key file inventory** — glob-based listing of Python files, test files,
+   and config files so the proposer can reference them by path.
+
+All collection is best-effort: if git is absent or the workspace has no git
+repo, the git sections are silently omitted.  If a glob finds nothing, it is
+omitted too.  The result is always a valid (possibly sparse) string.
+
+Integration
+-----------
+``HarnessLoop`` calls ``ProjectContextBuilder(config).build()`` once at
+startup and prepends the result to the context string passed to
+``Planner.plan()``.  Because it runs only once (and is cached), the overhead
+is one ``git log`` + one ``git status`` subprocess call per run, not per
+iteration.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import glob as glob_mod
+import logging
+from pathlib import Path
+from typing import Any
+
+from harness.config import HarnessConfig
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Tuneable constants
+# ---------------------------------------------------------------------------
+
+_TREE_MAX_DEPTH: int = 3        # levels to recurse in directory tree
+_TREE_MAX_ENTRIES: int = 150    # hard cap on total entries shown in tree
+_GIT_LOG_COUNT: int = 12        # recent commits to show
+_FILE_GLOB_LIMIT: int = 40      # max files per glob category
+_MAX_OUTPUT_CHARS: int = 6_000  # total cap on the formatted block
+
+# Directories to skip in the tree (noise / not useful to the LLM)
+_TREE_SKIP_DIRS: frozenset[str] = frozenset({
+    ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "node_modules", ".venv", "venv", "env", ".env",
+    "dist", "build", ".eggs", "*.egg-info",
+    ".tox", ".nox", "htmlcov", ".coverage",
+})
+
+# Glob patterns that identify "interesting" file categories to inventory
+_FILE_CATEGORIES: list[tuple[str, str]] = [
+    ("Python sources",  "**/*.py"),
+    ("Tests",           "**/test_*.py"),
+    ("Config files",    "*.{json,yaml,yml,toml,ini,cfg}"),
+    ("Docs / markdown", "**/*.md"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Async subprocess helper
+# ---------------------------------------------------------------------------
+
+
+async def _run_cmd(args: list[str], cwd: str, timeout: int = 10) -> str:
+    """Run a subprocess and return stdout as a string, or ``""`` on failure."""
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=cwd,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            return ""
+        return stdout.decode(errors="replace")
+    except (asyncio.TimeoutError, FileNotFoundError, OSError):
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        return ""
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Directory tree builder (synchronous — no I/O bottleneck at this depth)
+# ---------------------------------------------------------------------------
+
+
+def _build_tree(
+    root: Path,
+    prefix: str = "",
+    depth: int = 0,
+    max_depth: int = _TREE_MAX_DEPTH,
+    counter: list[int] | None = None,
+) -> list[str]:
+    """Recursively build a tree listing, skipping noise directories."""
+    if counter is None:
+        counter = [0]
+    lines: list[str] = []
+    if depth >= max_depth:
+        return lines
+
+    try:
+        entries = sorted(root.iterdir(), key=lambda e: (not e.is_dir(), e.name))
+    except PermissionError:
+        return lines
+
+    for i, entry in enumerate(entries):
+        if counter[0] >= _TREE_MAX_ENTRIES:
+            lines.append(f"{prefix}... (truncated)")
+            break
+        name = entry.name
+        # Skip hidden and known-noise dirs
+        if name.startswith("."):
+            continue
+        # Check skip list (glob-style suffixes like *.egg-info not needed here;
+        # we match by exact name since the patterns in _TREE_SKIP_DIRS are names)
+        if name in _TREE_SKIP_DIRS or name.endswith(".egg-info"):
+            continue
+
+        connector = "├── " if i < len(entries) - 1 else "└── "
+        if entry.is_dir():
+            lines.append(f"{prefix}{connector}{name}/")
+            counter[0] += 1
+            extension = "│   " if i < len(entries) - 1 else "    "
+            lines.extend(
+                _build_tree(entry, prefix + extension, depth + 1, max_depth, counter)
+            )
+        elif entry.is_file():
+            lines.append(f"{prefix}{connector}{name}")
+            counter[0] += 1
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# File inventory
+# ---------------------------------------------------------------------------
+
+
+def _file_inventory(workspace: str) -> list[str]:
+    """Return compact bullet lines listing key file categories."""
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    for label, pattern in _FILE_CATEGORIES:
+        matches: list[str] = []
+        for path_str in glob_mod.glob(pattern, recursive=True, root_dir=workspace):
+            full = Path(workspace) / path_str
+            resolved = str(full.resolve())
+            if resolved in seen or not full.is_file():
+                continue
+            seen.add(resolved)
+            matches.append(path_str)
+            if len(matches) >= _FILE_GLOB_LIMIT:
+                break
+
+        if not matches:
+            continue
+        # Sort for determinism
+        matches.sort()
+        suffix = f" (+{len(matches) - _FILE_GLOB_LIMIT} more)" if len(matches) >= _FILE_GLOB_LIMIT else ""
+        lines.append(f"**{label}** ({len(matches)}{suffix}):")
+        for m in matches[:_FILE_GLOB_LIMIT]:
+            lines.append(f"  • {m}")
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+class ProjectContextBuilder:
+    """Collect and format project metadata for the Planner.
+
+    Usage::
+
+        builder = ProjectContextBuilder(config)
+        ctx_block = await builder.build()
+        # prepend ctx_block to Planner.plan(task, context=ctx_block + feedback)
+    """
+
+    def __init__(self, config: HarnessConfig) -> None:
+        self.config = config
+        self._workspace = config.workspace
+
+    async def build(self) -> str:
+        """Return a compact, LLM-friendly project context block.
+
+        Collects directory tree, git log, git status, and file inventory
+        in parallel, then formats them into a single markdown-ish block.
+        Returns ``""`` if nothing meaningful could be collected.
+        """
+        # Fire all async tasks in parallel
+        tree_task = asyncio.get_event_loop().run_in_executor(
+            None, self._sync_tree
+        )
+        git_log_task = _run_cmd(
+            ["git", "log", f"-{_GIT_LOG_COUNT}", "--oneline", "--no-merges"],
+            cwd=self._workspace,
+        )
+        git_status_task = _run_cmd(
+            ["git", "status", "--short"],
+            cwd=self._workspace,
+        )
+        inventory_task = asyncio.get_event_loop().run_in_executor(
+            None, lambda: _file_inventory(self._workspace)
+        )
+
+        tree_lines, git_log, git_status, inventory_lines = await asyncio.gather(
+            tree_task, git_log_task, git_status_task, inventory_task
+        )
+
+        parts: list[str] = []
+
+        # --- directory tree ---
+        if tree_lines:
+            root_name = Path(self._workspace).name or "workspace"
+            parts.append("### Project Structure")
+            parts.append(f"```\n{root_name}/")
+            parts.extend(tree_lines)
+            parts.append("```")
+
+        # --- file inventory ---
+        if inventory_lines:
+            parts.append("\n### File Inventory")
+            parts.extend(inventory_lines)
+
+        # --- git log ---
+        if git_log.strip():
+            parts.append("\n### Recent Commits (newest first)")
+            parts.append("```")
+            # Limit to _GIT_LOG_COUNT lines; git log already caps it
+            parts.append(git_log.strip())
+            parts.append("```")
+
+        # --- git status ---
+        if git_status.strip():
+            parts.append("\n### Working Tree Status")
+            parts.append("```")
+            parts.append(git_status.strip())
+            parts.append("```")
+
+        if not parts:
+            return ""
+
+        header = "## Project Context\n\n"
+        body = "\n".join(parts)
+
+        # Hard cap to avoid flooding the prompt
+        if len(body) > _MAX_OUTPUT_CHARS:
+            body = body[:_MAX_OUTPUT_CHARS] + "\n... [project context truncated]"
+
+        result = header + body
+        log.debug(
+            "ProjectContextBuilder: built %d-char context block", len(result)
+        )
+        return result
+
+    def _sync_tree(self) -> list[str]:
+        """Build directory tree synchronously (called in executor)."""
+        root = Path(self._workspace)
+        if not root.is_dir():
+            return []
+        return _build_tree(root, max_depth=_TREE_MAX_DEPTH)

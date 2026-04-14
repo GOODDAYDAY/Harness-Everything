@@ -14,6 +14,7 @@ from harness.tools.git import GitStatusTool, GitDiffTool, GitLogTool
 from harness.tools.code_analysis import CodeAnalysisTool
 from harness.tools.file_patch import FilePatchTool
 from harness.tools.test_runner import TestRunnerTool
+from harness.tools.web_search import WebSearchTool
 
 ALL_TOOLS: list[Tool] = [
     ReadFileTool(),
@@ -34,6 +35,7 @@ ALL_TOOLS: list[Tool] = [
     CodeAnalysisTool(),
     FilePatchTool(),
     TestRunnerTool(),
+    WebSearchTool(),
 ]
 
 
