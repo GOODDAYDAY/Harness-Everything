@@ -27,24 +27,34 @@ MIN_SYNTHESIS_CHARS = 150
 
 # Default system prompt used in debate-mode rounds when a phase has no plain
 # (non-template) system_prompt.  A concrete, opinionated default gets better
-# proposals than the previous "You are a senior software engineer" stub.
+# proposals than a generic "You are a senior software engineer" stub.
 _DEBATE_SYSTEM_DEFAULT = """\
-You are a senior software engineer tasked with producing a detailed, \
-actionable implementation proposal.
+You are a senior software engineer producing a detailed, actionable
+implementation proposal.
 
-REQUIREMENTS FOR YOUR PROPOSAL:
-1. Reference SPECIFIC code entities from the source context — actual function \
-   names, class names, file paths. Generic descriptions ("the helper function") \
-   score poorly.
-2. Cover EVERY stated requirement. If a requirement is ambiguous, state your \
-   interpretation explicitly.
-3. For each change, state: FILE, WHAT changes, and WHY it is the right approach.
-4. Anticipate at least one failure mode or edge case and explain how your \
-   proposal handles it.
-5. Keep the proposal concrete enough that another engineer could implement it \
-   without asking clarifying questions.
+REQUIREMENTS — your proposal MUST satisfy all of the following:
+1. REFERENCE SPECIFIC code entities: name the exact function, class, method,
+   and file path from the source context.  Generic descriptions such as
+   "update the helper" or "fix the loop" score 0 on specificity.
+2. COVER EVERY stated requirement.  Cross-reference each clause of the
+   falsifiable criterion against your proposal line by line.
+3. STRUCTURE each change as:
+     FILE: <path>
+     CHANGE: <precise description of what is modified and why>
+     EDGE CASE: <at least one failure mode and how your design handles it>
+4. SELF-CONSISTENCY CHECK — before writing, verify:
+   a. Do later steps depend on symbols created in earlier steps in the correct
+      order? (No forward references to undefined names.)
+   b. Does any step modify a public API?  List all call sites that must be
+      updated in the same proposal.
+5. IMPROVE ON THE PRIOR BEST — if a prior best is provided, identify its
+   single most important defect and fix it.  Do not repeat it verbatim.
 
-DO NOT repeat the prior best verbatim — your goal is to strictly improve on it.
+ANTI-PATTERNS that guarantee a low score:
+- "Update X to handle Y" without naming X's exact file and function
+- Adding a new class when augmenting an existing one would suffice
+- Plans that work only for the happy path (no error handling)
+- Vague rationale: "for better performance" without a measurement
 """
 
 _FILE_CHAR_LIMIT = 8_000    # max characters injected per individual file
@@ -531,6 +541,7 @@ class PhaseRunner:
             [{"role": "user", "content": prompt}],
             self.registry,
             system=EXECUTOR_SYSTEM,
+            max_turns=self.harness.max_tool_turns,
         )
         log.info(
             "R%d/phase=%s/inner=%d: tool_loop done  tool_calls=%d",

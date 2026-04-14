@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any
-
-import asyncio
-import os
 
 import anthropic
 from anthropic._exceptions import OverloadedError
@@ -41,6 +41,10 @@ _INITIAL_DELAY: float = 2.0     # seconds before first retry
 _BACKOFF_FACTOR: float = 2.0    # each retry waits 2× longer
 _MAX_DELAY: float = 60.0        # cap the wait so we don't stall for minutes
 
+# A single tool turn taking longer than this is unusual and worth warning about
+# so operators can spot hung or unexpectedly slow tool calls.
+_TURN_STALL_WARN_SECS: float = 90.0
+
 
 async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> Any:
     """Execute ``coro_factory()`` with exponential-backoff retry on transient errors.
@@ -52,13 +56,11 @@ async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> 
     for non-retryable errors (auth failures, bad requests, etc.).
     """
     delay = _INITIAL_DELAY
-    last_exc: Exception | None = None
 
     for attempt in range(max_retries + 1):
         try:
             return await coro_factory()
         except _RETRYABLE_EXCEPTIONS as exc:
-            last_exc = exc
             if attempt == max_retries:
                 log.error(
                     "LLM call failed after %d attempt(s): %s: %s",
@@ -69,7 +71,6 @@ async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> 
                 raise
             # Jitter: ±20% of the nominal delay to spread retries across
             # concurrent calls that hit the same overload window.
-            import random
             jitter = delay * 0.2 * (2 * random.random() - 1)
             wait = min(delay + jitter, _MAX_DELAY)
             log.warning(
@@ -246,20 +247,36 @@ class LLM:
         total_out_tokens: int = 0
 
         for turn in range(max_turns):
+            turn_start = time.monotonic()
             resp = await self.call(conversation, system=system, tools=tools_schema)
+            turn_elapsed = time.monotonic() - turn_start
+
             # Accumulate token counts for the end-of-loop summary
             if resp.raw is not None:
                 _u = getattr(resp.raw, "usage", None)
                 if _u is not None:
                     total_in_tokens += getattr(_u, "input_tokens", 0) or 0
                     total_out_tokens += getattr(_u, "output_tokens", 0) or 0
+
             log.debug(
-                "tool_loop turn=%d stop=%s calls=%d total_tools=%d",
+                "tool_loop turn=%d stop=%s calls=%d total_tools=%d elapsed=%.1fs",
                 turn + 1,
                 resp.stop_reason,
                 len(resp.tool_calls),
                 len(execution_log),
+                turn_elapsed,
             )
+
+            # Warn on unexpectedly slow turns (model overload, very large contexts)
+            # so operators can spot degraded performance before the full loop times out.
+            if turn_elapsed > _TURN_STALL_WARN_SECS:
+                log.warning(
+                    "tool_loop turn=%d took %.1fs (> %.0f s threshold) — "
+                    "model may be overloaded or context window is very large",
+                    turn + 1,
+                    turn_elapsed,
+                    _TURN_STALL_WARN_SECS,
+                )
 
             # Build assistant message content (text + tool_use blocks).
             # The Anthropic API rejects messages whose content array is empty
@@ -290,23 +307,15 @@ class LLM:
 
             if not resp.tool_calls:
                 elapsed = time.monotonic() - loop_start
-                if total_in_tokens or total_out_tokens:
-                    log.info(
-                        "tool_loop done: turns=%d tool_calls=%d "
-                        "total_in_tok=%d total_out_tok=%d elapsed=%.1fs",
-                        turn + 1,
-                        len(execution_log),
-                        total_in_tokens,
-                        total_out_tokens,
-                        elapsed,
-                    )
-                else:
-                    log.info(
-                        "tool_loop done: turns=%d tool_calls=%d elapsed=%.1fs",
-                        turn + 1,
-                        len(execution_log),
-                        elapsed,
-                    )
+                log.info(
+                    "tool_loop done: turns=%d tool_calls=%d "
+                    "total_in_tok=%d total_out_tok=%d elapsed=%.1fs",
+                    turn + 1,
+                    len(execution_log),
+                    total_in_tokens,
+                    total_out_tokens,
+                    elapsed,
+                )
                 return resp.text, execution_log
 
             # Execute tools and build tool_result message

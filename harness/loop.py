@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -16,6 +17,31 @@ from harness.project_context import ProjectContextBuilder
 from harness.tools import build_registry
 
 log = logging.getLogger(__name__)
+
+
+def _trim_feedback_ctx(ctx: str, cap: int) -> str:
+    """Trim feedback context to at most *cap* chars, preserving section boundaries.
+
+    Trims from the oldest end so recent feedback is always retained.  After
+    slicing, re-aligns to the start of the next ``## Iteration`` heading so we
+    never send a partial feedback block to the planner.  Falls back to the raw
+    slice when no heading boundary is found (rare: single very long iteration).
+
+    Unlike the previous inline approach this is testable and logs at DEBUG
+    rather than polluting the INFO stream on every iteration.
+    """
+    if len(ctx) <= cap:
+        return ctx
+    trimmed = ctx[-cap:]
+    # Re-align to the start of a section heading
+    boundary = trimmed.find("\n\n## Iteration")
+    if boundary > 0:
+        trimmed = trimmed[boundary:]
+    log.debug(
+        "feedback_ctx trimmed: %d → %d chars (cap=%d, boundary_found=%s)",
+        len(ctx), len(trimmed), cap, boundary > 0,
+    )
+    return trimmed
 
 
 @dataclass
@@ -94,6 +120,10 @@ class HarnessLoop:
             full_context = project_ctx
             if feedback_ctx:
                 full_context = (full_context + "\n\n" + feedback_ctx) if full_context else feedback_ctx
+            log.debug(
+                "context_budget: project=%d feedback=%d total=%d chars",
+                len(project_ctx), len(feedback_ctx), len(full_context),
+            )
 
             # 1. Plan
             t0 = time.monotonic()
@@ -107,11 +137,12 @@ class HarnessLoop:
             # 2. Execute
             t0 = time.monotonic()
             result = await self.executor.execute(plan, full_context)
+            _exec_elapsed = time.monotonic() - t0
             log.info(
                 "execute: tool_calls=%d files_changed=%d  (%.1fs)",
                 len(result.log),
                 len(result.files_changed),
-                time.monotonic() - t0,
+                _exec_elapsed,
             )
             if result.files_changed:
                 log.info("  changed: %s", ", ".join(result.files_changed))
@@ -119,11 +150,24 @@ class HarnessLoop:
             # 3. Evaluate
             t0 = time.monotonic()
             verdict = await self.evaluator.evaluate(task, plan, result)
+            _eval_elapsed = time.monotonic() - t0
             log.info(
                 "evaluate: passed=%s  reason=%r  (%.1fs)",
                 verdict.passed,
                 verdict.reason,
-                time.monotonic() - t0,
+                _eval_elapsed,
+            )
+            log.info(
+                "METRIC %s",
+                json.dumps({
+                    "event": "harness_iteration",
+                    "iteration": i,
+                    "passed": verdict.passed,
+                    "tool_calls": len(result.log),
+                    "files_changed": len(result.files_changed),
+                    "exec_elapsed_s": round(_exec_elapsed, 2),
+                    "eval_elapsed_s": round(_eval_elapsed, 2),
+                }),
             )
 
             record = IterationRecord(
@@ -133,10 +177,21 @@ class HarnessLoop:
 
             iter_elapsed = time.monotonic() - iter_start
             if verdict.passed:
+                total_elapsed = time.monotonic() - run_start
                 log.info(
                     "✓ Task completed after %d iteration(s)  total=%.1fs",
                     i,
-                    time.monotonic() - run_start,
+                    total_elapsed,
+                )
+                log.info(
+                    "METRIC %s",
+                    json.dumps({
+                        "event": "harness_run_complete",
+                        "success": True,
+                        "iterations": i,
+                        "total_tool_calls": sum(len(it.result.log) for it in iterations),
+                        "elapsed_s": round(total_elapsed, 2),
+                    }),
                 )
                 return HarnessResult(
                     success=True, iterations=iterations, final_result=result
@@ -154,22 +209,24 @@ class HarnessLoop:
                 f"Feedback: {verdict.feedback}\n"
             )
             feedback_ctx += new_feedback
-            # Trim oldest feedback first to stay within the rolling budget.
-            if len(feedback_ctx) > _FEEDBACK_CTX_CHARS:
-                feedback_ctx = feedback_ctx[-_FEEDBACK_CTX_CHARS:]
-                # Re-align to the start of a section heading so we never send
-                # a partial feedback block to the planner.
-                boundary = feedback_ctx.find("\n\n## Iteration")
-                if boundary > 0:
-                    feedback_ctx = feedback_ctx[boundary:]
-                log.debug(
-                    "feedback_ctx trimmed to %d chars (cap=%d)",
-                    len(feedback_ctx), _FEEDBACK_CTX_CHARS,
-                )
+            feedback_ctx = _trim_feedback_ctx(feedback_ctx, _FEEDBACK_CTX_CHARS)
 
+        total_elapsed = time.monotonic() - run_start
         log.warning(
             "✗ Max iterations (%d) reached without passing  total=%.1fs",
             self.config.max_iterations,
-            time.monotonic() - run_start,
+            total_elapsed,
+        )
+        # Emit the completion metric even on failure so dashboards see a
+        # consistent event for every run regardless of outcome.
+        log.info(
+            "METRIC %s",
+            json.dumps({
+                "event": "harness_run_complete",
+                "success": False,
+                "iterations": self.config.max_iterations,
+                "total_tool_calls": sum(len(it.result.log) for it in iterations),
+                "elapsed_s": round(total_elapsed, 2),
+            }),
         )
         return HarnessResult(success=False, iterations=iterations)
