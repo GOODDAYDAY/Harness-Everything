@@ -73,7 +73,7 @@ class ArtifactStore:
 
     # ---- convenience helpers ----
 
-    def inner_dir(self, outer: int, phase_label: str, inner: int) -> str:
+    def inner_dir(self, outer: int, phase_label: str, inner: int) -> tuple[str, str, str]:
         """Return the directory path segments for an inner round.
 
         Args:
@@ -83,7 +83,7 @@ class ArtifactStore:
         """
         return f"round_{outer + 1}", f"phase_{phase_label}", f"inner_{inner + 1}"
 
-    def phase_dir(self, outer: int, phase_label: str) -> str:
+    def phase_dir(self, outer: int, phase_label: str) -> tuple[str, str]:
         """Return the directory path segments for a phase."""
         return f"round_{outer + 1}", f"phase_{phase_label}"
 

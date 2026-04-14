@@ -11,6 +11,7 @@ from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
 from harness.config import HarnessConfig, PipelineConfig
 from harness.dual_evaluator import DualEvaluator
+from harness.executor import EXECUTOR_SYSTEM
 from harness.hooks import HookResult, VerificationHook, build_hooks
 from harness.llm import LLM
 from harness.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
@@ -294,7 +295,10 @@ class PhaseRunner:
         segs: tuple[str, ...],
     ) -> InnerResult:
         """Debate mode: text-only proposal, no tool_use."""
-        log.info("Phase %s inner %d: debating...", phase.label, inner + 1)
+        log.info(
+            "R%d/phase=%s/inner=%d: debating (prompt=%d chars)",
+            outer + 1, phase.label, inner + 1, len(prompt),
+        )
 
         # Use the phase's own system_prompt as the debate system instruction when
         # it is a plain string (not a Template with $variables) — i.e. the config
@@ -323,8 +327,9 @@ class PhaseRunner:
         self.artifacts.write(dual_score.diffusion.critique, *segs, "diffusion_eval.txt")
 
         log.info(
-            "Phase %s inner %d: basic=%.1f diffusion=%.1f combined=%.1f",
-            phase.label, inner + 1,
+            "R%d/phase=%s/inner=%d: done  proposal=%d chars  "
+            "basic=%.1f diffusion=%.1f combined=%.1f",
+            outer + 1, phase.label, inner + 1, len(proposal),
             dual_score.basic.score, dual_score.diffusion.score, dual_score.combined,
         )
 
@@ -340,12 +345,19 @@ class PhaseRunner:
         segs: tuple[str, ...],
     ) -> InnerResult:
         """Implement mode: tool_use edits real files, then evaluate code state."""
-        log.info("Phase %s inner %d: implementing...", phase.label, inner + 1)
+        log.info(
+            "R%d/phase=%s/inner=%d: implementing (prompt=%d chars)",
+            outer + 1, phase.label, inner + 1, len(prompt),
+        )
 
         text, exec_log = await self.llm.call_with_tools(
             [{"role": "user", "content": prompt}],
             self.registry,
-            system="You are a precise code executor. Follow the plan step by step using the tools available.",
+            system=EXECUTOR_SYSTEM,
+        )
+        log.info(
+            "R%d/phase=%s/inner=%d: tool_loop done  tool_calls=%d",
+            outer + 1, phase.label, inner + 1, len(exec_log),
         )
         implement_log = "\n".join(
             f"- {e['tool']}: {e['output'][:200]}" for e in exec_log
@@ -376,9 +388,11 @@ class PhaseRunner:
             self.artifacts.write(syntax_errors, *segs, "syntax_errors.txt")
 
         log.info(
-            "Phase %s inner %d: basic=%.1f diffusion=%.1f syntax=%s",
-            phase.label, inner + 1,
+            "R%d/phase=%s/inner=%d: done  "
+            "basic=%.1f diffusion=%.1f combined=%.1f  syntax=%s",
+            outer + 1, phase.label, inner + 1,
             dual_score.basic.score, dual_score.diffusion.score,
+            dual_score.combined,
             "OK" if not syntax_errors else "ERRORS",
         )
 
@@ -405,7 +419,16 @@ class PhaseRunner:
             segs = self.artifacts.phase_dir(outer, label)
             return self.artifacts.read(*segs, "synthesis.txt")
 
-        # Build round data
+        # Build round data.
+        # Budget: divide a fixed total allowance evenly across rounds so that
+        # a phase with 1 inner round gets a full 6 000-char proposal window
+        # while a phase with 6 inner rounds still fits within ~36 000 chars.
+        # Critique budget is 50 % of proposal budget (each evaluator gets 25 %).
+        _TOTAL_ROUND_BUDGET = 18_000   # chars for all proposals across all rounds
+        _TOTAL_CRIT_BUDGET  =  9_000   # chars for all critiques across all rounds
+        n_rounds = max(len(results), 1)
+        _proposal_cap = _TOTAL_ROUND_BUDGET // n_rounds
+        _critique_cap = _TOTAL_CRIT_BUDGET  // (n_rounds * 2)  # per evaluator
         round_parts: list[str] = []
         for i, r in enumerate(results):
             score_info = f"combined={r.combined_score:.1f}"
@@ -413,12 +436,12 @@ class PhaseRunner:
                 score_info = f"basic={r.dual_score.basic.score:.1f}, diffusion={r.dual_score.diffusion.score:.1f}"
             round_parts.append(
                 f"=== Round {i + 1} ({score_info}) ===\n"
-                f"{r.proposal[:3000]}\n"
+                f"{r.proposal[:_proposal_cap]}\n"
             )
             if r.dual_score:
                 round_parts.append(
-                    f"--- Basic Evaluator ---\n{r.dual_score.basic.critique[:1500]}\n"
-                    f"--- Diffusion Evaluator ---\n{r.dual_score.diffusion.critique[:1500]}\n"
+                    f"--- Basic Evaluator ---\n{r.dual_score.basic.critique[:_critique_cap]}\n"
+                    f"--- Diffusion Evaluator ---\n{r.dual_score.diffusion.critique[:_critique_cap]}\n"
                 )
 
         round_data = "\n".join(round_parts)
@@ -467,7 +490,19 @@ class PhaseRunner:
         prior_best: str | None,
         syntax_errors: str,
     ) -> str:
-        """Build the executor prompt from the phase template."""
+        """Build the executor prompt from the phase template.
+
+        Variable substitutions available in ``phase.system_prompt``:
+
+        * ``$file_context``           — concatenated source files
+        * ``$prior_best``             — best result from previous round/inner (with header)
+        * ``$syntax_errors``          — syntax error block (with header) if any
+        * ``$falsifiable_criterion``  — phase's falsifiable criterion string
+
+        Warns when ``$file_context`` is absent from the template while
+        ``glob_patterns`` are configured — that combination means the injected
+        source files are silently discarded, which is almost always a bug.
+        """
         prior_section = ""
         if prior_best:
             prior_section = (
@@ -481,7 +516,18 @@ class PhaseRunner:
                 f"```\n{syntax_errors}\n```\n\n"
             )
 
-        return Template(phase.system_prompt).safe_substitute(
+        template = phase.system_prompt
+        if phase.glob_patterns and "$file_context" not in template:
+            log.warning(
+                "Phase %s: system_prompt template does not contain $file_context "
+                "but glob_patterns=%r are configured — source files will NOT be "
+                "injected into the prompt (add $file_context to the template or "
+                "remove glob_patterns to silence this warning)",
+                phase.label,
+                phase.glob_patterns,
+            )
+
+        return Template(template).safe_substitute(
             file_context=file_context,
             prior_best=prior_section,
             syntax_errors=syntax_section,

@@ -21,8 +21,9 @@ EXECUTION RULES:
    unrequested changes, refactors, or "improvements"
 2. READ BEFORE EDITING — always read a file with read_file before using \
    edit_file or write_file; never edit from memory
-3. VERIFY AFTER EACH STEP — after writing or editing a file, read back the \
-   relevant section to confirm the change looks correct
+3. VERIFY AFTER EACH STEP — after writing or editing a file, use read_file \
+   to read back the changed section and confirm the edit is correct before \
+   proceeding to the next step
 4. HANDLE ERRORS EXPLICITLY — if a tool call returns an error:
    a. Report the exact error message
    b. Diagnose the root cause before retrying
@@ -31,16 +32,20 @@ EXECUTION RULES:
 6. STOP AND REPORT if you encounter a blocking problem that cannot be resolved \
    with the available tools; describe what you tried and what failed
 
-VERIFICATION CHECKLIST (run mentally after all steps):
-- Did every edit_file call succeed (non-error result)?
-- Did every new function/class get added to the correct file at the correct scope?
-- Are all import statements present for new symbols introduced?
-- If the plan specified running tests, were they run and did they pass?
+SELF-CHECK (execute these tool calls before writing your final summary):
+a. For every file you edited, call read_file on it and confirm the target \
+   change is present and syntactically plausible.
+b. If any new import was added, grep_search for the imported symbol to confirm \
+   it exists in the target module.
+c. If the plan required running tests, run them now and report pass/fail counts.
 
-When you finish, summarise:
-  COMPLETED: <list of steps completed>
-  SKIPPED: <any steps skipped and why>
-  ISSUES: <any problems encountered, or "none">
+When you finish, write your summary using EXACTLY this format \
+(the evaluator parses these labels):
+COMPLETED: <comma-separated list of step numbers completed, e.g. "1, 2, 3">
+SKIPPED: <step numbers skipped and one-line reason each, or "none">
+ISSUES: <description of any problem encountered, or "none">
+STATUS: <DONE if all required steps completed without blocking issues, \
+         PARTIAL if some steps were skipped or have unresolved issues>
 """
 
 

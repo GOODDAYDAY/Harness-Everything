@@ -42,6 +42,10 @@ class HarnessConfig:
     # --- tools ---
     allowed_tools: list[str] = field(default_factory=list)
     # If empty, all registered tools are available.
+    extra_tools: list[str] = field(default_factory=list)
+    # Names from OPTIONAL_TOOLS (e.g. ["web_search"]) to add on top of the
+    # default registry.  These are NOT included by default to keep schema size
+    # small; opt in explicitly when the task needs them.
 
     # --- loop ---
     max_iterations: int = 5
@@ -60,10 +64,13 @@ class HarnessConfig:
         # --- validate numeric fields ---
         if self.max_tokens < 1:
             raise ValueError(f"HarnessConfig.max_tokens must be ≥ 1, got {self.max_tokens}")
-        if self.max_tokens > 200_000:
+        # Claude's documented hard ceiling is 64 000 output tokens (claude-3-*) or
+        # 8 192 for older models.  Values above 64 000 will be rejected by the API
+        # with a 400 error and a confusing message; catch them here instead.
+        if self.max_tokens > 64_000:
             raise ValueError(
-                f"HarnessConfig.max_tokens={self.max_tokens} seems unreasonably large; "
-                "check your config (max supported by Claude is ~8096-64000 depending on model)"
+                f"HarnessConfig.max_tokens={self.max_tokens} exceeds the Claude API maximum "
+                "of 64 000 output tokens.  Typical values: 8 096 (default), 16 384, 32 768."
             )
         if self.max_iterations < 1:
             raise ValueError(f"HarnessConfig.max_iterations must be ≥ 1, got {self.max_iterations}")
@@ -99,6 +106,14 @@ class HarnessConfig:
                     self.workspace,
                 )
 
+        # --- validate extra_tools entries are non-empty strings ---
+        bad_extra = [t for t in self.extra_tools if not isinstance(t, str) or not t.strip()]
+        if bad_extra:
+            raise ValueError(
+                f"HarnessConfig.extra_tools contains invalid entries: {bad_extra!r}. "
+                "All entries must be non-empty strings (tool names)."
+            )
+
     def is_path_allowed(self, path: str | Path) -> bool:
         """Check whether *path* falls under one of the allowed directories."""
         resolved = str(Path(path).resolve())
@@ -111,8 +126,11 @@ class HarnessConfig:
     def from_dict(cls, data: dict[str, Any]) -> HarnessConfig:
         """Build config from a plain dict (e.g. loaded from YAML/JSON).
 
-        Raises ValueError on unknown top-level keys so that typos in config
-        files are caught immediately rather than silently ignored.
+        Raises ValueError on unknown top-level keys AND on unknown keys in the
+        nested ``planner`` / ``evaluator`` sub-dicts so that typos like
+        ``"conservtive_system"`` are caught immediately rather than silently
+        dropped (the dataclass ``__init__`` would raise a cryptic TypeError
+        without this check).
         """
         import dataclasses
 
@@ -126,6 +144,23 @@ class HarnessConfig:
             raise ValueError(
                 f"HarnessConfig: unknown config key(s): {sorted(unknown)}.  "
                 f"Known keys: {sorted(known_fields)}"
+            )
+
+        # Validate nested sub-dicts so typos in prompt overrides are caught early.
+        known_planner = {f.name for f in dataclasses.fields(PlannerConfig)}
+        unknown_planner = set(planner_data) - known_planner
+        if unknown_planner:
+            raise ValueError(
+                f"HarnessConfig.planner: unknown key(s): {sorted(unknown_planner)}.  "
+                f"Known keys: {sorted(known_planner)}"
+            )
+
+        known_evaluator = {f.name for f in dataclasses.fields(EvaluatorConfig)}
+        unknown_evaluator = set(evaluator_data) - known_evaluator
+        if unknown_evaluator:
+            raise ValueError(
+                f"HarnessConfig.evaluator: unknown key(s): {sorted(unknown_evaluator)}.  "
+                f"Known keys: {sorted(known_evaluator)}"
             )
 
         return cls(
@@ -198,6 +233,27 @@ class PipelineConfig:
             log.warning(
                 "PipelineConfig.phases is empty — the pipeline will exit immediately"
             )
+
+        # Scale sanity check: each inner round makes 3 LLM calls (proposal +
+        # basic eval + diffusion eval) plus 1 synthesis call per phase.  Warn
+        # loudly when the configured budget exceeds 500 API calls so operators
+        # don't accidentally submit a job that runs for hours/costs a fortune.
+        n_phases = len(self.phases) if self.phases else 0
+        if n_phases > 0:
+            # per-phase inner_rounds may override the default; use the default
+            # here as a conservative estimate (actual may be higher).
+            estimated_calls = self.outer_rounds * n_phases * (self.inner_rounds * 3 + 1)
+            if estimated_calls > 500:
+                log.warning(
+                    "PipelineConfig: estimated LLM call budget is ~%d "
+                    "(%d outer × %d phases × (%d inner×3 + 1 synthesis)) — "
+                    "this may be expensive and time-consuming; "
+                    "reduce outer_rounds/inner_rounds or add patience early-stopping",
+                    estimated_calls,
+                    self.outer_rounds,
+                    n_phases,
+                    self.inner_rounds,
+                )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PipelineConfig:
