@@ -9,6 +9,11 @@ from typing import Any, Literal
 
 log = logging.getLogger(__name__)
 
+# Valid Python logging level names accepted by HarnessConfig.log_level.
+_VALID_LOG_LEVELS: frozenset[str] = frozenset(
+    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+)
+
 
 @dataclass
 class PlannerConfig:
@@ -55,6 +60,13 @@ class HarnessConfig:
     # Cap on the number of tool-use turns in a single executor call_with_tools
     # loop.  Lower values reduce runaway token spend on simple tasks; higher
     # values allow more complex multi-step executions.  Valid range: 1–200.
+
+    # --- observability ---
+    log_level: str = "INFO"
+    # Python logging level name for the harness logger hierarchy.
+    # Valid values: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL".
+    # Applied by HarnessLoop.__init__ and PipelineLoop.__init__ via
+    # apply_log_level() so every run picks up the configured verbosity.
 
     # --- sub-configs ---
     planner: PlannerConfig = field(default_factory=PlannerConfig)
@@ -155,6 +167,52 @@ class HarnessConfig:
                 f"HarnessConfig.allowed_tools contains invalid entries: {bad_allowed!r}. "
                 "All entries must be non-empty strings (tool names)."
             )
+
+        # --- validate log_level ---
+        _level_upper = self.log_level.upper().strip()
+        if _level_upper not in _VALID_LOG_LEVELS:
+            raise ValueError(
+                f"HarnessConfig.log_level={self.log_level!r} is not valid.  "
+                f"Must be one of: {sorted(_VALID_LOG_LEVELS)}.  "
+                "Example: 'DEBUG' for verbose output, 'WARNING' for quiet runs."
+            )
+        self.log_level = _level_upper
+
+    def apply_log_level(self) -> None:
+        """Apply ``self.log_level`` to the root ``harness`` logger hierarchy.
+
+        Call this once at startup (``HarnessLoop.__init__``,
+        ``PipelineLoop.__init__``) so all child loggers inherit the level.
+        Does not touch the root logging configuration — only the ``harness``
+        package logger — so the caller's own logging setup is preserved.
+        """
+        harness_log = logging.getLogger("harness")
+        harness_log.setLevel(self.log_level)
+        log.debug("apply_log_level: harness logger set to %s", self.log_level)
+
+    def startup_banner(self) -> str:
+        """Return a one-line structured startup banner for the run log.
+
+        Emitting this at INFO level at the start of every run gives operators
+        a single line they can grep for in long log files to find run boundaries
+        and quickly audit configuration without reading config files.
+
+        Example output::
+
+            harness startup: model=bedrock/claude-sonnet-4-6 max_tokens=8096 \
+workspace=/home/user/project max_iterations=5 max_tool_turns=30 \
+allowed_tools=all log_level=INFO
+
+        Returns:
+            A single-line string (no trailing newline).
+        """
+        tools_str = ",".join(self.allowed_tools) if self.allowed_tools else "all"
+        return (
+            f"harness startup: model={self.model} max_tokens={self.max_tokens} "
+            f"workspace={self.workspace} max_iterations={self.max_iterations} "
+            f"max_tool_turns={self.max_tool_turns} allowed_tools={tools_str} "
+            f"log_level={self.log_level}"
+        )
 
     def is_path_allowed(self, path: str | Path) -> bool:
         """Check whether *path* falls under one of the allowed directories."""

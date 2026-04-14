@@ -197,18 +197,33 @@ class LLM:
                 )
 
         # Log usage when available (usage object may not exist in all SDK versions).
-        # Emit at INFO so token consumption is visible in normal (non-DEBUG) runs;
-        # latency alone is INFO-worthy for cost/performance monitoring.
+        # Claude prompt-caching returns cache_read_input_tokens and
+        # cache_creation_input_tokens in the usage object; log these when present
+        # so operators can see cache hit rates without consulting the API dashboard.
         usage = getattr(resp, "usage", None)
         if usage is not None:
             in_tok = getattr(usage, "input_tokens", None)
             out_tok = getattr(usage, "output_tokens", None)
+            cache_read = getattr(usage, "cache_read_input_tokens", None)
+            cache_create = getattr(usage, "cache_creation_input_tokens", None)
+
+            # Build a compact token summary string, omitting cache fields when
+            # they are absent or zero (keeps logs clean for non-caching models).
+            token_parts = [
+                f"in_tok={in_tok if in_tok is not None else '?'}",
+                f"out_tok={out_tok if out_tok is not None else '?'}",
+            ]
+            if cache_read:
+                token_parts.append(f"cache_read={cache_read}")
+            if cache_create:
+                token_parts.append(f"cache_create={cache_create}")
+            token_str = " ".join(token_parts)
+
             log.info(
-                "LLM call: model=%s stop=%s in_tok=%s out_tok=%s latency=%.1fs",
+                "LLM call: model=%s stop=%s %s latency=%.1fs",
                 self.config.model,
                 resp.stop_reason,
-                in_tok if in_tok is not None else "?",
-                out_tok if out_tok is not None else "?",
+                token_str,
                 elapsed,
             )
         else:
@@ -245,6 +260,10 @@ class LLM:
         loop_start = time.monotonic()
         total_in_tokens: int = 0
         total_out_tokens: int = 0
+        # Emit a mid-loop WARNING when cumulative output tokens cross this
+        # threshold — a strong signal of a runaway or unproductive tool loop.
+        # Set relative to max_tokens so it scales with the configured budget.
+        _TOKEN_SPEND_WARN = self.config.max_tokens * 4
 
         for turn in range(max_turns):
             turn_start = time.monotonic()
@@ -259,13 +278,29 @@ class LLM:
                     total_out_tokens += getattr(_u, "output_tokens", 0) or 0
 
             log.debug(
-                "tool_loop turn=%d stop=%s calls=%d total_tools=%d elapsed=%.1fs",
+                "tool_loop turn=%d stop=%s calls=%d total_tools=%d "
+                "in_tok=%d out_tok=%d elapsed=%.1fs",
                 turn + 1,
                 resp.stop_reason,
                 len(resp.tool_calls),
                 len(execution_log),
+                total_in_tokens,
+                total_out_tokens,
                 turn_elapsed,
             )
+
+            # Warn early when cumulative output-token spend exceeds the budget
+            # threshold — helps operators abort loops that are clearly spinning.
+            if total_out_tokens > _TOKEN_SPEND_WARN:
+                log.warning(
+                    "tool_loop turn=%d: cumulative out_tok=%d exceeds "
+                    "spend-warn threshold=%d (max_tokens=%d × 4) — "
+                    "loop may be unproductive; consider lowering max_tool_turns",
+                    turn + 1,
+                    total_out_tokens,
+                    _TOKEN_SPEND_WARN,
+                    self.config.max_tokens,
+                )
 
             # Warn on unexpectedly slow turns (model overload, very large contexts)
             # so operators can spot degraded performance before the full loop times out.

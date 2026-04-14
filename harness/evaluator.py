@@ -392,6 +392,51 @@ def _extract_executor_status(summary_text: str) -> str:
     return ""
 
 
+
+def _extract_step_coverage(summary_text: str) -> str:
+    """Parse COMPLETED and SKIPPED fields from the executor summary.
+
+    Returns a compact one-line coverage string for injection into the
+    evaluator prompt, e.g. ``"completed=1,2,3  skipped=4 (no tool)"``
+    or ``""`` when neither field is present.
+
+    This grounds the LLM reviewers in factual step counts rather than
+    forcing them to infer completion status from prose.  The conservative
+    reviewer in particular benefits from a clear "step 4 was skipped" signal.
+
+    Parsing rules:
+    - COMPLETED: comma/space-separated step numbers (may include ranges like "1-3")
+    - SKIPPED: step numbers followed by an optional parenthesised reason
+    - "none" as the value means the field is absent / all steps ran
+    - Both fields are case-insensitive per the executor summary format spec
+    """
+    completed_raw = ""
+    skipped_raw = ""
+
+    for line in summary_text.splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("COMPLETED:"):
+            completed_raw = stripped.split(":", 1)[1].strip()
+        elif upper.startswith("SKIPPED:"):
+            skipped_raw = stripped.split(":", 1)[1].strip()
+
+    if not completed_raw and not skipped_raw:
+        return ""
+
+    parts: list[str] = []
+    if completed_raw and completed_raw.lower() not in ("none", ""):
+        # Count the completed steps: split on commas/spaces, filter numbers
+        tokens = [t.strip() for t in completed_raw.replace(",", " ").split()]
+        step_nums = [t for t in tokens if t.replace("-", "").isdigit()]
+        n = len(step_nums)
+        parts.append(f"completed={completed_raw[:80]}" + (f" ({n} step(s))" if n else ""))
+    if skipped_raw and skipped_raw.lower() not in ("none", ""):
+        parts.append(f"skipped={skipped_raw[:120]}")
+
+    return "  |  ".join(parts)
+
+
 def build_evaluator(
     llm: LLM,
     config: HarnessConfig,
