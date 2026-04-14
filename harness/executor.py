@@ -40,6 +40,23 @@ EXECUTION RULES:
    again unless you edited it.  Combine grep_search and read_file judiciously
    rather than issuing a read_file for every file in the context.
 
+TOOL SELECTION GUIDE — choose the right tool first time:
+  • Need to see a whole file or section?  → read_file (with offset+limit for
+    large files; avoid reading the entire file when you only need a function).
+  • Need to find where something is defined or called?  → grep_search first;
+    only call read_file once you know which lines to inspect.
+  • Changing the same string in many files?  → find_replace (one call instead
+    of N sequential edit_file calls; use dry_run=true to confirm scope first).
+  • Applying a structured diff?  → file_patch (for multi-hunk changes that are
+    hard to express as single old_str→new_str replacements).
+  • Changing one specific block in one file?  → edit_file.
+  • Rewriting a file from scratch?  → write_file.
+  • Never call read_file on a file you have just written — the write already
+    succeeded; only re-read if you want to verify an edit_file change.
+  • Avoid bash for file operations that have a dedicated tool (read_file,
+    write_file, grep_search, etc.); reserve bash for running tests, build
+    commands, or operations that have no dedicated tool.
+
 SELF-CHECK — execute these verifications before writing your final summary:
 a. For every file you edited or created, call read_file and confirm:
    the target change is present, no syntax errors are visible, no surrounding
