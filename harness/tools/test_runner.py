@@ -401,10 +401,20 @@ class TestRunnerTool(Tool):
             if proc is not None:
                 proc.kill()
                 await proc.wait()
+            if json_report_file:
+                try:
+                    Path(json_report_file).unlink(missing_ok=True)
+                except Exception:
+                    pass
             return ToolResult(
                 error=f"pytest timed out after {timeout}s", is_error=True
             )
         except FileNotFoundError:
+            if json_report_file:
+                try:
+                    Path(json_report_file).unlink(missing_ok=True)
+                except Exception:
+                    pass
             return ToolResult(
                 error=(
                     "pytest not found — is it installed in the current environment?"
@@ -412,6 +422,11 @@ class TestRunnerTool(Tool):
                 is_error=True,
             )
         except Exception as exc:
+            if json_report_file:
+                try:
+                    Path(json_report_file).unlink(missing_ok=True)
+                except Exception:
+                    pass
             return ToolResult(error=f"Failed to launch pytest: {exc}", is_error=True)
 
         exit_code: int = proc.returncode  # type: ignore[assignment]
