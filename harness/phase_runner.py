@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
+import time
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -11,6 +14,7 @@ from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
 from harness.config import HarnessConfig, PipelineConfig
 from harness.dual_evaluator import DualEvaluator
+from harness.executor import EXECUTOR_SYSTEM
 from harness.hooks import HookResult, VerificationHook, build_hooks
 from harness.llm import LLM
 from harness.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
@@ -21,22 +25,326 @@ log = logging.getLogger(__name__)
 
 MIN_SYNTHESIS_CHARS = 150
 
+# Default system prompt used in debate-mode rounds when a phase has no plain
+# (non-template) system_prompt.  A concrete, opinionated default gets better
+# proposals than a generic "You are a senior software engineer" stub.
+_DEBATE_SYSTEM_DEFAULT = """\
+You are a senior software engineer producing a detailed, actionable
+implementation proposal.
 
-def _read_source_files(workspace: str, glob_patterns: list[str]) -> str:
-    """Read and concatenate source files matching glob patterns."""
+REQUIREMENTS — your proposal MUST satisfy all of the following:
+1. REFERENCE SPECIFIC code entities: name the exact function, class, method,
+   and file path from the source context.  Generic descriptions such as
+   "update the helper" or "fix the loop" score 0 on specificity.
+2. COVER EVERY stated requirement.  Cross-reference each clause of the
+   falsifiable criterion against your proposal line by line.
+3. STRUCTURE each change as:
+     FILE: <path>
+     CHANGE: <precise description of what is modified and why>
+     EDGE CASE: <at least one failure mode and how your design handles it>
+4. SELF-CONSISTENCY CHECK — before writing, verify:
+   a. Do later steps depend on symbols created in earlier steps in the correct
+      order? (No forward references to undefined names.)
+   b. Does any step modify a public API?  List all call sites that must be
+      updated in the same proposal.
+5. IMPROVE ON THE PRIOR BEST — if a prior best is provided, identify its
+   single most important defect and fix it.  Do not repeat it verbatim.
+
+ANTI-PATTERNS that guarantee a low score:
+- "Update X to handle Y" without naming X's exact file and function
+- Adding a new class when augmenting an existing one would suffice
+- Plans that work only for the happy path (no error handling)
+- Vague rationale: "for better performance" without a measurement
+"""
+
+_FILE_CHAR_LIMIT = 8_000    # max characters injected per individual file
+_TOTAL_CHAR_LIMIT = 60_000  # max characters for the entire file_context block
+_TAIL_LINES = 120           # when a file is truncated, keep this many tail lines
+                            # (tail is usually more relevant than the top for large files)
+
+# ---------------------------------------------------------------------------
+# File relevance scoring
+# ---------------------------------------------------------------------------
+# Weights for the composite relevance score (must sum to 1.0).
+_W_KEYWORD  = 0.50   # keyword overlap between file path and phase keywords
+_W_RECENCY  = 0.35   # how recently the file was modified
+_W_SIZE     = 0.15   # inverse-size signal (prefer smaller files when keywords equal)
+
+# Recency half-life: files modified within this window score near 1.0 on
+# recency; older files decay exponentially.  24 h is a good default for
+# active development workflows.
+_RECENCY_HALF_LIFE_SECS: float = 24 * 3600   # 24 hours
+
+
+def _tokenise_path(path_str: str) -> set[str]:
+    """Split a file path into lowercase tokens for keyword matching.
+
+    Splits on directory separators, underscores, hyphens, dots, and
+    camelCase/PascalCase boundaries so that e.g.
+    ``"src/phase_runner.py"`` → ``{"src", "phase", "runner", "py"}``
+    and ``"harness/DualEvaluator.py"`` → ``{"harness", "dual", "evaluator", "py"}``.
+    """
+    # Replace separators and punctuation with spaces
+    raw = re.sub(r"[/\._\-]", " ", path_str)
+    # Split on camelCase / PascalCase boundaries
+    raw = re.sub(r"([a-z])([A-Z])", r"\1 \2", raw)
+    return {t.lower() for t in raw.split() if t}
+
+
+def _tokenise_phrase(phrase: str) -> set[str]:
+    """Tokenise a phase name or task description into lowercase keywords.
+
+    Strips common English stop-words so that ``"requirements analysis"``
+    becomes ``{"requirements", "analysis"}`` rather than including ``"a"``,
+    ``"the"``, ``"for"``, etc., which would match nearly every file.
+    """
+    _STOP_WORDS = frozenset({
+        "a", "an", "the", "and", "or", "of", "for", "in", "on", "at",
+        "to", "is", "it", "be", "as", "by", "we", "do", "up", "so",
+        "all", "new", "add", "use", "run", "get", "set", "with",
+    })
+    raw = re.sub(r"[^a-zA-Z0-9 _\-]", " ", phrase)
+    return {
+        t.lower()
+        for t in re.split(r"[\s_\-]+", raw)
+        if t and t.lower() not in _STOP_WORDS and len(t) > 1
+    }
+
+
+def score_file_relevance(
+    path_str: str,
+    keywords: set[str],
+    mtime: float,
+    now: float,
+    file_size: int = 0,
+) -> float:
+    """Compute a composite relevance score in [0, 1] for a source file.
+
+    Higher scores → file appears earlier in context injection.
+
+    Scoring signals
+    ---------------
+    **Keyword overlap** (weight 50%): Jaccard similarity between the set of
+    tokens in the file path and the set of ``keywords`` extracted from the
+    phase name / task description.  A file whose name or directory directly
+    mentions the phase's domain scores close to 1.0 on this dimension.
+
+    **Recency** (weight 35%): Exponential decay based on time since last
+    modification, with a half-life of ``_RECENCY_HALF_LIFE_SECS`` (24 h).
+    A file edited in the last hour scores ~1.0; one edited a week ago scores
+    ~0.06.
+
+    **Inverse size** (weight 15%): Files smaller than ``_FILE_CHAR_LIMIT``
+    get a small bonus over very large files.  This prevents a single enormous
+    file from crowding out several smaller, equally relevant files.
+
+    Args:
+        path_str:  Relative file path (e.g. ``"harness/phase_runner.py"``).
+        keywords:  Set of lowercase keyword tokens from the phase/task.
+        mtime:     File modification time as a Unix timestamp.
+        now:       Current time as a Unix timestamp (for recency calculation).
+        file_size: File size in bytes (0 = unknown, skips size signal).
+
+    Returns:
+        Composite score in [0.0, 1.0].
+    """
+    # --- keyword signal ---
+    path_tokens = _tokenise_path(path_str)
+    if keywords and path_tokens:
+        # Jaccard index: |intersection| / |union|
+        intersection = len(path_tokens & keywords)
+        union = len(path_tokens | keywords)
+        keyword_score = intersection / union if union > 0 else 0.0
+    else:
+        keyword_score = 0.0
+
+    # --- recency signal ---
+    age_secs = max(0.0, now - mtime)
+    # Exponential decay: score = 0.5^(age / half_life)
+    recency_score = math.pow(0.5, age_secs / _RECENCY_HALF_LIFE_SECS)
+
+    # --- inverse-size signal ---
+    if file_size > 0:
+        # Files at or below _FILE_CHAR_LIMIT score 1.0; larger files decay
+        # logarithmically (not linearly) so a 2× oversize file still gets ~0.7).
+        if file_size <= _FILE_CHAR_LIMIT:
+            size_score = 1.0
+        else:
+            # log₂(limit/size): negative for oversized files → clamp to [0,1]
+            ratio = _FILE_CHAR_LIMIT / file_size
+            size_score = max(0.0, min(1.0, 1.0 + math.log2(ratio)))
+    else:
+        size_score = 0.5  # neutral when size is unknown
+
+    return (
+        _W_KEYWORD * keyword_score
+        + _W_RECENCY * recency_score
+        + _W_SIZE    * size_score
+    )
+
+
+def _truncate_file_content(content: str, path_str: str) -> tuple[str, bool]:
+    """Return (truncated_content, was_truncated).
+
+    Strategy: if the file exceeds _FILE_CHAR_LIMIT, keep the first half and
+    last _TAIL_LINES lines so that both the module header and the most-recently-
+    edited code at the bottom are visible.
+    """
+    if len(content) <= _FILE_CHAR_LIMIT:
+        return content, False
+
+    lines = content.splitlines(keepends=True)
+    # Always show at least the last _TAIL_LINES lines
+    tail = lines[-_TAIL_LINES:] if len(lines) > _TAIL_LINES else lines
+    tail_text = "".join(tail)
+
+    # Fill remaining budget from the top
+    budget = _FILE_CHAR_LIMIT - len(tail_text)
+    if budget > 0:
+        head_text = content[:budget]
+        # Don't cut in the middle of a line
+        last_nl = head_text.rfind("\n")
+        head_text = head_text[: last_nl + 1] if last_nl >= 0 else head_text
+        omitted = len(lines) - head_text.count("\n") - _TAIL_LINES
+        truncated = (
+            head_text
+            + f"\n... [{omitted} lines omitted — file truncated to fit context] ...\n\n"
+            + tail_text
+        )
+    else:
+        # File is so large that even the tail fills the budget — just show tail
+        truncated = (
+            f"... [file truncated — showing last {_TAIL_LINES} lines] ...\n\n"
+            + tail_text
+        )
+
+    return truncated, True
+
+
+def _read_source_files(
+    workspace: str,
+    glob_patterns: list[str],
+    keywords: set[str] | None = None,
+) -> str:
+    """Read and concatenate source files matching glob patterns.
+
+    Per-file limit: _FILE_CHAR_LIMIT chars (head + tail strategy).
+    Total limit: _TOTAL_CHAR_LIMIT chars across all files.
+
+    Ordering: when ``keywords`` are provided (extracted from the phase name
+    or task description), files are ranked by a composite relevance score
+    — keyword overlap × path tokens + recency decay + inverse-size signal —
+    so that the most task-relevant files are always injected first and fill
+    the context budget before less-relevant ones.  When ``keywords`` is
+    ``None`` or empty the function falls back to pure mtime ordering
+    (most-recently-changed first), preserving prior behaviour.
+
+    Args:
+        workspace:     Absolute path to the project workspace.
+        glob_patterns: List of glob patterns relative to ``workspace``.
+        keywords:      Optional set of lowercase keyword tokens from the
+                       phase name / task (see ``_tokenise_phrase``).  Pass
+                       ``None`` to use pure mtime ordering.
+    """
     import glob as glob_mod
 
-    parts: list[str] = []
+    # Collect all matching files with their mtime and size for scoring.
+    # Use the resolved absolute path as the dedup key so that two glob patterns
+    # that overlap (e.g. "**/*.py" and "src/**/*.py") never inject the same
+    # file twice.  Without dedup the file would be read twice, counted against
+    # the _TOTAL_CHAR_LIMIT twice, and sent to the LLM as duplicate context —
+    # bumping other files out of the budget silently.
+    seen_resolved: set[str] = set()
+    # (mtime, size_bytes, rel_path)
+    file_entries: list[tuple[float, int, str]] = []
     for pattern in glob_patterns:
-        for path_str in sorted(glob_mod.glob(pattern, recursive=True, root_dir=workspace)):
+        for path_str in glob_mod.glob(pattern, recursive=True, root_dir=workspace):
             full = Path(workspace) / path_str
-            if full.is_file():
-                try:
-                    content = full.read_text(encoding="utf-8", errors="replace")
-                    parts.append(f"=== FILE: {path_str} ===\n{content}\n")
-                except OSError:
-                    continue
-    return "".join(parts) or "[No source files matched]\n"
+            if not full.is_file():
+                continue
+            resolved = str(full.resolve())
+            if resolved in seen_resolved:
+                continue
+            seen_resolved.add(resolved)
+            try:
+                st = full.stat()
+                file_entries.append((st.st_mtime, st.st_size, path_str))
+            except OSError:
+                continue
+
+    if not file_entries:
+        return "[No source files matched]\n"
+
+    # Sort by composite relevance score (descending) when keywords are provided;
+    # fall back to pure mtime (descending) otherwise.
+    if keywords:
+        now = time.time()
+        file_entries.sort(
+            key=lambda e: score_file_relevance(
+                e[2],           # rel_path
+                keywords,
+                e[0],           # mtime
+                now,
+                file_size=e[1], # bytes
+            ),
+            reverse=True,
+        )
+        log.debug(
+            "_read_source_files: ranking %d files by relevance (keywords=%s)",
+            len(file_entries),
+            sorted(keywords)[:8],   # cap log length
+        )
+    else:
+        # Legacy: most recently modified first
+        file_entries.sort(key=lambda e: e[0], reverse=True)
+
+    parts: list[str] = []
+    total_chars = 0
+    truncated_files: list[str] = []
+    skipped_files: list[str] = []
+
+    for _mtime, _size, path_str in file_entries:
+        if total_chars >= _TOTAL_CHAR_LIMIT:
+            skipped_files.append(path_str)
+            continue
+
+        full = Path(workspace) / path_str
+        try:
+            content = full.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+
+        content, was_truncated = _truncate_file_content(content, path_str)
+        if was_truncated:
+            truncated_files.append(path_str)
+
+        # Check total budget after per-file truncation
+        remaining = _TOTAL_CHAR_LIMIT - total_chars
+        if len(content) > remaining:
+            content = content[:remaining]
+            skipped_files.append(path_str)  # partially included
+
+        block = f"=== FILE: {path_str} ===\n{content}\n"
+        parts.append(block)
+        total_chars += len(block)
+
+    if not parts:
+        return "[No source files matched]\n"
+
+    # Append a concise manifest so the LLM knows what it's missing
+    if truncated_files or skipped_files:
+        notes: list[str] = []
+        if truncated_files:
+            notes.append(
+                f"[Truncated to fit context: {', '.join(truncated_files)}]"
+            )
+        if skipped_files:
+            notes.append(
+                f"[Omitted (total context limit): {', '.join(skipped_files)}]"
+            )
+        parts.append("\n".join(notes) + "\n")
+
+    return "".join(parts)
 
 
 class PhaseRunner:
@@ -68,10 +376,23 @@ class PhaseRunner:
         label = phase.label
         n_inner = phase.inner_rounds or self.config.inner_rounds
 
-        # 1. Read source files once for the whole phase
-        file_context = _read_source_files(self.harness.workspace, phase.glob_patterns)
+        # 1. Read source files once for the whole phase.
+        # Extract relevance keywords from the phase name and falsifiable
+        # criterion so that the most task-relevant files are ranked highest
+        # when the total context budget is constrained.
+        phase_keywords = _tokenise_phrase(
+            f"{phase.name} {phase.falsifiable_criterion}"
+        )
+        file_context = _read_source_files(
+            self.harness.workspace,
+            phase.glob_patterns,
+            keywords=phase_keywords or None,
+        )
         log.info(
-            "Phase %s: injected %d chars from source files", label, len(file_context)
+            "Phase %s: injected %d chars from source files  (keywords=%s)",
+            label,
+            len(file_context),
+            sorted(phase_keywords)[:6] if phase_keywords else "[]",
         )
 
         # 2. Run inner rounds
@@ -161,11 +482,24 @@ class PhaseRunner:
         segs: tuple[str, ...],
     ) -> InnerResult:
         """Debate mode: text-only proposal, no tool_use."""
-        log.info("Phase %s inner %d: debating...", phase.label, inner + 1)
+        log.info(
+            "R%d/phase=%s/inner=%d: debating (prompt=%d chars)",
+            outer + 1, phase.label, inner + 1, len(prompt),
+        )
+
+        # Use the phase's own system_prompt as the debate system instruction when
+        # it is a plain string (not a Template with $variables) — i.e. the config
+        # author set a dedicated system prompt for the proposer role.  Fall back to
+        # a sensible default only when phase.system_prompt is empty or still
+        # contains un-substituted Template variables (which would be confusing as a
+        # system prompt).
+        _debate_system = _DEBATE_SYSTEM_DEFAULT
+        if phase.system_prompt and "$" not in phase.system_prompt:
+            _debate_system = phase.system_prompt
 
         resp = await self.llm.call(
             [{"role": "user", "content": prompt}],
-            system="You are a senior software engineer. Produce a detailed, actionable proposal.",
+            system=_debate_system,
         )
         proposal = resp.text
         self.artifacts.write(proposal, *segs, "proposal.txt")
@@ -180,8 +514,9 @@ class PhaseRunner:
         self.artifacts.write(dual_score.diffusion.critique, *segs, "diffusion_eval.txt")
 
         log.info(
-            "Phase %s inner %d: basic=%.1f diffusion=%.1f combined=%.1f",
-            phase.label, inner + 1,
+            "R%d/phase=%s/inner=%d: done  proposal=%d chars  "
+            "basic=%.1f diffusion=%.1f combined=%.1f",
+            outer + 1, phase.label, inner + 1, len(proposal),
             dual_score.basic.score, dual_score.diffusion.score, dual_score.combined,
         )
 
@@ -197,12 +532,20 @@ class PhaseRunner:
         segs: tuple[str, ...],
     ) -> InnerResult:
         """Implement mode: tool_use edits real files, then evaluate code state."""
-        log.info("Phase %s inner %d: implementing...", phase.label, inner + 1)
+        log.info(
+            "R%d/phase=%s/inner=%d: implementing (prompt=%d chars)",
+            outer + 1, phase.label, inner + 1, len(prompt),
+        )
 
         text, exec_log = await self.llm.call_with_tools(
             [{"role": "user", "content": prompt}],
             self.registry,
-            system="You are a precise code executor. Follow the plan step by step using the tools available.",
+            system=EXECUTOR_SYSTEM,
+            max_turns=self.harness.max_tool_turns,
+        )
+        log.info(
+            "R%d/phase=%s/inner=%d: tool_loop done  tool_calls=%d",
+            outer + 1, phase.label, inner + 1, len(exec_log),
         )
         implement_log = "\n".join(
             f"- {e['tool']}: {e['output'][:200]}" for e in exec_log
@@ -214,7 +557,21 @@ class PhaseRunner:
         self.artifacts.write(code_state, *segs, "post_impl_snapshot.txt")
 
         # Dual evaluation on code state
-        eval_subject = f"## Implementation Log\n\n{implement_log}\n\n## Code State After\n\n{code_state[:8000]}"
+        # Cap both sections so the combined eval_subject stays under 12 000 chars.
+        # implement_log is taken from the *tail* (most recent tool calls are most
+        # relevant); code_state is taken from the *head* (module headers and class
+        # definitions are what the evaluator needs to assess correctness).
+        _IMPL_LOG_CAP = 5_000
+        _CODE_STATE_CAP = 7_000
+        impl_log_capped = (
+            implement_log[-_IMPL_LOG_CAP:] if len(implement_log) > _IMPL_LOG_CAP
+            else implement_log
+        )
+        code_state_capped = code_state[:_CODE_STATE_CAP]
+        eval_subject = (
+            f"## Implementation Log\n\n{impl_log_capped}\n\n"
+            f"## Code State After\n\n{code_state_capped}"
+        )
         dual_score = await self.dual_evaluator.evaluate(
             eval_subject, file_context,
             basic_system=self.config.dual_evaluator.basic_system,
@@ -233,9 +590,11 @@ class PhaseRunner:
             self.artifacts.write(syntax_errors, *segs, "syntax_errors.txt")
 
         log.info(
-            "Phase %s inner %d: basic=%.1f diffusion=%.1f syntax=%s",
-            phase.label, inner + 1,
+            "R%d/phase=%s/inner=%d: done  "
+            "basic=%.1f diffusion=%.1f combined=%.1f  syntax=%s",
+            outer + 1, phase.label, inner + 1,
             dual_score.basic.score, dual_score.diffusion.score,
+            dual_score.combined,
             "OK" if not syntax_errors else "ERRORS",
         )
 
@@ -262,7 +621,16 @@ class PhaseRunner:
             segs = self.artifacts.phase_dir(outer, label)
             return self.artifacts.read(*segs, "synthesis.txt")
 
-        # Build round data
+        # Build round data.
+        # Budget: divide a fixed total allowance evenly across rounds so that
+        # a phase with 1 inner round gets a full 6 000-char proposal window
+        # while a phase with 6 inner rounds still fits within ~36 000 chars.
+        # Critique budget is 50 % of proposal budget (each evaluator gets 25 %).
+        _TOTAL_ROUND_BUDGET = 18_000   # chars for all proposals across all rounds
+        _TOTAL_CRIT_BUDGET  =  9_000   # chars for all critiques across all rounds
+        n_rounds = max(len(results), 1)
+        _proposal_cap = _TOTAL_ROUND_BUDGET // n_rounds
+        _critique_cap = _TOTAL_CRIT_BUDGET  // (n_rounds * 2)  # per evaluator
         round_parts: list[str] = []
         for i, r in enumerate(results):
             score_info = f"combined={r.combined_score:.1f}"
@@ -270,12 +638,12 @@ class PhaseRunner:
                 score_info = f"basic={r.dual_score.basic.score:.1f}, diffusion={r.dual_score.diffusion.score:.1f}"
             round_parts.append(
                 f"=== Round {i + 1} ({score_info}) ===\n"
-                f"{r.proposal[:3000]}\n"
+                f"{r.proposal[:_proposal_cap]}\n"
             )
             if r.dual_score:
                 round_parts.append(
-                    f"--- Basic Evaluator ---\n{r.dual_score.basic.critique[:1500]}\n"
-                    f"--- Diffusion Evaluator ---\n{r.dual_score.diffusion.critique[:1500]}\n"
+                    f"--- Basic Evaluator ---\n{r.dual_score.basic.critique[:_critique_cap]}\n"
+                    f"--- Diffusion Evaluator ---\n{r.dual_score.diffusion.critique[:_critique_cap]}\n"
                 )
 
         round_data = "\n".join(round_parts)
@@ -324,7 +692,19 @@ class PhaseRunner:
         prior_best: str | None,
         syntax_errors: str,
     ) -> str:
-        """Build the executor prompt from the phase template."""
+        """Build the executor prompt from the phase template.
+
+        Variable substitutions available in ``phase.system_prompt``:
+
+        * ``$file_context``           — concatenated source files
+        * ``$prior_best``             — best result from previous round/inner (with header)
+        * ``$syntax_errors``          — syntax error block (with header) if any
+        * ``$falsifiable_criterion``  — phase's falsifiable criterion string
+
+        Warns when ``$file_context`` is absent from the template while
+        ``glob_patterns`` are configured — that combination means the injected
+        source files are silently discarded, which is almost always a bug.
+        """
         prior_section = ""
         if prior_best:
             prior_section = (
@@ -338,7 +718,18 @@ class PhaseRunner:
                 f"```\n{syntax_errors}\n```\n\n"
             )
 
-        return Template(phase.system_prompt).safe_substitute(
+        template = phase.system_prompt
+        if phase.glob_patterns and "$file_context" not in template:
+            log.warning(
+                "Phase %s: system_prompt template does not contain $file_context "
+                "but glob_patterns=%r are configured — source files will NOT be "
+                "injected into the prompt (add $file_context to the template or "
+                "remove glob_patterns to silence this warning)",
+                phase.label,
+                phase.glob_patterns,
+            )
+
+        return Template(template).safe_substitute(
             file_context=file_context,
             prior_best=prior_section,
             syntax_errors=syntax_section,

@@ -18,10 +18,37 @@ from harness.prompts import dual_evaluator as default_prompts
 log = logging.getLogger(__name__)
 
 
+_SCORE_MIN: float = 0.0
+_SCORE_MAX: float = 10.0
+
+
 def parse_score(text: str, pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)") -> float:
-    """Extract a numeric score from evaluator output.  Returns 0.0 if not found."""
-    m = re.search(pattern, text, re.IGNORECASE)
-    return float(m.group(1)) if m else 0.0
+    """Extract a numeric score from evaluator output and clamp it to [0, 10].
+
+    Returns 0.0 when the pattern is not found.  Logs a warning when the raw
+    value is outside the expected range so misconfigured score patterns and
+    hallucinated values are visible in the run log.
+
+    Uses ``re.findall`` and takes the **last** match rather than ``re.search``
+    (which returns the first).  Evaluator prompts instruct the LLM to show
+    their arithmetic inline (e.g. ``SCORE = (A×0.4)+… = 6.0``) *before*
+    writing the authoritative ``SCORE: 6.4`` at the end.  The first
+    ``SCORE:``-prefixed number is therefore often an intermediate value from
+    the weighted arithmetic, not the final verdict.  Taking the last match
+    reliably selects the declared final score regardless of how many
+    arithmetic lines precede it.
+    """
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    if not matches:
+        return 0.0
+    raw = float(matches[-1])
+    clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
+    if clamped != raw:
+        log.warning(
+            "parse_score: raw value %.2f is outside [%.0f, %.0f] — clamped to %.2f",
+            raw, _SCORE_MIN, _SCORE_MAX, clamped,
+        )
+    return clamped
 
 
 class DualEvaluator:
@@ -62,11 +89,23 @@ class DualEvaluator:
             }
         ]
 
-        # Run in parallel — key: neither sees the other's output
-        basic_task = self.llm.call(list(messages), system=basic_sys)
-        diffusion_task = self.llm.call(list(messages), system=diffusion_sys)
+        # Run in parallel — key: neither sees the other's output.
+        # Wrap coroutines in Tasks so that if one raises, we can explicitly
+        # cancel the other rather than leaving it as an abandoned background
+        # task that continues consuming API quota and logs an unhandled
+        # "Task exception was never retrieved" warning.
+        basic_task = asyncio.ensure_future(self.llm.call(list(messages), system=basic_sys))
+        diffusion_task = asyncio.ensure_future(self.llm.call(list(messages), system=diffusion_sys))
 
-        basic_resp, diffusion_resp = await asyncio.gather(basic_task, diffusion_task)
+        try:
+            basic_resp, diffusion_resp = await asyncio.gather(basic_task, diffusion_task)
+        except Exception:
+            # Cancel whichever task is still running so it does not linger
+            # as a background coroutine consuming API quota.
+            for t in (basic_task, diffusion_task):
+                if not t.done():
+                    t.cancel()
+            raise
 
         basic_score = parse_score(basic_resp.text, score_pattern)
         diffusion_score = parse_score(diffusion_resp.text, score_pattern)

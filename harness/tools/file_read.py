@@ -39,6 +39,19 @@ class ReadFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
     ) -> ToolResult:
+        # The Anthropic API occasionally delivers JSON integers as strings when
+        # the LLM emits a quoted value (e.g. offset="2").  Coerce defensively so
+        # callers get a clear error instead of a confusing TypeError deep inside
+        # arithmetic on line 57.
+        try:
+            offset = int(offset)
+            limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            return ToolResult(
+                error=f"offset and limit must be integers, got offset={offset!r} limit={limit!r}: {exc}",
+                is_error=True,
+            )
+
         resolved = str(Path(path).resolve())
         if err := self._check_path(config, resolved):
             return err
