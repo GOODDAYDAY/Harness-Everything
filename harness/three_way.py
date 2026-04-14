@@ -112,6 +112,15 @@ async def _call_with_short_output_retry(
     return retry_resp
 
 
+@dataclass
+class ThreeWayResult:
+    """Outputs from one three-way resolution pass."""
+
+    conservative: str
+    aggressive: str
+    merged: str
+
+
 class ThreeWayResolver:
     """Run two parallel perspectives then merge them into one.
 
@@ -146,23 +155,32 @@ class ThreeWayResolver:
         messages = [{"role": "user", "content": user_message}]
 
         # Phase 1: conservative + aggressive in parallel, each with short-output guard.
+        # Wrap coroutines in Tasks so that if one raises we can explicitly cancel
+        # the other rather than leaving an abandoned background task consuming
+        # API quota and emitting "Task exception was never retrieved" warnings.
         t0 = time.monotonic()
-        conservative_task = _call_with_short_output_retry(
+        conservative_task = asyncio.ensure_future(_call_with_short_output_retry(
             self.llm, messages,
             system=conservative_system,
             min_words=_MIN_PERSPECTIVE_WORDS,
             label="conservative",
-        )
-        aggressive_task = _call_with_short_output_retry(
+        ))
+        aggressive_task = asyncio.ensure_future(_call_with_short_output_retry(
             self.llm, messages,
             system=aggressive_system,
             min_words=_MIN_PERSPECTIVE_WORDS,
             label="aggressive",
-        )
+        ))
 
-        conservative_resp, aggressive_resp = await asyncio.gather(
-            conservative_task, aggressive_task
-        )
+        try:
+            conservative_resp, aggressive_resp = await asyncio.gather(
+                conservative_task, aggressive_task
+            )
+        except Exception:
+            for t in (conservative_task, aggressive_task):
+                if not t.done():
+                    t.cancel()
+            raise
         phase1_elapsed = time.monotonic() - t0
 
         cons_words = len(conservative_resp.text.split())

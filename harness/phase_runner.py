@@ -557,7 +557,21 @@ class PhaseRunner:
         self.artifacts.write(code_state, *segs, "post_impl_snapshot.txt")
 
         # Dual evaluation on code state
-        eval_subject = f"## Implementation Log\n\n{implement_log}\n\n## Code State After\n\n{code_state[:8000]}"
+        # Cap both sections so the combined eval_subject stays under 12 000 chars.
+        # implement_log is taken from the *tail* (most recent tool calls are most
+        # relevant); code_state is taken from the *head* (module headers and class
+        # definitions are what the evaluator needs to assess correctness).
+        _IMPL_LOG_CAP = 5_000
+        _CODE_STATE_CAP = 7_000
+        impl_log_capped = (
+            implement_log[-_IMPL_LOG_CAP:] if len(implement_log) > _IMPL_LOG_CAP
+            else implement_log
+        )
+        code_state_capped = code_state[:_CODE_STATE_CAP]
+        eval_subject = (
+            f"## Implementation Log\n\n{impl_log_capped}\n\n"
+            f"## Code State After\n\n{code_state_capped}"
+        )
         dual_score = await self.dual_evaluator.evaluate(
             eval_subject, file_context,
             basic_system=self.config.dual_evaluator.basic_system,
