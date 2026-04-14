@@ -75,6 +75,9 @@ class PytestHook(VerificationHook):
         self.timeout = timeout
 
     async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
+        # Declare proc before the try so it is always in scope in the except
+        # block, even when create_subprocess_exec itself raises.
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "python", "-m", "pytest", self.test_path, "-v", "--tb=short",
@@ -86,6 +89,11 @@ class PytestHook(VerificationHook):
                 proc.communicate(), timeout=self.timeout
             )
         except asyncio.TimeoutError:
+            # Kill the child process and reap it so the OS does not keep a
+            # zombie entry and asyncio does not warn about an unclosed transport.
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
             return HookResult(passed=False, output="", errors="pytest timed out")
         except FileNotFoundError:
             return HookResult(passed=False, output="", errors="pytest not found")

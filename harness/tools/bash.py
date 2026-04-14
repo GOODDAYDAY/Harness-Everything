@@ -34,6 +34,9 @@ class BashTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, command: str, timeout: int = 60
     ) -> ToolResult:
+        # Declare proc before the try so it is always in scope in the except
+        # block, even if create_subprocess_shell itself raises.
+        proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -43,7 +46,11 @@ class BashTool(Tool):
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
+            # Kill the child process and reap it so the OS does not keep a
+            # zombie entry and asyncio does not warn about an unclosed transport.
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
             return ToolResult(error=f"Command timed out after {timeout}s", is_error=True)
         except Exception as exc:
             return ToolResult(error=str(exc), is_error=True)
