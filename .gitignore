@@ -10,6 +10,15 @@ build/
 tmp*.json
 tmp*.py
 
+# Pipeline configs contain sensitive paths, API URLs, and project-specific prompts
+pipeline_*.json
+!pipeline_example_*.json
+
+# Harness run output and metrics
+harness_output*/
+.harness_metrics.json
+CHANGELOG_AUTO.md
+
 # IDE
 .idea/
 .vscode/
