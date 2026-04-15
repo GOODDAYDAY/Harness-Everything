@@ -488,11 +488,8 @@ class PhaseRunner:
         )
 
         # Use the phase's own system_prompt as the debate system instruction when
-        # it is a plain string (not a Template with $variables) — i.e. the config
-        # author set a dedicated system prompt for the proposer role.  Fall back to
-        # a sensible default only when phase.system_prompt is empty or still
-        # contains un-substituted Template variables (which would be confusing as a
-        # system prompt).
+        # it is a plain string (not a Template with $variables).  Fall back to
+        # a sensible default when empty or contains un-substituted Template vars.
         _debate_system = _DEBATE_SYSTEM_DEFAULT
         if phase.system_prompt and "$" not in phase.system_prompt:
             _debate_system = phase.system_prompt
@@ -504,22 +501,9 @@ class PhaseRunner:
         proposal = resp.text
         self.artifacts.write(proposal, *segs, "proposal.txt")
 
-        # Dual evaluation
-        dual_score = await self.dual_evaluator.evaluate(
-            proposal, file_context,
-            basic_system=self.config.dual_evaluator.basic_system,
-            diffusion_system=self.config.dual_evaluator.diffusion_system,
+        dual_score = await self._evaluate_and_log(
+            outer, phase, inner, proposal, file_context, segs,
         )
-        self.artifacts.write(dual_score.basic.critique, *segs, "basic_eval.txt")
-        self.artifacts.write(dual_score.diffusion.critique, *segs, "diffusion_eval.txt")
-
-        log.info(
-            "R%d/phase=%s/inner=%d: done  proposal=%d chars  "
-            "basic=%.1f diffusion=%.1f combined=%.1f",
-            outer + 1, phase.label, inner + 1, len(proposal),
-            dual_score.basic.score, dual_score.diffusion.score, dual_score.combined,
-        )
-
         return InnerResult(proposal=proposal, dual_score=dual_score)
 
     async def _run_implement_round(
@@ -556,11 +540,8 @@ class PhaseRunner:
         code_state = _read_source_files(self.harness.workspace, phase.glob_patterns)
         self.artifacts.write(code_state, *segs, "post_impl_snapshot.txt")
 
-        # Dual evaluation on code state
-        # Cap both sections so the combined eval_subject stays under 12 000 chars.
-        # implement_log is taken from the *tail* (most recent tool calls are most
-        # relevant); code_state is taken from the *head* (module headers and class
-        # definitions are what the evaluator needs to assess correctness).
+        # Build eval subject from implementation log + code state.
+        # Cap both sections so the combined text stays under 12 000 chars.
         _IMPL_LOG_CAP = 5_000
         _CODE_STATE_CAP = 7_000
         impl_log_capped = (
@@ -572,13 +553,10 @@ class PhaseRunner:
             f"## Implementation Log\n\n{impl_log_capped}\n\n"
             f"## Code State After\n\n{code_state_capped}"
         )
-        dual_score = await self.dual_evaluator.evaluate(
-            eval_subject, file_context,
-            basic_system=self.config.dual_evaluator.basic_system,
-            diffusion_system=self.config.dual_evaluator.diffusion_system,
+
+        dual_score = await self._evaluate_and_log(
+            outer, phase, inner, eval_subject, file_context, segs,
         )
-        self.artifacts.write(dual_score.basic.critique, *segs, "basic_eval.txt")
-        self.artifacts.write(dual_score.diffusion.critique, *segs, "diffusion_eval.txt")
 
         # Syntax check (inline, not hook — needed for carry-forward)
         syntax_errors = ""
@@ -588,15 +566,11 @@ class PhaseRunner:
             hook_result = await hook.run(self.harness, {})
             syntax_errors = hook_result.errors
             self.artifacts.write(syntax_errors, *segs, "syntax_errors.txt")
-
-        log.info(
-            "R%d/phase=%s/inner=%d: done  "
-            "basic=%.1f diffusion=%.1f combined=%.1f  syntax=%s",
-            outer + 1, phase.label, inner + 1,
-            dual_score.basic.score, dual_score.diffusion.score,
-            dual_score.combined,
-            "OK" if not syntax_errors else "ERRORS",
-        )
+            if syntax_errors:
+                log.info(
+                    "R%d/phase=%s/inner=%d: syntax ERRORS detected",
+                    outer + 1, phase.label, inner + 1,
+                )
 
         return InnerResult(
             proposal=text,
@@ -605,6 +579,36 @@ class PhaseRunner:
             post_impl_snapshot=code_state,
             syntax_errors=syntax_errors,
         )
+
+    async def _evaluate_and_log(
+        self,
+        outer: int,
+        phase: PhaseConfig,
+        inner: int,
+        eval_subject: str,
+        file_context: str,
+        segs: tuple[str, ...],
+    ) -> DualScore:
+        """Run dual evaluation on *eval_subject* and write artifacts.
+
+        Shared by both debate and implement rounds to avoid duplicating the
+        evaluate → write-artifacts → log pattern.
+        """
+        dual_score = await self.dual_evaluator.evaluate(
+            eval_subject, file_context,
+            basic_system=self.config.dual_evaluator.basic_system,
+            diffusion_system=self.config.dual_evaluator.diffusion_system,
+        )
+        self.artifacts.write(dual_score.basic.critique, *segs, "basic_eval.txt")
+        self.artifacts.write(dual_score.diffusion.critique, *segs, "diffusion_eval.txt")
+
+        log.info(
+            "R%d/phase=%s/inner=%d: eval done  "
+            "basic=%.1f diffusion=%.1f combined=%.1f",
+            outer + 1, phase.label, inner + 1,
+            dual_score.basic.score, dual_score.diffusion.score, dual_score.combined,
+        )
+        return dual_score
 
     async def _run_synthesis(
         self,
