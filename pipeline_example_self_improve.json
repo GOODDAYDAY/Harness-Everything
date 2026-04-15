@@ -1,0 +1,73 @@
+{
+  "harness": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 8096,
+    "base_url": "https://api.anthropic.com",
+    "workspace": "/path/to/your/project",
+    "allowed_paths": [
+      "/path/to/your/project"
+    ],
+    "allowed_tools": [
+      "read_file", "write_file", "edit_file",
+      "create_directory",
+      "list_directory", "tree",
+      "glob_search", "grep_search",
+      "bash", "git_status", "git_diff"
+    ],
+    "max_tool_turns": 30
+  },
+  "outer_rounds": 10,
+  "inner_rounds": 3,
+  "patience": 5,
+  "evaluation_mode": "dual_isolated",
+  "output_dir": "/path/to/output",
+  "min_synthesis_chars": 150,
+  "max_file_context_chars": 50000,
+  "dual_evaluator": {
+    "basic_system": "You are an adversarial code reviewer for a Python framework.\n\nEvaluate proposals:\n1. Find the single most critical defect\n2. Verify changes follow existing patterns\n3. Check: no path security bypass, no arbitrary code execution\n4. QUALITY CHECK: Penalize -2 for dead code. Reward +1 for removing dead code.\n5. Score 0-10\n\nOutput: SCORE: <number>",
+    "diffusion_system": "You are a second-order effects analyst.\n\nDo NOT evaluate correctness. Analyze ripple effects:\n- Does this change break other modes?\n- Does it increase context window consumption?\n- Does it make the framework harder to configure?\n- What happens when the LLM hallucinates tool names?\n- Does it affect checkpoint/resume reliability?\n\nScore 0-10.\nOutput: SCORE: <number>"
+  },
+  "phases": [
+    {
+      "name": "security_audit",
+      "index": 0,
+      "mode": "debate",
+      "skip_cycle": 3,
+      "inner_rounds": 3,
+      "glob_patterns": [
+        "src/**/*.py",
+        "main.py"
+      ],
+      "system_prompt": "You are a security engineer reviewing a Python framework.\n\nSource code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nTask: Find the top 3 security issues. For each:\n1. Reference the specific file, function, and line\n2. Describe the attack vector\n3. Propose a concrete fix\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Each finding must reference a specific function name and file path. Findings without concrete code references lose 3 points."
+    },
+    {
+      "name": "improvement_design",
+      "index": 1,
+      "mode": "debate",
+      "skip_cycle": 3,
+      "inner_rounds": 3,
+      "glob_patterns": [
+        "src/**/*.py",
+        "main.py"
+      ],
+      "system_prompt": "You are an architect reviewing a Python framework for improvements.\n\nSource code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nTask: Identify the top 3 improvements. For each:\n1. Reference specific files and classes\n2. Describe the improvement with implementation approach\n3. Explain why it increases capability\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Each improvement must reference specific existing classes or files. Vague suggestions lose 3 points."
+    },
+    {
+      "name": "implementation",
+      "index": 2,
+      "mode": "implement",
+      "inner_rounds": 3,
+      "glob_patterns": [
+        "src/**/*.py",
+        "main.py"
+      ],
+      "system_prompt": "You are a developer implementing improvements for a Python framework.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nRules:\n- Follow existing patterns\n- Do NOT break existing APIs\n- One focused improvement per round\n- Before adding new code, remove unused imports and dead code\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Changes must fix a specific issue OR remove verified dead code. Cosmetic-only changes lose 3 points.",
+      "syntax_check_patterns": ["src/**/*.py", "main.py"],
+      "commit_on_success": true,
+      "commit_repos": ["."]
+    }
+  ]
+}
