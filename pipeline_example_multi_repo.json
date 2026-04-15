@@ -1,0 +1,92 @@
+{
+  "harness": {
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 8096,
+    "base_url": "https://api.anthropic.com",
+    "workspace": "/path/to/workspace",
+    "allowed_paths": [
+      "/path/to/workspace/project-a",
+      "/path/to/workspace/project-b"
+    ],
+    "allowed_tools": [
+      "read_file", "write_file", "edit_file",
+      "create_directory",
+      "list_directory", "tree",
+      "glob_search", "grep_search",
+      "bash", "git_status", "git_diff"
+    ],
+    "max_tool_turns": 30
+  },
+  "outer_rounds": 20,
+  "inner_rounds": 3,
+  "patience": 5,
+  "evaluation_mode": "dual_isolated",
+  "output_dir": "/path/to/output",
+  "min_synthesis_chars": 150,
+  "max_file_context_chars": 60000,
+  "dual_evaluator": {
+    "basic_system": "You are a code reviewer for a multi-repo project.\n\nEvaluate proposals:\n1. Find the most critical defect\n2. Verify cross-repo consistency\n3. Score 0-10\n\nOutput: SCORE: <number>",
+    "diffusion_system": "You are a second-order effects analyst for a multi-repo project.\n\nAnalyze ripple effects across repos:\n- Does a change in project-a break project-b?\n- Are shared interfaces consistent?\n- Score 0-10\n\nOutput: SCORE: <number>"
+  },
+  "phases": [
+    {
+      "name": "analysis",
+      "index": 0,
+      "mode": "debate",
+      "skip_after_round": 0,
+      "inner_rounds": 3,
+      "glob_patterns": [
+        "project-a/src/**/*.py",
+        "project-b/src/**/*.py"
+      ],
+      "system_prompt": "You are an architect analyzing a multi-repo system.\n\nSource code:\n$file_context\n\n$prior_best\n\nTask: Identify top 3 cross-repo issues or improvements.\nFor each, reference specific files in both repos.\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Each finding must reference files from at least one repo with specific function names."
+    },
+    {
+      "name": "project_a_impl",
+      "index": 1,
+      "mode": "implement",
+      "inner_rounds": 3,
+      "glob_patterns": [
+        "project-a/src/**/*.py"
+      ],
+      "system_prompt": "You are a developer implementing changes to project-a.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nRules:\n- Follow existing patterns\n- One improvement per round\n- Ensure compatibility with project-b\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Changes must be concrete and testable. Stub implementations lose 3 points.",
+      "syntax_check_patterns": ["project-a/src/**/*.py"],
+      "commit_on_success": true,
+      "commit_repos": ["project-a"]
+    },
+    {
+      "name": "project_b_impl",
+      "index": 2,
+      "mode": "implement",
+      "inner_rounds": 3,
+      "glob_patterns": [
+        "project-b/src/**/*.py"
+      ],
+      "system_prompt": "You are a developer implementing changes to project-b.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nRules:\n- Follow existing patterns\n- One improvement per round\n- Ensure compatibility with project-a\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Changes must be concrete and testable. Stub implementations lose 3 points.",
+      "syntax_check_patterns": ["project-b/src/**/*.py"],
+      "commit_on_success": true,
+      "commit_repos": ["project-b"]
+    },
+    {
+      "name": "integration_test",
+      "index": 3,
+      "mode": "implement",
+      "skip_cycle": 3,
+      "inner_rounds": 2,
+      "glob_patterns": [
+        "project-a/src/**/*.py",
+        "project-b/src/**/*.py"
+      ],
+      "system_prompt": "You are a QA engineer verifying cross-repo integration.\n\nCode:\n$file_context\n\n$prior_best\n\nTask: Write or update integration tests that verify project-a and project-b work together correctly.\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "Tests must be runnable and verify actual cross-repo behavior.",
+      "syntax_check_patterns": ["project-a/**/*.py", "project-b/**/*.py"],
+      "run_tests": true,
+      "test_path": "tests/",
+      "commit_on_success": true,
+      "commit_repos": ["project-a", "project-b"]
+    }
+  ]
+}
