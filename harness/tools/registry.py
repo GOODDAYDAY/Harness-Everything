@@ -27,6 +27,9 @@ _PARAM_ALIASES: dict[str, str] = {
     "directory": "path",           # list_directory / tree: LLM says directory
     "dir": "path",                 # list_directory / tree: LLM says dir
     "pattern": "glob",             # grep_search: LLM says pattern
+    # NOTE: "query" maps to "glob" (grep_search-specific).  Do NOT use "query"
+    # as a primary parameter name in new tools — use "concept", "term", etc.
+    # to avoid silent alias rewriting before dispatch.
     "query": "glob",               # grep_search: LLM says query
     "search": "regex",             # grep_search: LLM says search
     "cmd": "command",              # bash: LLM says cmd

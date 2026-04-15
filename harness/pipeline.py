@@ -7,15 +7,17 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
 from harness.config import PipelineConfig
 from harness.llm import LLM
+from harness.memory import MemoryStore
+from harness.metrics import MetricsCollector
 from harness.phase import PhaseConfig, PhaseResult
 from harness.phase_runner import PhaseRunner
 from harness.tools import build_registry
-from harness.memory import MemoryStore
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +101,10 @@ class PipelineLoop:
         all_round_results: list[list[PhaseResult]] = []
         pipeline_start = time.monotonic()
 
+        metrics = MetricsCollector(
+            output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
+        )
+
         for outer in range(self.config.outer_rounds):
             round_start = time.monotonic()
             log.info(
@@ -167,6 +173,8 @@ class PipelineLoop:
                     break
 
         total_elapsed = time.monotonic() - pipeline_start
+
+        metrics.flush()
 
         # Final summary
         self.artifacts.write_final_summary(
@@ -244,6 +252,7 @@ class PipelineLoop:
                 prior_best = phase_result.synthesis or prior_best
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
+                metrics.record_phase(phase.name, phase_result)
                 _phase_elapsed = time.monotonic() - phase_start
                 log.info(
                     "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d",
