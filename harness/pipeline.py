@@ -101,7 +101,7 @@ class PipelineLoop:
         all_round_results: list[list[PhaseResult]] = []
         pipeline_start = time.monotonic()
 
-        metrics = MetricsCollector(
+        self.metrics = MetricsCollector(
             output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
         )
 
@@ -174,7 +174,7 @@ class PipelineLoop:
 
         total_elapsed = time.monotonic() - pipeline_start
 
-        metrics.flush()
+        self.metrics.flush()
 
         # Final summary
         self.artifacts.write_final_summary(
@@ -252,7 +252,7 @@ class PipelineLoop:
                 prior_best = phase_result.synthesis or prior_best
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
-                metrics.record_phase(phase.name, phase_result)
+                self.metrics.record_phase(phase.name, phase_result)
                 _phase_elapsed = time.monotonic() - phase_start
                 log.info(
                     "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d",

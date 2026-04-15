@@ -82,9 +82,29 @@ class ToolRegistry:
         if tool is None:
             return ToolResult(error=f"Unknown tool: {name!r}", is_error=True)
 
+        # Enforce tool allowlist: if config.allowed_tools is non-empty, only
+        # tools explicitly listed there may be executed.  This is checked at
+        # dispatch time (not only at registration) so that a registry built
+        # with all tools still respects a restrictive config at runtime.
+        if config.allowed_tools and name not in config.allowed_tools:
+            log.warning("registry: tool %r blocked by allowed_tools allowlist", name)
+            return ToolResult(
+                error=(
+                    f"PERMISSION ERROR: tool {name!r} is not in the allowed_tools list.  "
+                    f"Allowed: {config.allowed_tools}"
+                ),
+                is_error=True,
+            )
+
         # Normalise common parameter aliases so the LLM's first attempt
         # succeeds instead of burning a tool turn on a TypeError retry.
         params = _normalise_params(tool, params)
+
+        # Reject parameters that are not in the tool's schema.  This catches
+        # hallucinated parameter names early and gives the LLM a precise error
+        # rather than a cryptic TypeError from the tool's execute() signature.
+        if err := _check_unknown_params(tool, params):
+            return err
 
         try:
             return await tool.execute(config, **params)
@@ -158,3 +178,28 @@ def _required_params(tool: Tool) -> list[str]:
         return schema.get("required", [])
     except Exception:
         return []
+
+
+def _check_unknown_params(
+    tool: Tool, params: dict[str, Any]
+) -> ToolResult | None:
+    """Return a SCHEMA ERROR ToolResult if *params* contains keys not in the tool's schema.
+
+    Called after alias normalisation so that already-corrected keys are not
+    reported as unknown.  Returns None when all keys are valid or when the
+    schema cannot be introspected (fail-open to avoid breaking tools with
+    unusual schemas).
+    """
+    try:
+        schema_props = set(tool.input_schema().get("properties", {}).keys())
+    except Exception:
+        return None  # can't introspect — pass through
+    unknown = set(params) - schema_props
+    if unknown:
+        msg = (
+            f"SCHEMA ERROR calling {tool.name!r}: unexpected parameter(s) {sorted(unknown)}.  "
+            f"Known parameters: {sorted(schema_props)}"
+        )
+        log.warning("registry: unknown params %s for tool %r", sorted(unknown), tool.name)
+        return ToolResult(error=msg, is_error=True)
+    return None
