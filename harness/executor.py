@@ -25,8 +25,17 @@ EXECUTION RULES:
    on the changed section and confirm: (a) the target change is present,
    (b) no surrounding lines were accidentally deleted or shifted.
 4. HANDLE ERRORS EXPLICITLY — if a tool call returns an error:
-   a. Report the exact error message verbatim.
-   b. Diagnose the root cause before retrying (do not blindly retry).
+   a. Read the error category prefix to choose the right fix:
+      • "SCHEMA ERROR"     → you supplied a wrong/missing parameter.  Fix
+        the parameter value or add the required argument; do NOT retry with
+        identical arguments.  Re-read the tool's description for required params.
+      • "PERMISSION ERROR" → the path is outside the allowed workspace.
+        Verify the path is relative to the workspace root and retry once.
+      • "TOOL ERROR"       → an I/O or subprocess failure.  Diagnose the
+        message, retry once with the same parameters, then report under ISSUES
+        if it fails again.
+      • No prefix / other  → treat as TOOL ERROR above.
+   b. Report the exact error message verbatim in your ISSUES summary.
    c. If the cause is unclear after one retry, stop and report under ISSUES.
    d. Do NOT silently retry with different parameters without explaining why.
 5. WORK IN ORDER — complete each numbered step fully before starting the next.
