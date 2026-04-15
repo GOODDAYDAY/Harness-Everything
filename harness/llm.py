@@ -45,6 +45,36 @@ _MAX_DELAY: float = 60.0        # cap the wait so we don't stall for minutes
 # so operators can spot hung or unexpectedly slow tool calls.
 _TURN_STALL_WARN_SECS: float = 90.0
 
+# ---------------------------------------------------------------------------
+# Conversation-history pruning
+# ---------------------------------------------------------------------------
+# Long executor loops (30 turns, read_file outputs up to 2 000 lines each)
+# can push the conversation well past 200 K chars (~50 K tokens).  Claude's
+# context window is 200 K tokens, but each subsequent API call re-sends the
+# *entire* conversation, so token costs and latency grow linearly with turns.
+# Worse, if the conversation overflows the model's context window, the API
+# returns a cryptic HTTP 400 "prompt too long" error that looks identical to
+# a schema error — operators lose hours diagnosing the wrong thing.
+#
+# Strategy: after every tool-result batch, estimate the conversation's total
+# character size.  When it exceeds _CONV_PRUNE_THRESHOLD_CHARS, truncate the
+# text *content* of older tool-result messages (keeping the 4 most recent
+# assistant+user pairs intact) until the total drops to _CONV_PRUNE_TARGET_CHARS.
+# The structural integrity required by the Anthropic API (every tool_use block
+# must have a matching tool_result block with the same ID) is preserved because
+# we only shorten the text inside existing tool_result content blocks — we never
+# remove or reorder messages.
+#
+# Heuristic: 4 chars ≈ 1 token.  The threshold is set at 600 K chars (~150 K
+# tokens) — comfortably inside the 200 K-token context window while leaving
+# headroom for the system prompt, the final answer, and the tools schema.
+_CONV_PRUNE_THRESHOLD_CHARS: int = 600_000   # trigger pruning above this total
+_CONV_PRUNE_TARGET_CHARS: int = 400_000      # prune down to this target
+# Number of *trailing* message pairs (assistant + user) kept verbatim.
+# Keeping the most recent turns intact ensures the model still sees the fresh
+# tool output it just received; only older outputs are compressed.
+_CONV_PRUNE_KEEP_RECENT_PAIRS: int = 4
+
 
 async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> Any:
     """Execute ``coro_factory()`` with exponential-backoff retry on transient errors.
@@ -87,6 +117,123 @@ async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> 
             raise
 
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# Conversation-history pruning helpers
+# ---------------------------------------------------------------------------
+
+
+def _estimate_conversation_chars(conversation: list[dict[str, Any]]) -> int:
+    """Return a cheap character-count estimate for the entire conversation.
+
+    Walks every message's content field and sums the lengths of all text
+    strings found in it.  Handles both string content (plain user/assistant
+    turns) and list content (mixed text + tool_use + tool_result blocks).
+
+    This is intentionally an *undercount* — JSON field names, IDs, and
+    non-text bytes are ignored — so the trigger threshold should include
+    a safety margin.  The important thing is detecting runaway growth, not
+    precision accounting.
+    """
+    total = 0
+    for msg in conversation:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                # text blocks and tool_use input (which can be large JSON)
+                text_val = block.get("text", "")
+                if isinstance(text_val, str):
+                    total += len(text_val)
+                # tool_result content is a list of sub-blocks
+                sub_content = block.get("content", "")
+                if isinstance(sub_content, str):
+                    total += len(sub_content)
+                elif isinstance(sub_content, list):
+                    for sub in sub_content:
+                        if isinstance(sub, dict):
+                            sub_text = sub.get("text", "")
+                            if isinstance(sub_text, str):
+                                total += len(sub_text)
+    return total
+
+
+def _prune_conversation_tool_outputs(
+    conversation: list[dict[str, Any]],
+    target_chars: int,
+    keep_recent_pairs: int,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Truncate tool-result text in older turns to bring conversation under *target_chars*.
+
+    Preserves the *keep_recent_pairs* most recent assistant+user (tool-result)
+    message pairs verbatim so the model still sees fresh context.  Only
+    tool-result content blocks in older user-role messages are truncated.
+
+    The Anthropic API requires structural integrity: every tool_use block must
+    have a matching tool_result block with the same ID.  This function never
+    removes or reorders messages — it only shortens text inside existing
+    tool_result content blocks, so structural integrity is always maintained.
+
+    Args:
+        conversation:       The current conversation list (mutated in-place).
+        target_chars:       Desired total character count after pruning.
+        keep_recent_pairs:  Number of trailing assistant+user pairs to skip.
+
+    Returns:
+        (pruned_conversation, messages_pruned, chars_removed) for logging.
+    """
+    # Identify indices of user messages that contain tool_result blocks.
+    # We walk in *forward* order so we can skip the most recent N pairs.
+    tool_result_indices: list[int] = []
+    for i, msg in enumerate(conversation):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(b, dict) and b.get("type") == "tool_result"
+            for b in content
+        ):
+            tool_result_indices.append(i)
+
+    # The most recent `keep_recent_pairs` entries are protected.
+    protected_indices: set[int] = set(tool_result_indices[-keep_recent_pairs:])
+
+    msgs_pruned = 0
+    chars_removed = 0
+
+    for idx in tool_result_indices:
+        if idx in protected_indices:
+            continue
+        current = _estimate_conversation_chars(conversation)
+        if current <= target_chars:
+            break
+
+        content = conversation[idx]["content"]
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            sub_content = block.get("content", [])
+            if not isinstance(sub_content, list):
+                continue
+            for sub in sub_content:
+                if not isinstance(sub, dict) or sub.get("type") != "text":
+                    continue
+                original_text = sub.get("text", "")
+                original_len = len(original_text)
+                if original_len <= 200:
+                    continue  # already tiny — not worth truncating
+                stub = f"[pruned — {original_len} chars, turn index {idx}]"
+                sub["text"] = stub
+                chars_removed += original_len - len(stub)
+                msgs_pruned += 1
+
+    return conversation, msgs_pruned, chars_removed
 
 
 def _summarise_tool_input(tool_name: str, params: dict[str, Any]) -> str:
@@ -387,6 +534,29 @@ class LLM:
                 )
             conversation.append({"role": "user", "content": tool_results})
 
+            # Prune old tool-result text when the conversation grows large.
+            # This prevents context-window overflow (HTTP 400 "prompt too long")
+            # on long executor loops and caps per-turn input-token costs.
+            # We check *after* appending so the estimate includes the fresh results.
+            conv_chars = _estimate_conversation_chars(conversation)
+            if conv_chars > _CONV_PRUNE_THRESHOLD_CHARS:
+                conversation, n_pruned, n_removed = _prune_conversation_tool_outputs(
+                    conversation,
+                    target_chars=_CONV_PRUNE_TARGET_CHARS,
+                    keep_recent_pairs=_CONV_PRUNE_KEEP_RECENT_PAIRS,
+                )
+                log.warning(
+                    "tool_loop turn=%d: conversation size %d chars exceeds "
+                    "threshold %d — pruned %d tool-result block(s), "
+                    "removed %d chars (new estimate: ~%d chars)",
+                    turn + 1,
+                    conv_chars,
+                    _CONV_PRUNE_THRESHOLD_CHARS,
+                    n_pruned,
+                    n_removed,
+                    conv_chars - n_removed,
+                )
+
         elapsed = time.monotonic() - loop_start
         log.warning(
             "tool_loop hit max_turns=%d after %.1fs (%d tool calls, "
@@ -397,4 +567,25 @@ class LLM:
             total_in_tokens,
             total_out_tokens,
         )
-        return "(max tool turns reached)", execution_log
+        # Emit a structured summary that the Evaluator can parse with
+        # _extract_executor_status().  The bare string "(max tool turns reached)"
+        # previously returned here lacked a STATUS: line, so the evaluator
+        # treated the run as STATUS: DONE and could issue a false PASS verdict
+        # for an incomplete execution.  Adding STATUS: PARTIAL ensures the
+        # evaluator's existing PARTIAL-override logic fires and the next
+        # planner iteration receives the "execution was incomplete" feedback
+        # block rather than a silent acceptance.
+        #
+        # COMPLETED/SKIPPED are left as "unknown" because we genuinely don't
+        # know which steps finished — the tool loop was cut off mid-flight.
+        # The ISSUES field names the root cause so the planner can act on it.
+        partial_summary = (
+            f"COMPLETED: unknown (tool loop was cut off)\n"
+            f"SKIPPED: unknown (tool loop was cut off)\n"
+            f"ISSUES: tool loop exhausted max_tool_turns={max_turns} after "
+            f"{len(execution_log)} tool call(s) in {elapsed:.1f}s — "
+            f"the plan was not fully executed.  "
+            f"Reduce plan scope or raise max_tool_turns in HarnessConfig.\n"
+            f"STATUS: PARTIAL"
+        )
+        return partial_summary, execution_log
