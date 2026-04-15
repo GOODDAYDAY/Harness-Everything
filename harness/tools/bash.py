@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from typing import Any
 
 from harness.config import HarnessConfig
@@ -31,9 +32,45 @@ class BashTool(Tool):
             "required": ["command"],
         }
 
+    @staticmethod
+    def _denied_command(command: str, denylist: list[str]) -> str | None:
+        """Return the matched denylist entry if the command's first token is denied, else None.
+
+        Splits the command with shlex to handle quoted leading tokens correctly.
+        Falls back to a simple split on shlex.ValueError (e.g. unmatched quotes)
+        so that malformed commands are still checked rather than silently allowed.
+        """
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = command.split()
+        if not tokens:
+            return None
+        first = tokens[0]
+        # Also strip any path prefix so "/usr/bin/rm" matches "rm"
+        import os
+        first_base = os.path.basename(first)
+        for denied in denylist:
+            if first == denied or first_base == denied:
+                return denied
+        return None
+
     async def execute(
         self, config: HarnessConfig, *, command: str, timeout: int = 60
     ) -> ToolResult:
+        # Reject commands whose leading token appears in the denylist.
+        if config.bash_command_denylist:
+            matched = self._denied_command(command, config.bash_command_denylist)
+            if matched is not None:
+                return ToolResult(
+                    error=(
+                        f"PERMISSION ERROR: command {command!r} is blocked "
+                        f"(matched denylist entry {matched!r}).  "
+                        f"Denylist: {config.bash_command_denylist}"
+                    ),
+                    is_error=True,
+                )
+
         # Declare proc before the try so it is always in scope in the except
         # block, even if create_subprocess_shell itself raises.
         proc: asyncio.subprocess.Process | None = None

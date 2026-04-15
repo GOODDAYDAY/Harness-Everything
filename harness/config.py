@@ -38,6 +38,17 @@ class HarnessConfig:
     # --- LLM ---
     model: str = "bedrock/claude-sonnet-4-6"
     max_tokens: int = 8096
+    base_url: str = ""
+    # API base URL. If empty, uses ANTHROPIC_BASE_URL env var (if set) or
+    # Anthropic default.  Set this explicitly to avoid inheriting a local proxy
+    # (e.g., Claude Code's 127.0.0.1:9099).
+    # Examples:
+    #   "https://api.anthropic.com"            — Anthropic direct
+    #   "https://api.deepseek.com/v1"          — DeepSeek
+    #   "https://your-gateway.example.com/v1"  — custom gateway
+    api_key: str = ""
+    # API key / auth token.  If empty, uses ANTHROPIC_AUTH_TOKEN or
+    # ANTHROPIC_API_KEY env var.  Set this to use a different provider's key.
 
     # --- workspace & security ---
     workspace: str = "."
@@ -51,6 +62,11 @@ class HarnessConfig:
     # Names from OPTIONAL_TOOLS (e.g. ["web_search"]) to add on top of the
     # default registry.  These are NOT included by default to keep schema size
     # small; opt in explicitly when the task needs them.
+    bash_command_denylist: list[str] = field(default_factory=list)
+    # Shell commands (or leading tokens) that BashTool will refuse to execute.
+    # Each entry is matched against the first whitespace-separated token of the
+    # command string (case-sensitive, path-basename stripped).  Example:
+    #   bash_command_denylist = ["rm", "curl", "wget", "nc", "ssh"]
 
     # --- loop ---
     max_iterations: int = 5
@@ -168,6 +184,14 @@ class HarnessConfig:
                 "All entries must be non-empty strings (tool names)."
             )
 
+        # --- validate bash_command_denylist entries are non-empty strings ---
+        bad_deny = [t for t in self.bash_command_denylist if not isinstance(t, str) or not t.strip()]
+        if bad_deny:
+            raise ValueError(
+                f"HarnessConfig.bash_command_denylist contains invalid entries: {bad_deny!r}. "
+                "All entries must be non-empty strings (command names/prefixes)."
+            )
+
         # --- validate log_level ---
         _level_upper = self.log_level.upper().strip()
         if _level_upper not in _VALID_LOG_LEVELS:
@@ -215,8 +239,23 @@ allowed_tools=all log_level=INFO
         )
 
     def is_path_allowed(self, path: str | Path) -> bool:
-        """Check whether *path* falls under one of the allowed directories."""
-        resolved = str(Path(path).resolve())
+        """Check whether *path* falls under one of the allowed directories.
+
+        Rejects null bytes before calling into the OS — a null byte can be
+        used to truncate the path string at the OS syscall boundary, causing
+        the prefix check to pass on the Python string while the OS operates
+        on a different (shorter) path.
+
+        Uses ``os.path.realpath`` (which calls ``realpath(3)``) rather than
+        ``Path.resolve()`` to resolve symlinks before the comparison, closing
+        the symlink-escape attack where a symlink inside an allowed path points
+        to a target outside it.
+        """
+        import os
+        path_str = str(path)
+        if "\x00" in path_str:
+            return False
+        resolved = os.path.realpath(path_str)
         return any(
             resolved == ap or resolved.startswith(ap + "/")
             for ap in self.allowed_paths

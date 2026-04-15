@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # These errors are safe to retry because the request never reached the model
 # (rate limit, overload, connection drop, 5xx).  We use exponential backoff
-# with jitter so that a fleet of parallel calls doesn't hammer the API in lock
+# with jitter so that a fleet of parallel calls doesn't hit the API in lock
 # step after a momentary overload event.
 _RETRYABLE_EXCEPTIONS = (
     OverloadedError,                      # HTTP 529 — Claude overloaded
@@ -288,14 +288,15 @@ class LLM:
 
     def __init__(self, config: HarnessConfig) -> None:
         self.config = config
-        # Support custom base_url and auth token via env vars
         kwargs: dict[str, Any] = {}
-        base_url = os.environ.get("ANTHROPIC_BASE_URL")
+        # Config fields take priority; fall back to env vars only if config is empty.
+        base_url = config.base_url or os.environ.get("HARNESS_BASE_URL") or ""
         if base_url:
             kwargs["base_url"] = base_url
-        auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY")
-        if auth_token:
-            kwargs["api_key"] = auth_token
+        api_key = config.api_key or os.environ.get("HARNESS_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY") or ""
+        if api_key:
+            kwargs["api_key"] = api_key
+        log.info("LLM client: base_url=%s model=%s", base_url or "(default)", config.model)
         self.client = anthropic.AsyncAnthropic(**kwargs)
 
     async def call(
