@@ -10,6 +10,28 @@ from harness.tools.base import Tool, ToolResult
 
 log = logging.getLogger(__name__)
 
+# LLMs frequently send alternative parameter names that differ from the tool's
+# JSON schema.  Rather than wasting tool turns on a TypeError → retry loop, we
+# normalise the most common aliases *before* dispatch.  Keys = wrong name the
+# LLM sends, values = correct name the tool schema expects.
+_PARAM_ALIASES: dict[str, str] = {
+    "file_content": "content",     # write_file: LLM says file_content
+    "file_path": "path",           # many tools: LLM says file_path
+    "filename": "path",            # many tools: LLM says filename
+    "filepath": "path",            # many tools: LLM says filepath
+    "text": "content",             # write_file: LLM says text
+    "old_string": "old_str",       # edit_file: LLM says old_string
+    "new_string": "new_str",       # edit_file: LLM says new_string
+    "old_text": "old_str",         # edit_file: LLM says old_text
+    "new_text": "new_str",         # edit_file: LLM says new_text
+    "directory": "path",           # list_directory / tree: LLM says directory
+    "dir": "path",                 # list_directory / tree: LLM says dir
+    "pattern": "glob",             # grep_search: LLM says pattern
+    "query": "glob",               # grep_search: LLM says query
+    "search": "regex",             # grep_search: LLM says search
+    "cmd": "command",              # bash: LLM says cmd
+}
+
 
 class ToolRegistry:
     """Collects Tool instances, exports API schemas, and dispatches calls."""
@@ -56,6 +78,11 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(error=f"Unknown tool: {name!r}", is_error=True)
+
+        # Normalise common parameter aliases so the LLM's first attempt
+        # succeeds instead of burning a tool turn on a TypeError retry.
+        params = _normalise_params(tool, params)
+
         try:
             return await tool.execute(config, **params)
         except TypeError as exc:
@@ -83,6 +110,37 @@ class ToolRegistry:
             msg = f"TOOL ERROR in {name!r} — {type(exc).__name__}: {exc}"
             log.warning("registry: unexpected error in tool %r: %s", name, exc)
             return ToolResult(error=msg, is_error=True)
+
+
+def _normalise_params(tool: Tool, params: dict[str, Any]) -> dict[str, Any]:
+    """Map common LLM parameter-name mistakes to the tool's actual schema names.
+
+    Only renames a key when:
+    1. The key is in ``_PARAM_ALIASES``, AND
+    2. The alias target is a known parameter in the tool's schema, AND
+    3. The target name is not already present in ``params``
+       (don't clobber an explicitly provided correct param).
+
+    Returns a *new* dict — the original is not mutated.
+    """
+    try:
+        schema_props = set(tool.input_schema().get("properties", {}).keys())
+    except Exception:
+        return params  # can't introspect schema → pass through unchanged
+
+    out = dict(params)
+    for wrong_name, right_name in _PARAM_ALIASES.items():
+        if (
+            wrong_name in out
+            and right_name in schema_props
+            and right_name not in out
+        ):
+            out[right_name] = out.pop(wrong_name)
+            log.debug(
+                "registry: alias %r → %r for tool %s",
+                wrong_name, right_name, tool.name,
+            )
+    return out
 
 
 def _required_params(tool: Tool) -> list[str]:
