@@ -56,7 +56,17 @@ class Tool(ABC):
     # ---- helpers ----
 
     def _check_path(self, config: HarnessConfig, path: str) -> ToolResult | None:
-        """Return a ToolResult error if *path* is outside allowed dirs, else None."""
+        """Return a ToolResult error if *path* is outside allowed dirs, else None.
+
+        Rejects null bytes before any Path operation — a null byte in a path
+        string causes undefined behaviour on some OSes and can be used to
+        truncate the path at the OS level, bypassing prefix checks.
+        """
+        if "\x00" in path:
+            return ToolResult(
+                error=f"PERMISSION ERROR: path contains null byte: {path!r}",
+                is_error=True,
+            )
         if not config.is_path_allowed(path):
             return ToolResult(
                 error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
