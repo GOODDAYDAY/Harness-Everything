@@ -463,11 +463,13 @@ class SymbolExtractorTool(Tool):
                         m.source_text, m.lineno, source, context_lines
                     )
 
-            all_matches.extend(file_matches)
+            # Respect the global limit: only take as many matches from this
+            # file as needed to reach the cap, instead of collecting all
+            # matches and truncating afterwards.
+            remaining = limit - len(all_matches)
+            all_matches.extend(file_matches[:remaining])
 
-        # Apply global limit
-        truncated = len(all_matches) > limit
-        all_matches = all_matches[:limit]
+        truncated = len(all_matches) >= limit and len(files) > 0
 
         # ---- format output ----
         if format == "json":
