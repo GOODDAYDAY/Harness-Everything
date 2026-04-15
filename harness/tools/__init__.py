@@ -17,7 +17,7 @@ Current optional tools
 ~~~~~~~~~~~~~~~~~~~~~~
 * ``web_search``  — DuckDuckGo search + page fetch; network access required.
 
-Current default tools (22 of 23)
+Current default tools (24 of 25)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 All other tools in this module.
 """
@@ -43,6 +43,8 @@ from harness.tools.symbol_extractor import SymbolExtractorTool
 from harness.tools.python_eval import PythonEvalTool
 from harness.tools.find_replace import FindReplaceTool
 from harness.tools.diff_files import DiffFilesTool
+from harness.tools.cross_reference import CrossReferenceTool
+from harness.tools.semantic_search import SemanticSearchTool
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +75,8 @@ DEFAULT_TOOLS: list[Tool] = [
     PythonEvalTool(),
     FindReplaceTool(),
     DiffFilesTool(),
+    CrossReferenceTool(),
+    SemanticSearchTool(),
 ]
 
 # ---------------------------------------------------------------------------
