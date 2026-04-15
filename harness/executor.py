@@ -88,6 +88,22 @@ STATUS: <DONE if all required steps completed without blocking issues,
 """
 
 
+def executor_system_with_workspace(workspace: str) -> str:
+    """Return EXECUTOR_SYSTEM with the workspace path injected at the top.
+
+    The workspace path line prevents the executor LLM from hallucinating
+    incorrect directory names — a common failure mode when allowed_paths
+    contain similarly-named sibling directories.
+    """
+    workspace_preamble = (
+        f"WORKSPACE: {workspace}\n"
+        f"All file paths you use MUST be under this workspace directory.\n"
+        f"When using read_file, write_file, edit_file, or any file tool, "
+        f"always use paths relative to or within: {workspace}\n\n"
+    )
+    return workspace_preamble + EXECUTOR_SYSTEM
+
+
 @dataclass
 class ExecutionResult:
     """What the executor produced."""
@@ -116,8 +132,9 @@ class Executor:
 
         messages = [{"role": "user", "content": user_content}]
 
+        system = executor_system_with_workspace(self.config.workspace)
         text, execution_log = await self.llm.call_with_tools(
-            messages, self.registry, system=EXECUTOR_SYSTEM,
+            messages, self.registry, system=system,
             max_turns=self.config.max_tool_turns,
         )
 

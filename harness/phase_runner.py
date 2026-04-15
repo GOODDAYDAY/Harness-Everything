@@ -14,7 +14,7 @@ from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
 from harness.config import HarnessConfig, PipelineConfig
 from harness.dual_evaluator import DualEvaluator
-from harness.executor import EXECUTOR_SYSTEM
+from harness.executor import executor_system_with_workspace
 from harness.hooks import HookResult, VerificationHook, build_hooks
 from harness.llm import LLM
 from harness.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
@@ -225,6 +225,7 @@ def _read_source_files(
     workspace: str,
     glob_patterns: list[str],
     keywords: set[str] | None = None,
+    total_char_limit: int = _TOTAL_CHAR_LIMIT,
 ) -> str:
     """Read and concatenate source files matching glob patterns.
 
@@ -304,7 +305,7 @@ def _read_source_files(
     skipped_files: list[str] = []
 
     for _mtime, _size, path_str in file_entries:
-        if total_chars >= _TOTAL_CHAR_LIMIT:
+        if total_chars >= total_char_limit:
             skipped_files.append(path_str)
             continue
 
@@ -319,7 +320,7 @@ def _read_source_files(
             truncated_files.append(path_str)
 
         # Check total budget after per-file truncation
-        remaining = _TOTAL_CHAR_LIMIT - total_chars
+        remaining = total_char_limit - total_chars
         if len(content) > remaining:
             content = content[:remaining]
             skipped_files.append(path_str)  # partially included
@@ -387,6 +388,7 @@ class PhaseRunner:
             self.harness.workspace,
             phase.glob_patterns,
             keywords=phase_keywords or None,
+            total_char_limit=self.config.max_file_context_chars,
         )
         log.info(
             "Phase %s: injected %d chars from source files  (keywords=%s)",
@@ -524,7 +526,7 @@ class PhaseRunner:
         text, exec_log = await self.llm.call_with_tools(
             [{"role": "user", "content": prompt}],
             self.registry,
-            system=EXECUTOR_SYSTEM,
+            system=executor_system_with_workspace(self.harness.workspace),
             max_turns=self.harness.max_tool_turns,
         )
         log.info(
@@ -537,7 +539,10 @@ class PhaseRunner:
         self.artifacts.write(implement_log, *segs, "implement_output.txt")
 
         # Re-read code state
-        code_state = _read_source_files(self.harness.workspace, phase.glob_patterns)
+        code_state = _read_source_files(
+            self.harness.workspace, phase.glob_patterns,
+            total_char_limit=self.config.max_file_context_chars,
+        )
         self.artifacts.write(code_state, *segs, "post_impl_snapshot.txt")
 
         # Build eval subject from implementation log + code state.
@@ -733,12 +738,18 @@ class PhaseRunner:
                 phase.glob_patterns,
             )
 
-        return Template(template).safe_substitute(
+        rendered = Template(template).safe_substitute(
             file_context=file_context,
             prior_best=prior_section,
             syntax_errors=syntax_section,
             falsifiable_criterion=phase.falsifiable_criterion,
         )
+
+        workspace_reminder = (
+            f"**WORKSPACE**: `{self.harness.workspace}`"
+            f" — all file paths must be under this directory.\n\n"
+        )
+        return workspace_reminder + rendered
 
     def _select_prior(
         self,

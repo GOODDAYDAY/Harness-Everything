@@ -204,7 +204,10 @@ class PipelineLoop:
             if phase.should_skip(outer):
                 if not self.checkpoint.is_phase_skipped(outer, phase.label):
                     self.checkpoint.mark_phase_skipped(outer, phase.label)
-                log.info("  phase=%s  status=skipped (skip_after_round=%s)", phase.label, phase.skip_after_round)
+                log.info(
+                    "  phase=%s  status=skipped (skip_after_round=%s, skip_cycle=%s, outer=%d)",
+                    phase.label, phase.skip_after_round, phase.skip_cycle, outer,
+                )
                 continue
 
             # Resume: skip completed phases

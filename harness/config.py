@@ -321,6 +321,12 @@ class PipelineConfig:
     synthesis_system: str = ""
     min_synthesis_chars: int = 150
 
+    # File context budget (chars) for source file injection into executor prompts.
+    # Controls the total size of $file_context in executor prompts.  Lower values
+    # prevent context-window bloat in long runs; higher values give the executor
+    # more code visibility.  Default matches the original hard-coded limit.
+    max_file_context_chars: int = 60_000
+
     def __post_init__(self) -> None:
         # --- validate evaluation_mode (Literal enforcement at runtime) ---
         _VALID_EVAL_MODES = ("three_way", "dual_isolated")
@@ -361,6 +367,20 @@ class PipelineConfig:
                 "synthesis may always retry and fall back to the best inner result; "
                 "typical values are 100–1 000",
                 self.min_synthesis_chars,
+            )
+
+        # --- validate max_file_context_chars ---
+        if self.max_file_context_chars < 1_000:
+            raise ValueError(
+                f"PipelineConfig.max_file_context_chars must be >= 1000, "
+                f"got {self.max_file_context_chars}"
+            )
+        if self.max_file_context_chars > 500_000:
+            log.warning(
+                "PipelineConfig.max_file_context_chars=%d is very large — "
+                "this may cause prompt overflow and high token costs; "
+                "typical values are 30000–80000",
+                self.max_file_context_chars,
             )
 
         # --- validate synthesis_system is a plain string (not an accidental list) ---
