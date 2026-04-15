@@ -28,6 +28,12 @@ class PhaseConfig:
     # Skip logic: skip in outer rounds > this value (None = never skip)
     skip_after_round: int | None = None
 
+    # Periodic skip: run only every N rounds (None = no cycle, run every round).
+    # E.g., skip_cycle=3 means run on outer rounds 0, 3, 6, 9, ...
+    # When both skip_after_round and skip_cycle are set, the phase is skipped
+    # if EITHER condition triggers.
+    skip_cycle: int | None = None
+
     # Inner rounds override (None = use pipeline default)
     inner_rounds: int | None = None
 
@@ -43,11 +49,25 @@ class PhaseConfig:
         """Short label used in directory names: ``'1_requirements_analysis'``."""
         return f"{self.index + 1}_{self.name}"
 
+    def __post_init__(self) -> None:
+        if self.skip_cycle is not None and self.skip_cycle < 1:
+            raise ValueError(
+                f"PhaseConfig.skip_cycle must be >= 1 (or None to disable), "
+                f"got {self.skip_cycle}"
+            )
+
     def should_skip(self, outer: int) -> bool:
-        """Whether this phase should be skipped in the given outer round."""
-        if self.skip_after_round is None:
-            return False
-        return outer > self.skip_after_round
+        """Whether this phase should be skipped in the given outer round.
+
+        Skip conditions (any True => skip):
+        - skip_after_round is set and outer > skip_after_round
+        - skip_cycle is set and outer % skip_cycle != 0
+        """
+        if self.skip_after_round is not None and outer > self.skip_after_round:
+            return True
+        if self.skip_cycle is not None and self.skip_cycle > 0:
+            return (outer % self.skip_cycle) != 0
+        return False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PhaseConfig:
