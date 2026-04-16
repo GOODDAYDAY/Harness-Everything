@@ -6,20 +6,22 @@ Tool registry structure
   These are the workhorse file/search/code tools that every agent task needs.
 * ``OPTIONAL_TOOLS`` — high-cost or scope-expanding tools that are NOT registered
   by default.  Opt in via ``HarnessConfig.extra_tools = ["web_search"]`` or by
-  passing ``extra_tools=["web_search"]`` to ``build_registry()``.  Keeping them
-  optional caps the API schema size for tasks that don't need them (web_search
-  adds ~1 KB to every LLM call's tool list) and prevents accidental network
-  access in offline/air-gapped environments.
+  passing ``extra_tools=["web_search", "http_request"]`` to ``build_registry()``.
+  Keeping them optional caps the API schema size for tasks that don't need them
+  and prevents accidental network access in offline/air-gapped environments.
 * ``ALL_TOOLS``      — union of both lists; exported for tools that need the full
   catalogue (e.g. admin scripts, test fixtures, tool name validation).
 
 Current optional tools
 ~~~~~~~~~~~~~~~~~~~~~~
-* ``web_search``  — DuckDuckGo search + page fetch; network access required.
+* ``web_search``   — DuckDuckGo search + page fetch; network access required.
+* ``http_request`` — Generic HTTP client (GET/POST/etc.); outbound network
+                     access required; kept optional to prevent unintentional
+                     network calls in air-gapped or restricted environments.
 
-Current default tools (31 of 31)
+Current default tools (30 of 30)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-All other tools in this module.
+All other tools in this module (no network access required).
 """
 
 import logging
@@ -88,7 +90,6 @@ DEFAULT_TOOLS: list[Tool] = [
     FeatureSearchTool(),
     CallGraphTool(),
     DependencyAnalyzerTool(),
-    HttpRequestTool(),
     JsonTransformTool(),
     ToolDiscoveryTool(),
 ]
@@ -96,14 +97,16 @@ DEFAULT_TOOLS: list[Tool] = [
 # ---------------------------------------------------------------------------
 # Optional tool set — NOT registered by default; opt in via extra_tools
 # ---------------------------------------------------------------------------
-# Rationale: these tools either require network access (web_search) or have
-# a large schema footprint.  Including them unconditionally would add ~1 KB
-# to every LLM call's tool list even for purely local tasks.
-# To enable: set HarnessConfig.extra_tools = ["web_search"] in your config.
+# Rationale: these tools require outbound network access.  Including them
+# unconditionally would (a) add schema weight to every LLM call and (b)
+# allow network calls in air-gapped or restricted environments.
+# To enable: set HarnessConfig.extra_tools = ["web_search", "http_request"]
+# in your config, or pass extra_tools=[...] to build_registry().
 # ---------------------------------------------------------------------------
 
 OPTIONAL_TOOLS: list[Tool] = [
-    WebSearchTool(),  # DuckDuckGo search + page fetch; needs network access
+    WebSearchTool(),    # DuckDuckGo search + page fetch; needs network access
+    HttpRequestTool(),  # Generic HTTP client (GET/POST/etc.); needs network access
 ]
 
 # ---------------------------------------------------------------------------
