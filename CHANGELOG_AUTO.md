@@ -25,6 +25,12 @@
 
 **Cumulative**: 23 → 34 tools added across rounds, then consolidated to 33 (semantic_search merged into feature_search). 6 shim files created in Round 6, eliminated post-rounds.
 
+### Security Consolidation Round
+- **Enhanced**: Unicode homoglyph security guard in `base.py::_validate_path` now has explicit test verification
+- **Cleaned**: Removed dead `tempfile` import from `tests/test_path_security.py`
+- **Improved**: `test_unicode_normalization_attack` now has concrete assertions instead of passive print statements
+- **Verified**: All path security tests pass with stricter validation checks
+
 ---
 
 ## Round Details

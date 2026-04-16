@@ -31,6 +31,7 @@ import re
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import parse_module
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000
@@ -188,9 +189,8 @@ class FeatureSearchTool(Tool):
                 continue
 
             # Parse AST for symbols and config
-            try:
-                tree = ast.parse(source, filename=rel)
-            except SyntaxError:
+            tree = parse_module(fpath)
+            if tree is None:
                 continue
 
             lines = source.splitlines()
