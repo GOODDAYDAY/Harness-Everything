@@ -14,6 +14,7 @@ class DeleteFileTool(Tool):
     name = "delete_file"
     description = "Delete a file."
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -39,6 +40,7 @@ class MoveFileTool(Tool):
     name = "move_file"
     description = "Move or rename a file."
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -70,6 +72,7 @@ class CopyFileTool(Tool):
     name = "copy_file"
     description = "Copy a file to a new location."
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

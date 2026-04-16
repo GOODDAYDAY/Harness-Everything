@@ -13,6 +13,7 @@ class ListDirectoryTool(Tool):
     name = "list_directory"
     description = "List files and subdirectories in a directory, with type and size info."
     requires_path_check = True
+    tags = frozenset({"file_read"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -45,6 +46,7 @@ class CreateDirectoryTool(Tool):
     name = "create_directory"
     description = "Create a directory (and any missing parents)."
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -70,6 +72,7 @@ class TreeTool(Tool):
         "max_depth controls how deep to recurse (default: 3)."
     )
     requires_path_check = True
+    tags = frozenset({"file_read"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

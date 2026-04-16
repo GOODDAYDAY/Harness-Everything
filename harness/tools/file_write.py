@@ -13,6 +13,7 @@ class WriteFileTool(Tool):
     name = "write_file"
     description = "Create a new file or completely overwrite an existing file with the given content."
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

@@ -18,6 +18,7 @@ class GrepSearchTool(Tool):
         "Supports filtering by file glob (e.g. '*.py')."
     )
     requires_path_check = True
+    tags = frozenset({"search"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

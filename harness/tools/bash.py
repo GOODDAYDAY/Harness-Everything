@@ -18,6 +18,7 @@ class BashTool(Tool):
         "The command runs in the workspace directory. "
         "Timeout defaults to 60 seconds."
     )
+    tags = frozenset({"execution"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

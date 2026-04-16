@@ -145,6 +145,7 @@ class HttpRequestTool(Tool):
         "Uses stdlib urllib — no extra dependencies."
     )
     requires_path_check = False  # no filesystem access
+    tags = frozenset({"network"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

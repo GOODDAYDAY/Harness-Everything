@@ -16,6 +16,7 @@ class EditFileTool(Tool):
         "old_str must appear exactly once in the file (unless replace_all is true)."
     )
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

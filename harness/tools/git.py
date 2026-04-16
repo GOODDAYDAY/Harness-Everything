@@ -43,6 +43,7 @@ async def _run_git(config: HarnessConfig, *args: str) -> ToolResult:
 class GitStatusTool(Tool):
     name = "git_status"
     description = "Show the working tree status (git status)."
+    tags = frozenset({"git"})
 
     def input_schema(self) -> dict[str, Any]:
         return {"type": "object", "properties": {}}
@@ -57,6 +58,7 @@ class GitDiffTool(Tool):
         "Show file changes. By default shows unstaged changes. "
         "Set staged=true to see staged changes."
     )
+    tags = frozenset({"git"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -89,6 +91,7 @@ class GitDiffTool(Tool):
 class GitLogTool(Tool):
     name = "git_log"
     description = "Show recent commit log."
+    tags = frozenset({"git"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

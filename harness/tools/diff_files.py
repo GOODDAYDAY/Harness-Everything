@@ -91,6 +91,7 @@ class DiffFilesTool(Tool):
         "Capped at max_lines lines (default 500) to fit in context windows."
     )
     requires_path_check = True
+    tags = frozenset({"file_read"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

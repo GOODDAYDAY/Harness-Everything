@@ -58,6 +58,18 @@ class ToolRegistry:
         """Return the list of tool definitions for the Claude API."""
         return [t.api_schema() for t in self._tools.values()]
 
+    def filter_by_tags(self, tags: frozenset[str]) -> ToolRegistry:
+        """Return a new registry with only tools matching at least one tag.
+
+        Tools with empty tags (the default) are always included for backward
+        compatibility.
+        """
+        filtered = ToolRegistry()
+        for tool in self._tools.values():
+            if not tool.tags or tool.tags & tags:
+                filtered.register(tool)
+        return filtered
+
     async def execute(
         self, name: str, config: HarnessConfig, params: dict[str, Any]
     ) -> ToolResult:

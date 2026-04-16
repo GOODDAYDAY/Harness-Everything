@@ -37,6 +37,15 @@ class PhaseConfig:
     # Inner rounds override (None = use pipeline default)
     inner_rounds: int | None = None
 
+    # Tool filtering: if non-empty, only tools with at least one matching tag
+    # are included.  Valid tags: "file_read", "file_write", "search", "git",
+    # "analysis", "execution", "network", "testing".  Empty = all tools.
+    tool_tags: list[str] = field(default_factory=list)
+
+    # Skip evaluation for proposals shorter than this (saves 2 API calls).
+    # 0 = always evaluate (default).
+    min_proposal_chars: int = 0
+
     # Verification hooks (implement mode only)
     syntax_check_patterns: list[str] = field(default_factory=list)
     run_tests: bool = False
