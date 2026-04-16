@@ -45,6 +45,7 @@ import importlib
 import importlib.util
 import inspect
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -98,7 +99,7 @@ def discover_tools(
         classes = discover_tools("harness/tools", package="harness.tools")
         tools = [cls() for cls in classes]
     """
-    root = Path(directory).resolve()
+    root = Path(os.path.realpath(directory))
     if not root.is_dir():
         log.warning("discover_tools: %s is not a directory — returning empty list", root)
         return []
