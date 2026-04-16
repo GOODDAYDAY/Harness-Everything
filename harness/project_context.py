@@ -34,7 +34,6 @@ import asyncio
 import glob as glob_mod
 import logging
 from pathlib import Path
-from typing import Any
 
 from harness.core.config import HarnessConfig
 

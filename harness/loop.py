@@ -6,7 +6,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.evaluation.evaluator import Evaluator, Verdict
