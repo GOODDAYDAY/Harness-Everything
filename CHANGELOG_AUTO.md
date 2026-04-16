@@ -143,3 +143,7 @@
   - `_auto_update_prompts()` variable-preservation guard: rewrite dropping `$file_context`/`$prior_best` is rejected and original prompt kept; rewrite preserving all vars is applied; LLM exception falls back to original.
   - `parse_score()` two-tier extraction: strict anchored `^SCORE: N$` preferred over loose fallback; last match wins; clamping at 0/10; no-match returns 0.0.
 - **Test counts**: before=2, after=37 (+35); all 37 pass in 0.67s with zero warnings.
+
+### Security Guard Enhancement Round
+- **Hardened**: Modified `test_control_characters_in_path` to explicitly reject TAB character (`\x09`) instead of allowing it as an exception, strengthening path security validation.
+- **Consistency**: All control characters now trigger the same security check, eliminating a potential bypass vector identified by the Diffusion Evaluator.
