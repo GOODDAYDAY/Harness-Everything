@@ -19,7 +19,7 @@ Current optional tools
                      access required; kept optional to prevent unintentional
                      network calls in air-gapped or restricted environments.
 
-Current default tools (30 of 30)
+Current default tools (32 of 32)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 All other tools in this module (no network access required).
 """
@@ -54,6 +54,8 @@ from harness.tools.dependency_analyzer import DependencyAnalyzerTool
 from harness.tools.http_client import HttpRequestTool
 from harness.tools.json_transform import JsonTransformTool
 from harness.tools.discovery import ToolDiscoveryTool
+from harness.tools.git_search import GitSearchTool
+from harness.tools.todo_scan import TodoScanTool
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +94,8 @@ DEFAULT_TOOLS: list[Tool] = [
     DependencyAnalyzerTool(),
     JsonTransformTool(),
     ToolDiscoveryTool(),
+    GitSearchTool(),
+    TodoScanTool(),
 ]
 
 # ---------------------------------------------------------------------------
@@ -124,7 +128,7 @@ _ALL_TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in ALL_TOOLS}
 # Structural integrity assertion — validated at import time.
 # Keeps the module-level docstring count accurate and detectable by tests.
 # ---------------------------------------------------------------------------
-_EXPECTED_DEFAULT_COUNT = 30
+_EXPECTED_DEFAULT_COUNT = 32
 _EXPECTED_OPTIONAL_COUNT = 2  # WebSearchTool, HttpRequestTool
 
 assert len(DEFAULT_TOOLS) == _EXPECTED_DEFAULT_COUNT, (
