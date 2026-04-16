@@ -585,3 +585,138 @@ json_transform(op="diff", data='{"version":"1.0"}', other='{"version":"2.0","new
 - Net: +624
 
 ---
+
+## Round 7 · 2025 — Tool Auto-Discovery
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/discovery.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — import + registration + docstring count fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/discovery.py` (new, ~210 lines)
+
+Two public surfaces in one file:
+
+**1. `discover_tools(directory, *, package=None, skip_names=None)` — utility function**
+
+Scans a directory for `*.py` files, imports each one, and returns all concrete
+`Tool` subclasses found.  Useful for third-party plugin directories that drop a
+`*.py` file and want it picked up automatically without editing `__init__.py`.
+
+Key implementation details:
+- **Zero extra dependencies** — pure stdlib (`importlib`, `inspect`, `pkgutil`).
+- **Safe** — catches `ImportError` / `Exception` per module; a broken plugin
+  never aborts discovery of healthy modules.  Warns via `logging`.
+- **Deterministic order** — sorts `*.py` files alphabetically before iterating.
+- **No double-loading** — checks `sys.modules` before importing; re-uses an
+  already-imported module if present.
+- **Skips infrastructure** — `__init__`, `base`, and `registry` are always
+  skipped (they define infrastructure, not tools).  Callers can extend this via
+  `skip_names`.
+- **Abstract class filtering** — uses `inspect.isabstract()` to exclude any
+  partially-implemented subclass; only fully-concrete `Tool` subclasses are
+  returned.
+
+Usage::
+
+    from harness.tools.discovery import discover_tools
+    classes = discover_tools("harness/tools", package="harness.tools")
+    # → [BashTool, CallGraphTool, ..., WebSearchTool]  (32 classes)
+    for cls in classes:
+        registry.register(cls())
+
+**2. `ToolDiscoveryTool` (`name = "tool_discovery"`) — introspection tool**
+
+Lets the LLM agent inspect the live tool registry at runtime.
+
+Usage examples::
+
+    tool_discovery()                              # compact summary of all 31 tools
+    tool_discovery(filter="search")               # tools matching "search"
+    tool_discovery(tool_name="call_graph")        # full schema for one tool
+    tool_discovery(show_schema=true)              # full schemas for all tools
+
+**Parameters:**
+- `filter` (optional, default `""`) — case-insensitive substring to restrict
+  output to tools whose name or description matches.
+- `tool_name` (optional, default `""`) — exact tool name for single-tool full
+  schema lookup.  Takes precedence over `filter` and `show_schema`.
+- `show_schema` (optional, default `false`) — include the full `input_schema`
+  dict for every tool in the listing.
+
+**Output (compact summary, no filter):**
+```json
+{
+  "total_tools": 31,
+  "filter_applied": null,
+  "tools": [
+    {
+      "name": "bash",
+      "description": "Execute a shell command...",
+      "requires_path_check": false,
+      "required_params": ["command"],
+      "optional_params": ["timeout"]
+    },
+    ...
+  ]
+}
+```
+
+**Output (single-tool lookup):**
+```json
+{
+  "name": "call_graph",
+  "description": "Build a call graph...",
+  "requires_path_check": false,
+  "input_schema": { "type": "object", "properties": {...}, "required": [...] }
+}
+```
+
+**Registry source**: When `config.tool_registry` is present, reads from the
+live registry; falls back to `DEFAULT_TOOLS` for unit-test configs that don't
+attach a registry.
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.discovery import ToolDiscoveryTool, discover_tools` import.
+- Appended `ToolDiscoveryTool()` to `DEFAULT_TOOLS` list.
+- Updated docstring count from `"30 of 30"` to `"31 of 31"`.
+
+---
+
+### Tool ABC compliance
+
+**`tool_discovery`:**
+- Inherits `Tool` ABC ✓
+- `name = "tool_discovery"` property ✓
+- `input_schema()` returns valid JSON Schema (no required params — all optional) ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` (no filesystem access) ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+**`discover_tools` utility:**
+- Handles non-existent directory gracefully (returns `[]`, logs warning) ✓
+- Handles broken/unimportable modules gracefully (skips with warning) ✓
+- Skips abstract classes via `inspect.isabstract()` ✓
+- Deduplicates classes via `seen_classes` set ✓
+- Deterministic output order (alphabetical by file stem) ✓
+
+### Git tag
+
+`v-tool-tool_discovery-auto`
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~210 (`discovery.py`) + 3 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +213
+
+---
