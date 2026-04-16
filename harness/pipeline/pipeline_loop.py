@@ -92,6 +92,10 @@ class PipelineLoop:
         self._shutdown_requested: bool = False
         # Meta-review context injected into subsequent rounds
         self._meta_review_context: str = ""
+        # Run metrics tracking
+        self.meta_review_count: int = 0
+        self.auto_push_count: int = 0
+        self.shutdown_reason: str = "completed"  # "completed", "signal", "max_rounds", "error"
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -515,6 +519,8 @@ class PipelineLoop:
                 meta_text = await self._run_meta_review(
                     outer, score_history, all_round_results,
                 )
+                if meta_text:
+                    self.meta_review_count += 1
                 if self.config.run_mode == "manual" and meta_text:
                     feedback = await self._manual_review_pause(meta_text)
                     if feedback:
