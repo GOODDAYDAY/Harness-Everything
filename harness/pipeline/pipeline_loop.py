@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -82,6 +81,9 @@ class PipelineLoop:
             self.llm, self.registry, config, self.artifacts, self.checkpoint
         )
         self.memory = MemoryStore(self.artifacts)
+        self._metrics_collector = MetricsCollector(
+            output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
+        )
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -114,10 +116,6 @@ class PipelineLoop:
         # Run-level tool call counters for summary.json tool_error_rate
         _total_tool_calls: int = 0
         _total_tool_errors: int = 0
-
-        self.metrics = MetricsCollector(
-            output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
-        )
 
         for outer in range(self.config.outer_rounds):
             round_start = time.monotonic()
@@ -218,13 +216,12 @@ class PipelineLoop:
 
         total_elapsed = time.monotonic() - pipeline_start
 
-        self.metrics.flush()
+        self._metrics_collector.flush()
 
-        if hasattr(self, "metrics") and self.metrics is not None:
-            detail_path = str(
-                Path(self.config.harness.workspace) / "pipeline_round_details.jsonl"
-            )
-            self.metrics.flush_detail(detail_path)
+        detail_path = str(
+            Path(self.config.harness.workspace) / "pipeline_round_details.jsonl"
+        )
+        self._metrics_collector.flush_detail(detail_path)
 
         # Final summary
         self.artifacts.write_final_summary(
@@ -249,10 +246,6 @@ class PipelineLoop:
             "Pipeline complete: rounds=%d  best=%.1f  total=%.1fs  artifacts=%s",
             len(all_round_results), best_round_score, total_elapsed, self.artifacts.run_dir,
         )
-
-        # --- Priority 5: Auto-tag when best_score > 7.0 ---
-        if best_round_score > 7.0:
-            self._auto_tag(best_round_score, len(all_round_results))
 
         return PipelineResult(
             success=True,
@@ -316,7 +309,7 @@ class PipelineLoop:
                 prior_best = phase_result.synthesis or prior_best
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
-                self.metrics.record_phase(phase.name, phase_result)
+                self._metrics_collector.record_phase(phase.name, phase_result)
                 _phase_elapsed = time.monotonic() - phase_start
                 log.info(
                     "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d",
@@ -463,11 +456,7 @@ class PipelineLoop:
             "total_tool_calls": total_tool_calls,
             "elapsed_total_s": round(total_elapsed, 2),
         }
-        # Also include MetricsCollector phase-level totals when available
-        if hasattr(self, "metrics") and self.metrics is not None:
-            payload["metrics_tool_turns"] = sum(
-                p.total_tool_turns for p in self.metrics._phases
-            )
+        payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
         try:
             self.artifacts.write(json.dumps(payload, indent=2), "summary.json")
             log.info(
@@ -477,38 +466,4 @@ class PipelineLoop:
         except Exception as exc:
             log.warning("_write_run_summary: failed to write summary.json: %s", exc)
 
-    def _auto_tag(self, best_score: float, rounds_completed: int) -> None:
-        """Create a git tag when best_score > 7.0 (Priority 5).
 
-        Tag format: ``v-pipeline-score<score>-r<rounds>-auto``
-        Example:    ``v-pipeline-score8.5-r3-auto``
-
-        Uses subprocess to call ``git tag`` in the workspace directory.
-        Failures (not a git repo, tag already exists, etc.) are logged as
-        warnings and never raise — a tagging failure must not abort the run.
-        """
-        tag_name = (
-            f"v-pipeline-score{best_score:.1f}-r{rounds_completed}-auto"
-            .replace(".", "_")
-        )
-        message = (
-            f"Auto-tag: pipeline complete, best_score={best_score:.1f}, "
-            f"rounds={rounds_completed}"
-        )
-        try:
-            result = subprocess.run(
-                ["git", "tag", "-a", tag_name, "-m", message],
-                cwd=self.config.harness.workspace,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                log.info("Auto-tag created: %s", tag_name)
-            else:
-                log.warning(
-                    "Auto-tag %r failed (rc=%d): %s",
-                    tag_name, result.returncode, result.stderr.strip(),
-                )
-        except Exception as exc:
-            log.warning("Auto-tag failed: %s", exc)

@@ -112,6 +112,7 @@ class ToolRegistry:
         try:
             result = await tool.execute(config, **params)
             _duration_ms = round((time.monotonic() - _t0) * 1000)
+            result.elapsed_s = round(_duration_ms / 1000, 4)
             log.info(
                 "TOOL_TRACE %s",
                 json.dumps({
