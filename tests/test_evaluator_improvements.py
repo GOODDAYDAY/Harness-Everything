@@ -131,5 +131,22 @@ SCORE: 8.5"""
     assert parse_score(text_with_markdown) == 8.5
 
 
+def test_parse_score_unanchored_fallback():
+    """Test score parsing with unanchored strict regex fallback."""
+    from harness.evaluation.dual_evaluator import parse_score
+    
+    # Test unanchored strict pattern (not at line start)
+    text = "Some text SCORE: 6.5 more text"
+    assert parse_score(text) == 6.5
+    
+    # Test with different case
+    text = "Some text score: 7.2 more text"
+    assert parse_score(text) == 7.2
+    
+    # Test with multiple scores (should take last)
+    text = "SCORE: 5.0 Some text SCORE: 8.1 more text"
+    assert parse_score(text) == 8.1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

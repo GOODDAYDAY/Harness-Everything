@@ -26,6 +26,7 @@ _SCORE_MAX: float = 10.0
 # its own line.  The loose fallback handles older/custom prompts that don't
 # follow the anchored format.
 _STRICT_RE = re.compile(r"^SCORE:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+_STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 _LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
 # Mode header injected into the evaluation user message so evaluators know
@@ -134,12 +135,13 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dic
     return result
 
 
-def validate_evaluator_output(text: str, evaluator_type: str = "basic") -> tuple[bool, list[str]]:
+def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: str | None = None) -> tuple[bool, list[str]]:
     """Validate evaluator output structure and return (is_valid, issues).
     
     Args:
         text: Evaluator output text to validate
         evaluator_type: "basic" or "diffusion" to check appropriate structure
+        mode: Optional mode ("debate" or "implement") to validate mode-specific content
     
     Returns:
         Tuple of (is_valid, list_of_issues)
@@ -212,6 +214,19 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic") -> tuple
         if ten_text.lower() != "already perfect" and len(ten_text) < 10:
             issues.append("WHAT WOULD MAKE THIS 10/10: should provide concrete improvement")
     
+    # Mode-specific validation
+    if mode and mode in _MODE_HEADERS:
+        mode_header = _MODE_HEADERS[mode]
+        # Check for mode-appropriate content
+        if mode == "debate":
+            # Debate mode should mention text proposals or planning
+            if "text proposal" not in text.lower() and "planning round" not in text.lower():
+                issues.append("Debate mode output should mention 'text proposal' or 'planning round'")
+        elif mode == "implement":
+            # Implement mode should mention executed code or code state
+            if "executed code" not in text.lower() and "code state" not in text.lower():
+                issues.append("Implement mode output should mention 'executed code' or 'code state'")
+    
     is_valid = len(issues) == 0
     return is_valid, issues
 
@@ -243,22 +258,30 @@ def parse_score(
         non_code_parts = [parts[i] for i in range(0, len(parts), 2)]
         clean_text = "".join(non_code_parts)
     
-    # Try strict unanchored pattern first (captures all strict matches)
-    strict_unanchored = re.findall(r"SCORE:\s*(\d+(?:\.\d+)?)", clean_text)
-    if strict_unanchored:
-        raw = float(strict_unanchored[-1])
-        log.debug("parse_score: found strict SCORE: %.2f", raw)
+    # Three-tier extraction strategy
+    
+    # 1. Strict anchored pattern (anchored to line boundaries)
+    strict_anchored = _STRICT_RE.findall(clean_text)
+    if strict_anchored:
+        raw = float(strict_anchored[-1])
+        log.debug("parse_score: found strict anchored SCORE: %.2f", raw)
     else:
-        # Fall back to loose pattern
-        loose = re.findall(pattern, clean_text, re.IGNORECASE)
-        if not loose:
-            log.warning(
-                "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
-                clean_text,
-            )
-            return 0.0
-        raw = float(loose[-1])
-        log.debug("parse_score: found loose SCORE: %.2f", raw)
+        # 2. Strict unanchored pattern (not anchored)
+        strict_unanchored = _STRICT_UNANCHORED_RE.findall(clean_text)
+        if strict_unanchored:
+            raw = float(strict_unanchored[-1])
+            log.debug("parse_score: found strict unanchored SCORE: %.2f", raw)
+        else:
+            # 3. Loose fallback pattern
+            loose = re.findall(pattern, clean_text, re.IGNORECASE)
+            if not loose:
+                log.warning(
+                    "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
+                    clean_text,
+                )
+                return 0.0
+            raw = float(loose[-1])
+            log.debug("parse_score: found loose SCORE: %.2f", raw)
 
     clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
     if clamped != raw:
