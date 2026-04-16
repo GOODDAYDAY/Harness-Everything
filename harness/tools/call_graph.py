@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools._ast_utils import parse_module
+from harness.tools._ast_utils import parse_module, call_name, extract_callees
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000

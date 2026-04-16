@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools._ast_utils import build_parent_map, parse_module
+from harness.tools._ast_utils import build_parent_map, parse_module, innermost_function
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000
@@ -165,7 +165,7 @@ class DataFlowTool(Tool):
                     else None
                 )
                 if name == symbol:
-                    enclosing = _innermost_function(node, parents)
+                    enclosing = innermost_function(node, parents)
                     hits.append({
                         "file": str(fpath.relative_to(root)),
                         "line": node.lineno,
