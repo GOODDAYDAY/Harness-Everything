@@ -111,3 +111,18 @@
 - **Migrated** ~47 old-path imports to new subpackage paths
 - **Fixed** 3 circular import chains by simplifying `__init__.py` re-exports
 - **Cleaned** unused imports (`Any`, `HarnessConfig`, `ToolResult`) across 5 files
+
+---
+
+### Round N — Evaluator + Synthesis + Meta-Review Quality Pass
+
+- **Evaluator prompts** (`harness/prompts/dual_evaluator.py`): replaced vague calibration scale with concrete 5-point anchors (0/3/5/7/10) aligned to the falsifiable criterion's specificity requirement; added mandatory `WHAT WOULD MAKE THIS 10/10` field to both BASIC and DIFFUSION outputs, forcing actionable feedback; added explicit `SCORE: <N>` on its own line instruction to enforce parse_score reliability.
+- **parse_score hardening** (`harness/evaluation/dual_evaluator.py`): two-tier extraction — strict anchored `^SCORE: N$` pattern (last match) preferred over loose fallback, eliminating false positives from inline arithmetic lines; logs a warning when no score token is found.
+- **Phase-mode adaptation** (`harness/evaluation/dual_evaluator.py`, `harness/pipeline/phase_runner.py`): `DualEvaluator.evaluate()` now accepts a `mode` parameter (`"debate"` or `"implement"`); a mode header is prepended to every evaluator user message so the rubric adapts — debate scores plan quality, implement scores executed code state. `_evaluate_and_log()` forwards `phase.mode` automatically.
+- **Meta-review specificity** (`harness/prompts/meta_review.py`): every finding now requires a round number, file path, and function name; added `Score Trend Analysis` section requiring per-phase trend (IMPROVING/STAGNATING/DECLINING) with named evaluator evidence; prompt adjustment suggestions must cite a specific round finding.
+- **Synthesis improvements** (`harness/prompts/synthesis.py`): added `ANTI-REPETITION RULE` blocking verbatim best-round copying; added explicit instructions to identify the single best idea and the worst round's specific defect; added `Best Idea and Worst Round Analysis` output section; synthesis must be demonstrably more specific than any single round.
+
+### Round N+1 — LLM Call Quality: Short-Response Warning + Pruning Safety Audit
+
+- **Short-response detection** (`harness/core/llm.py`): added `_SHORT_RESPONSE_CHARS = 50` constant and a `log.warning()` in `LLM.call()` that fires whenever a non-tool-call response is shorter than 50 chars — the primary signal of truncated/failed generation that previously caused `parse_score()` to silently return 0.0 and corrupt evaluator scores.
+- **Pruning safety audit** (`harness/core/llm.py`): documented three invariants in `_prune_conversation_tool_outputs()` confirming the system prompt is structurally impossible to prune (it is a separate API parameter, never part of `messages`), plain-text initial user messages are excluded because the pruner only targets list-content `tool_result` blocks, and no messages are ever removed or reordered (preserving Anthropic's tool_use/tool_result ID pairing requirement).

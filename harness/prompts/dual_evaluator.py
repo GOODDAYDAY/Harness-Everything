@@ -8,14 +8,17 @@ ROLE: Evaluate correctness, completeness, and specificity. You are looking \
 for concrete defects — not stylistic preferences, not hypothetical risks, \
 not observations that do not affect the score.
 
-CALIBRATION — read these anchors before scoring anything:
-  10: Exceptional. Production-ready with zero nits. Extremely rare.
-  8-9: Strong. One minor, easily-fixed issue that does not affect correctness.
-  6-7: Acceptable. Works for the main case; at least one meaningful gap or \
-       risk that a reviewer would push back on.
-  4-5: Poor. A significant defect that requires rework before deployment.
-  2-3: Broken. Fundamental flaw; would not work or would cause a regression.
-  0-1: Completely wrong, empty, or entirely off-topic.
+CALIBRATION ANCHORS — read these before scoring anything:
+  0: Broken, dangerous, or entirely off-topic.
+  3: Works for a trivial case but points in the wrong direction; major \
+     requirement missed or fundamentally flawed approach.
+  5: Correct approach but generic — no specific file/function/class names \
+     cited from the source context; a developer would need to look up what \
+     to change.
+  7: Correct + specific + testable — names concrete code entities, covers \
+     the main requirement, would pass code review with minor comments.
+  10: Correct + specific + tested + measurable — every claim is backed by a \
+      named test, metric, or verification step; zero nits. Extremely rare.
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \
@@ -63,7 +66,10 @@ PRIOR ROUND DELTA — if a "Prior Best" is present in the context:
   repeats a known defect flagged in the prior best's TOP DEFECT loses 1 extra
   point on Correctness regardless of other qualities.
 
-OUTPUT — structure your response exactly as:
+OUTPUT — structure your response EXACTLY as shown below. \
+Each section must appear on its own line with no extra blank lines \
+between the label and its content:
+
 DELTA VS PRIOR BEST: <present only when a prior best exists; omit section
   entirely on round 1>
   Δ Correctness: IMPROVED/REGRESSED/UNCHANGED — <reason>
@@ -79,8 +85,13 @@ ANALYSIS:
   Penalties: <list each penalty applied, or "none">
   Weighted: (A×0.4)+(B×0.3)+(C×0.2)+(D×0.1)−penalties = <show arithmetic>
 
-TOP DEFECT: <the single most important issue to fix, stated as: \
-"FILE::function — problem description"; or "none" if score ≥ 9>
+TOP DEFECT: <the single most critical issue, stated as: \
+"FILE::function — problem description and what a correct fix looks like"; \
+or "none" if score ≥ 9>
+
+WHAT WOULD MAKE THIS 10/10: <one concrete sentence naming the exact change \
+— file, function, and behaviour — that would raise this to a perfect score; \
+or "already perfect" if score = 10>
 
 SCORE: <final value, rounded to one decimal place>
 """
@@ -93,15 +104,16 @@ ROLE: Assume the proposal is correctly implemented and runs without errors. \
 Your job is to assess consequences *beyond* the directly touched code — \
 caller impact, maintenance cost, emergent behaviour, rollback safety.
 
-CALIBRATION — read these anchors before scoring anything:
-  10: Exceptional. Negligible ripple, trivial to roll back, zero maintenance \
-      overhead. Extremely rare; requires explicit justification.
-  8-9: Good. Small, well-contained ripple with a clear mitigation path.
-  6-7: Moderate. Some callers impacted or a non-trivial maintenance cost; \
-       a reviewer would ask for a mitigation plan.
-  4-5: Concerning. Significant cascade effects or hard-to-revert consequences.
-  2-3: Dangerous. Breaks unrelated functionality or creates lasting technical debt.
-  0-1: Catastrophic. Irreversible or systemically destabilising.
+CALIBRATION ANCHORS — read these before scoring anything:
+  0: Catastrophic. Irreversible or systemically destabilising.
+  3: Dangerous. Breaks unrelated functionality or creates lasting technical \
+     debt with no mitigation path.
+  5: Concerning but manageable — significant cascade effects that require \
+     explicit mitigation; a reviewer would block this without a plan.
+  7: Moderate. Some callers or files affected; impact is bounded and a \
+     one-sentence mitigation addresses it adequately.
+  10: Negligible ripple. Trivial to roll back; zero maintenance overhead. \
+      Extremely rare; requires explicit justification.
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification. \
 A change that modifies a public API or shared data structure almost never \
@@ -147,7 +159,10 @@ PRIOR ROUND DELTA — if a "Prior Best" is present in the context:
   already identified as the KEY RISK in the prior best loses 1 extra point on
   Caller Impact — regression on a known risk is worse than a fresh risk.
 
-OUTPUT — structure your response exactly as:
+OUTPUT — structure your response EXACTLY as shown below. \
+Each section must appear on its own line with no extra blank lines \
+between the label and its content:
+
 DELTA VS PRIOR BEST: <present only when a prior best exists; omit section
   entirely on round 1>
   Δ Caller impact: IMPROVED/REGRESSED/UNCHANGED — <reason>
@@ -163,9 +178,13 @@ ANALYSIS:
   Penalties: <list each penalty applied, or "none">
   Weighted: (A×0.35)+(B×0.30)+(C×0.20)+(D×0.15)−penalties = <show arithmetic>
 
-KEY RISK: <the most significant second-order concern, stated as: \
-"scenario description → concrete mitigation step"; \
+KEY RISK: <the single most significant second-order concern, stated as: \
+"FILE::function — scenario description → concrete mitigation step"; \
 or "none" if score ≥ 9>
+
+WHAT WOULD MAKE THIS 10/10: <one concrete sentence naming the exact \
+architectural or systemic change that would eliminate the primary risk; \
+or "already perfect" if score = 10>
 
 SCORE: <final value, rounded to one decimal place>
 """

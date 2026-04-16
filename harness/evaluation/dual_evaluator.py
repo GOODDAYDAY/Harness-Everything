@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from typing import Literal
 
 from harness.core.llm import LLM
 from harness.pipeline.phase import DualScore, ScoreItem
@@ -20,27 +21,63 @@ log = logging.getLogger(__name__)
 _SCORE_MIN: float = 0.0
 _SCORE_MAX: float = 10.0
 
+# Strict pattern: "SCORE: N" on its own line (anchored).  Preferred over loose
+# because evaluators are instructed to place the authoritative score last on
+# its own line.  The loose fallback handles older/custom prompts that don't
+# follow the anchored format.
+_STRICT_RE = re.compile(r"^SCORE:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+_LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
-def parse_score(text: str, pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)") -> float:
+# Mode header injected into the evaluation user message so evaluators know
+# whether they are reviewing a text proposal or an implement-mode code change.
+_MODE_HEADERS: dict[str, str] = {
+    "debate": (
+        "## Evaluation Mode: DEBATE\n"
+        "You are reviewing a **text proposal** (plan / recommendation).\n"
+        "Evaluate the plan's specificity, completeness, and correctness of reasoning.\n"
+        "Do NOT penalise for lack of executed tool calls — this is a planning round.\n\n"
+    ),
+    "implement": (
+        "## Evaluation Mode: IMPLEMENT\n"
+        "You are reviewing an **executed code change** (implement round).\n"
+        "Evaluate the actual code state after execution: correctness of edits, "
+        "test results, and tool call success/failure, not the quality of the plan.\n"
+        "A proposal section may be present for context but the CODE STATE is "
+        "the authoritative subject.\n\n"
+    ),
+}
+
+
+def parse_score(
+    text: str,
+    pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)",
+) -> float:
     """Extract a numeric score from evaluator output and clamp it to [0, 10].
 
-    Returns 0.0 when the pattern is not found.  Logs a warning when the raw
-    value is outside the expected range so misconfigured score patterns and
-    hallucinated values are visible in the run log.
+    Extraction strategy (two-tier):
+    1. **Strict** — search for ``^SCORE: N$`` (anchored to line boundaries).
+       Takes the **last** strict match.  This reliably captures the
+       authoritative final score placed at the end of the output, ignoring
+       any inline arithmetic lines such as ``SCORE = (A×0.4)+… = 6.0``.
+    2. **Loose fallback** — if no strict match, apply the caller-supplied
+       ``pattern`` (default: ``SCORE[:\\s]+N``).  Takes the last match.
 
-    Uses ``re.findall`` and takes the **last** match rather than ``re.search``
-    (which returns the first).  Evaluator prompts instruct the LLM to show
-    their arithmetic inline (e.g. ``SCORE = (A×0.4)+… = 6.0``) *before*
-    writing the authoritative ``SCORE: 6.4`` at the end.  The first
-    ``SCORE:``-prefixed number is therefore often an intermediate value from
-    the weighted arithmetic, not the final verdict.  Taking the last match
-    reliably selects the declared final score regardless of how many
-    arithmetic lines precede it.
+    Returns 0.0 and logs a warning when no match is found.
+    Logs a warning when the extracted value is outside [0, 10].
     """
-    matches = re.findall(pattern, text, re.IGNORECASE)
-    if not matches:
-        return 0.0
-    raw = float(matches[-1])
+    strict = _STRICT_RE.findall(text)
+    if strict:
+        raw = float(strict[-1])
+    else:
+        loose = re.findall(pattern, text, re.IGNORECASE)
+        if not loose:
+            log.warning(
+                "parse_score: no score token found in evaluator output (len=%d)",
+                len(text),
+            )
+            return 0.0
+        raw = float(loose[-1])
+
     clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
     if clamped != raw:
         log.warning(
@@ -61,6 +98,7 @@ class DualEvaluator:
         subject: str,
         context: str,
         *,
+        mode: Literal["debate", "implement"] = "debate",
         basic_system: str = "",
         diffusion_system: str = "",
         score_pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)",
@@ -70,18 +108,28 @@ class DualEvaluator:
         Args:
             subject: What to evaluate (proposal text, code state, etc.).
             context: Source files, architecture constraints, etc.
-            basic_system: System prompt for the adversarial evaluator.
-            diffusion_system: System prompt for the second-order effects evaluator.
-            score_pattern: Regex to extract numeric score from evaluator output.
+            mode: ``"debate"`` for text proposals, ``"implement"`` for executed
+                code changes.  Selects the appropriate default system prompts
+                and prepends a mode header to the evaluation user message so
+                evaluators apply the correct rubric.
+            basic_system: Override system prompt for the basic evaluator.
+            diffusion_system: Override system prompt for the diffusion evaluator.
+            score_pattern: Regex to extract numeric score from evaluator output
+                (used as the loose fallback in parse_score).
         """
         basic_sys = basic_system or default_prompts.BASIC_SYSTEM
         diffusion_sys = diffusion_system or default_prompts.DIFFUSION_SYSTEM
+
+        # Prepend a mode header so evaluators adapt their rubric to whether
+        # they are reviewing a text proposal or an executed code change.
+        mode_header = _MODE_HEADERS.get(mode, _MODE_HEADERS["debate"])
 
         # Build user messages (identical structure, different system prompts)
         messages = [
             {
                 "role": "user",
                 "content": (
+                    f"{mode_header}"
                     f"## Subject to Evaluate\n\n{subject}\n\n"
                     f"## Source Context\n\n{context}"
                 ),
@@ -110,8 +158,8 @@ class DualEvaluator:
         diffusion_score = parse_score(diffusion_resp.text, score_pattern)
 
         log.info(
-            "DualEvaluator: basic=%.1f diffusion=%.1f combined=%.1f",
-            basic_score, diffusion_score, basic_score + diffusion_score,
+            "DualEvaluator[%s]: basic=%.1f diffusion=%.1f combined=%.1f",
+            mode, basic_score, diffusion_score, basic_score + diffusion_score,
         )
 
         return DualScore(
