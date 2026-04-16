@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import glob as glob_mod
 import py_compile
-import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
