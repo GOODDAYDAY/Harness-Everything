@@ -5,7 +5,6 @@ subtle path traversal issues.
 """
 
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -64,8 +63,8 @@ class TestUnicodePathSecurity:
         
         # Should fail with homoglyph validation error
         assert result.is_error
-        # Accept any error - could be "file not found", "path not allowed", or a homoglyph validation error
-        assert isinstance(result.error, str) and result.error
+        # Check that the error message contains "homoglyph" 
+        assert "homoglyph" in result.error.lower(), f"Expected 'homoglyph' in error message, got: {result.error}"
     
     def test_unicode_normalization_attack(self, tmp_path):
         """Test that Unicode normalization doesn't create path traversal opportunities.
@@ -76,18 +75,29 @@ class TestUnicodePathSecurity:
         """
         cfg = _make_config(str(tmp_path))
         
-        # Create a file with a Unicode character in its name
-        test_file = tmp_path / "café.txt"
+        # Create a file with a Unicode character in its name using NFC form
+        test_file = tmp_path / "café.txt"  # NFC form: U+00E9
         test_file.write_text("test content")
         
-        # Try to access with NFD representation (if system uses NFC)
-        # This is a real file, so it should work if the filesystem normalizes
+        # Try to access the file - should succeed since it's a valid file in workspace
         result = _execute_read_tool(cfg, str(test_file))
         
-        # The file exists, so reading should succeed
-        # This test documents the behavior rather than enforcing a specific outcome
-        # because filesystem normalization varies by OS
-        print(f"Unicode file read result: {result.error if result.is_error else 'success'}")
+        # The file exists and is within allowed workspace, so reading should succeed
+        assert not result.is_error, f"Failed to read valid Unicode file: {result.error}"
+        assert "test content" in result.output
+        
+        # Test with explicit NFD representation (e + combining acute accent)
+        # Note: This is a different string representation of the same visual character
+        nfd_filename = "cafe\u0301.txt"  # NFD form: U+0065 U+0301
+        nfd_file = tmp_path / nfd_filename
+        
+        # The NFD file doesn't exist (filesystem may normalize), so attempt should fail
+        result = _execute_read_tool(cfg, str(nfd_file))
+        
+        # Should fail because file doesn't exist (different filename)
+        assert result.is_error
+        # Error should indicate file not found or path issue
+        assert isinstance(result.error, str) and result.error
     
     def test_control_characters_in_path(self, tmp_path):
         """Test that control characters other than null byte are rejected."""
