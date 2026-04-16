@@ -67,10 +67,11 @@ class GrepSearchTool(Tool):
         context_lines: int = 0,
         limit: int = 100,
     ) -> ToolResult:
-        root = Path(path).resolve() if path else Path(config.workspace)
-        resolved = str(root)
-        if err := self._check_path(config, resolved):
+        raw = path if path else config.workspace
+        resolved, err = self._resolve_and_check(config, raw)
+        if err:
             return err
+        root = Path(resolved)
 
         flags = re.IGNORECASE if case_insensitive else 0
         try:

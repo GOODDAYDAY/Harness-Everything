@@ -1,0 +1,41 @@
+{
+  "generated_by": "harness.tools.generate_manifest",
+  "default_tools": [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "list_directory",
+    "create_directory",
+    "tree",
+    "glob_search",
+    "grep_search",
+    "bash",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "code_analysis",
+    "file_patch",
+    "test_runner",
+    "symbol_extractor",
+    "python_eval",
+    "find_replace",
+    "diff_files",
+    "cross_reference",
+    "semantic_search",
+    "data_flow",
+    "feature_search",
+    "call_graph",
+    "dependency_analyzer",
+    "json_transform",
+    "tool_discovery"
+  ],
+  "optional_tools": [
+    "web_search",
+    "http_request"
+  ],
+  "default_count": 30,
+  "optional_count": 2
+}

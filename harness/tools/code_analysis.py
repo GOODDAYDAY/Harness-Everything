@@ -334,8 +334,8 @@ class CodeAnalysisTool(Tool):
         format: str = "text",  # noqa: A002
         limit: int = 50,
     ) -> ToolResult:
-        resolved = str(Path(path).resolve())
-        if err := self._check_path(config, resolved):
+        resolved, err = self._resolve_and_check(config, path)
+        if err:
             return err
 
         p = Path(resolved)

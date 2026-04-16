@@ -47,10 +47,11 @@ class GlobSearchTool(Tool):
         path: str = "",
         limit: int = 200,
     ) -> ToolResult:
-        root = Path(path).resolve() if path else Path(config.workspace)
-        resolved = str(root)
-        if err := self._check_path(config, resolved):
+        raw = path if path else config.workspace
+        resolved, err = self._resolve_and_check(config, raw)
+        if err:
             return err
+        root = Path(resolved)
 
         matches = sorted(root.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
         matches = [m for m in matches if m.is_file()][:limit]
