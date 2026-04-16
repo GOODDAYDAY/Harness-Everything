@@ -1,4 +1,7 @@
 {
+  "//": "=== Self-Improving Pipeline Example ===",
+  "// doc": "Keys starting with '//' or '_' are treated as comments and ignored by the config parser.",
+
   "harness": {
     "model": "claude-sonnet-4-6",
     "max_tokens": 8096,
@@ -14,34 +17,80 @@
       "glob_search", "grep_search",
       "bash", "git_status", "git_diff"
     ],
-    "max_tool_turns": 30
+    "// extra_tools": "Optional tools not loaded by default. Add tool names from OPTIONAL_TOOLS here.",
+    "extra_tools": [],
+    "// bash_command_denylist": "Shell commands BashTool will refuse to execute (matched by first token).",
+    "bash_command_denylist": [],
+    "max_tool_turns": 30,
+    "// log_level": "DEBUG | INFO | WARNING | ERROR | CRITICAL",
+    "log_level": "INFO"
   },
+
+  "// --- Pipeline parameters ---": "",
   "outer_rounds": 10,
   "inner_rounds": 3,
+  "// patience": "Early stopping: stop if best score doesn't improve for N consecutive outer rounds. 0 = disabled.",
   "patience": 5,
   "evaluation_mode": "dual_isolated",
   "output_dir": "/path/to/output",
   "min_synthesis_chars": 150,
+  "// max_file_context_chars": "Total char budget for $file_context injection. Lower = less token cost, higher = more code visibility.",
   "max_file_context_chars": 50000,
+
+  "// --- Meta-Review: periodic cross-round analysis ---": "",
+  "// meta_review_interval": "Run meta-review every N outer rounds. 0 = disabled. Recommended: 3-5 for long runs.",
+  "meta_review_interval": 3,
+  "// meta_review_system": "Custom system prompt for the meta-reviewer. Empty = use built-in default.",
+  "meta_review_system": "",
+  "// meta_review_inject": "If true, meta-review findings are prepended to the next round's phase prompts.",
+  "meta_review_inject": true,
+
+  "// --- Auto-Push: periodically push commits to remote ---": "",
+  "// auto_push_interval": "Push every N outer rounds. 0 = disabled. Never force-pushes.",
+  "auto_push_interval": 5,
+  "auto_push_remote": "origin",
+  "// auto_push_branch": "Empty = push current branch.",
+  "auto_push_branch": "",
+
+  "// --- Rich Commits: include score/round metadata in commit messages ---": "",
+  "// rich_commit_metadata": "If true, commit messages include: harness: R{round} {phase} [score=X.X]",
+  "rich_commit_metadata": true,
+
+  "// --- Prompt Auto-Update: let meta-review rewrite phase prompts ---": "",
+  "// auto_update_prompts": "If true, meta-review suggestions are used to automatically adjust phase prompts. Safety: all $variable template vars must be preserved or the update is rejected.",
+  "auto_update_prompts": false,
+
+  "// --- Run Mode ---": "",
+  "// run_mode": "'automatic' = fully autonomous. 'manual' = pause at each meta-review for human input.",
+  "run_mode": "automatic",
+
   "dual_evaluator": {
     "basic_system": "You are an adversarial code reviewer for a Python framework.\n\nEvaluate proposals:\n1. Find the single most critical defect\n2. Verify changes follow existing patterns\n3. Check: no path security bypass, no arbitrary code execution\n4. QUALITY CHECK: Penalize -2 for dead code. Reward +1 for removing dead code.\n5. Score 0-10\n\nOutput: SCORE: <number>",
     "diffusion_system": "You are a second-order effects analyst.\n\nDo NOT evaluate correctness. Analyze ripple effects:\n- Does this change break other modes?\n- Does it increase context window consumption?\n- Does it make the framework harder to configure?\n- What happens when the LLM hallucinates tool names?\n- Does it affect checkpoint/resume reliability?\n\nScore 0-10.\nOutput: SCORE: <number>"
   },
+
   "phases": [
     {
+      "// phase 0": "Security audit — debate mode, runs every 3rd round",
       "name": "security_audit",
       "index": 0,
       "mode": "debate",
+      "// skip_cycle": "Run only every N outer rounds. E.g. 3 = run on rounds 0, 3, 6, 9...",
       "skip_cycle": 3,
       "inner_rounds": 3,
       "glob_patterns": [
         "src/**/*.py",
         "main.py"
       ],
+      "// tool_tags": "Limit tools to these categories. Valid: file_read, file_write, search, git, analysis, execution, network, testing. Empty = all tools.",
+      "tool_tags": ["file_read", "search", "git"],
+      "// min_proposal_chars": "Skip evaluation (saves 2 API calls) when proposal is shorter than this. 0 = always evaluate.",
+      "min_proposal_chars": 100,
       "system_prompt": "You are a security engineer reviewing a Python framework.\n\nSource code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nTask: Find the top 3 security issues. For each:\n1. Reference the specific file, function, and line\n2. Describe the attack vector\n3. Propose a concrete fix\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Each finding must reference a specific function name and file path. Findings without concrete code references lose 3 points."
     },
     {
+      "// phase 1": "Improvement design — debate mode, runs every 3rd round",
       "name": "improvement_design",
       "index": 1,
       "mode": "debate",
@@ -51,10 +100,13 @@
         "src/**/*.py",
         "main.py"
       ],
+      "tool_tags": ["file_read", "search", "analysis"],
+      "min_proposal_chars": 100,
       "system_prompt": "You are an architect reviewing a Python framework for improvements.\n\nSource code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nTask: Identify the top 3 improvements. For each:\n1. Reference specific files and classes\n2. Describe the improvement with implementation approach\n3. Explain why it increases capability\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Each improvement must reference specific existing classes or files. Vague suggestions lose 3 points."
     },
     {
+      "// phase 2": "Implementation — tool_use mode, runs every round, full toolset",
       "name": "implementation",
       "index": 2,
       "mode": "implement",
@@ -63,9 +115,15 @@
         "src/**/*.py",
         "main.py"
       ],
+      "// tool_tags (empty)": "Empty = all tools available. Implement phases typically need full access.",
+      "tool_tags": [],
+      "min_proposal_chars": 0,
       "system_prompt": "You are a developer implementing improvements for a Python framework.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nRules:\n- Follow existing patterns\n- Do NOT break existing APIs\n- One focused improvement per round\n- Before adding new code, remove unused imports and dead code\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Changes must fix a specific issue OR remove verified dead code. Cosmetic-only changes lose 3 points.",
       "syntax_check_patterns": ["src/**/*.py", "main.py"],
+      "// run_tests": "Run pytest after implementation. Requires pytest in the workspace.",
+      "run_tests": false,
+      "test_path": "tests/",
       "commit_on_success": true,
       "commit_repos": ["."]
     }
