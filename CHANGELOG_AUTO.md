@@ -720,3 +720,79 @@ attach a registry.
 - Net: +213
 
 ---
+
+## Round 8 · 2026-04-16 — HttpRequestTool Moved to OPTIONAL_TOOLS (Architecture Fix)
+
+### Files Modified
+
+| File | Status |
+|------|--------|
+| `harness/tools/__init__.py` | Modified — `HttpRequestTool` moved from `DEFAULT_TOOLS` to `OPTIONAL_TOOLS`; docstring updated |
+
+---
+
+### What Was Changed
+
+#### `harness/tools/__init__.py`
+
+- **`HttpRequestTool` moved from `DEFAULT_TOOLS` to `OPTIONAL_TOOLS`** — This
+  resolves the architecture violation identified in Round 2 evaluations: network-
+  capable tools must not be registered by default, following the exact pattern
+  already established for `WebSearchTool`. Placing `HttpRequestTool` in
+  `DEFAULT_TOOLS` silently enabled outbound HTTP in every agent invocation,
+  including air-gapped or restricted environments, and added unnecessary schema
+  weight (~1 KB) to every LLM call.
+
+- **Docstring updated** — Module-level docstring now lists both `web_search` and
+  `http_request` under "Current optional tools"; default tool count corrected
+  from 31 to 30; OPTIONAL_TOOLS section documents that opt-in is via
+  `extra_tools=["web_search", "http_request"]`.
+
+- **OPTIONAL_TOOLS comment block updated** — Rationale now explicitly states
+  "outbound network access" as the gating criterion (not just schema footprint).
+
+- **No new files created** — `http_client.py`, `json_transform.py`, and
+  `discovery.py` were already fully implemented and registered in prior round.
+
+### Structural Changes
+
+- `DEFAULT_TOOLS`: 31 → **30** tools (HttpRequestTool removed)
+- `OPTIONAL_TOOLS`: 1 → **2** tools (HttpRequestTool added alongside WebSearchTool)
+- `ALL_TOOLS`: unchanged at 32 (DEFAULT 30 + OPTIONAL 2)
+
+### Security / Architecture Improvement
+
+Moving `HttpRequestTool` to `OPTIONAL_TOOLS` means:
+1. Operators must explicitly opt in via `extra_tools=["http_request"]` in
+   `HarnessConfig` or `build_registry()` — identical to `WebSearchTool`.
+2. Default agent runs cannot make arbitrary outbound HTTP calls without
+   explicit configuration.
+3. The scheme validation (`http://` / `https://` only) and method allowlist
+   (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`) already in
+   `http_client.py` remain as additional SSRF mitigations when the tool is
+   opted in.
+
+### Tool ABC Compliance (all three tools verified)
+
+| Tool | `name` | `description` | `input_schema()` | `async execute()` | Registry bucket |
+|------|--------|---------------|-----------------|-------------------|-----------------|
+| `HttpRequestTool` | ✓ `"http_request"` | ✓ | ✓ | ✓ | `OPTIONAL_TOOLS` |
+| `JsonTransformTool` | ✓ `"json_transform"` | ✓ | ✓ | ✓ | `DEFAULT_TOOLS` |
+| `ToolDiscoveryTool` | ✓ `"tool_discovery"` | ✓ | ✓ | ✓ | `DEFAULT_TOOLS` |
+
+`discover_tools()` utility: `directory` parameter is Python-only (not LLM-
+accessible) — the ACE vector identified in prior rounds is absent from
+`ToolDiscoveryTool.execute()` and `input_schema()`.
+
+### Git Tag
+
+`v-structure-http-optional-auto`
+
+### Lines Added vs Removed
+
+- Lines added: 16 (docstring + OPTIONAL_TOOLS comment expansion)
+- Lines removed: 2 (`HttpRequestTool()` removed from DEFAULT_TOOLS list;
+  old single-line OPTIONAL_TOOLS rationale replaced by expanded block)
+- Net: +14
+
+---
