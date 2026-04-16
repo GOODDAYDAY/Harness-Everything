@@ -7,19 +7,13 @@ import json
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import build_parent_map
 from harness.tools.base import Tool, ToolResult
 
 
 def _parent_class(tree: ast.AST, target: ast.AST) -> str | None:
-    """Return the *direct* parent ClassDef name of `target`, or None.
-
-    Uses a parent-pointer map built in a single O(n) pass to avoid the
-    O(n²) repeated ast.walk-per-ClassDef approach.
-    """
-    parent_map: dict[int, ast.AST] = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            parent_map[id(child)] = node
+    """Return the *direct* parent ClassDef name of `target`, or None."""
+    parent_map = build_parent_map(tree)
     node: ast.AST | None = target
     while node is not None:
         p = parent_map.get(id(node))

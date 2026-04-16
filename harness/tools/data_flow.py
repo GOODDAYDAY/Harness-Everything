@@ -7,42 +7,22 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import build_parent_map, parse_module
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000
 
 
-# ---------------------------------------------------------------------------
-# AST helper: parent-pointer map
-# ---------------------------------------------------------------------------
-
-def _build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
-    """Return a child→parent mapping for every node in *tree*.
-
-    Fixes the prior best's enclosing-function detection bug: iterating
-    all nodes and matching by line range returns the *outermost* function
-    when functions are nested, the opposite of what is wanted. The
-    parent-pointer map correctly identifies the *innermost* enclosing scope
-    by walking up the parent chain. Pattern proven in
-    harness/tools/cross_reference.py's _parent_class() helper.
-    """
-    parents: dict[ast.AST, ast.AST] = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            parents[child] = node
-    return parents
-
-
 def _innermost_function(
     node: ast.AST,
-    parents: dict[ast.AST, ast.AST],
+    parents: dict[int, ast.AST],
 ) -> str | None:
     """Walk up parent pointers to find the nearest enclosing function name."""
-    current = parents.get(node)
+    current = parents.get(id(node))
     while current is not None:
         if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
             return current.name
-        current = parents.get(current)
+        current = parents.get(id(current))
     return None
 
 
@@ -111,10 +91,9 @@ class DataFlowTool(Tool):
         # Parse all files once
         parsed: dict[Path, ast.Module] = {}
         for f in py_files:
-            try:
-                parsed[f] = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
-            except SyntaxError:
-                pass
+            tree = parse_module(f)
+            if tree is not None:
+                parsed[f] = tree
 
         if mode == "reads":
             results = self._find_reads(symbol, parsed, search_root)
@@ -173,7 +152,7 @@ class DataFlowTool(Tool):
         """Find ast.Call nodes whose function name matches symbol."""
         hits: list[dict] = []
         for fpath, tree in parsed.items():
-            parents = _build_parent_map(tree)
+            parents = build_parent_map(tree)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue

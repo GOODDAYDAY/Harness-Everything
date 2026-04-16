@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import parse_module
 from harness.tools.base import Tool, ToolResult
 
 

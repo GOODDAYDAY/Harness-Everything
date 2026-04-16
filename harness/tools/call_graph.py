@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import parse_module
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000
@@ -114,10 +115,8 @@ def _build_index(
     defs_by_bare: dict[str, list[dict[str, Any]]] = {}
 
     for fpath in py_files:
-        try:
-            source = fpath.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source, filename=str(fpath))
-        except (SyntaxError, OSError):
+        tree = parse_module(fpath)
+        if tree is None:
             continue
 
         try:
@@ -151,10 +150,8 @@ def _build_index(
 
     # Second pass: register qualified names (ClassName.method)
     for fpath in py_files:
-        try:
-            source = fpath.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source, filename=str(fpath))
-        except (SyntaxError, OSError):
+        tree = parse_module(fpath)
+        if tree is None:
             continue
 
         try:
