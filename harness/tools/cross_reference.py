@@ -8,7 +8,6 @@ from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.tools._ast_utils import (
-    build_parent_map,
     parent_class,
     function_signature,
     call_name,
