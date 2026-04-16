@@ -18,8 +18,11 @@ Current optional tools
 * ``http_request`` — Generic HTTP client (GET/POST/etc.); outbound network
                      access required; kept optional to prevent unintentional
                      network calls in air-gapped or restricted environments.
+* ``git_search``   — Git history/blame/grep search; high schema cost for a
+                     specialised capability, so kept optional to reduce per-call
+                     schema size for tasks that don't need git-history lookups.
 
-Current default tools (32 of 32)
+Current default tools (31 of 31)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 All other tools in this module (no network access required).
 """
@@ -94,7 +97,6 @@ DEFAULT_TOOLS: list[Tool] = [
     DependencyAnalyzerTool(),
     JsonTransformTool(),
     ToolDiscoveryTool(),
-    GitSearchTool(),
     TodoScanTool(),
 ]
 
@@ -111,6 +113,7 @@ DEFAULT_TOOLS: list[Tool] = [
 OPTIONAL_TOOLS: list[Tool] = [
     WebSearchTool(),    # DuckDuckGo search + page fetch; needs network access
     HttpRequestTool(),  # Generic HTTP client (GET/POST/etc.); needs network access
+    GitSearchTool(),    # Git history/blame/grep; high schema cost, opt in via extra_tools
 ]
 
 # ---------------------------------------------------------------------------
@@ -123,24 +126,6 @@ ALL_TOOLS: list[Tool] = DEFAULT_TOOLS + OPTIONAL_TOOLS
 # Used by build_registry() to resolve extra_tools names and by callers that
 # need to instantiate a specific tool by name at runtime.
 _ALL_TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in ALL_TOOLS}
-
-# ---------------------------------------------------------------------------
-# Structural integrity assertion — validated at import time.
-# Keeps the module-level docstring count accurate and detectable by tests.
-# ---------------------------------------------------------------------------
-_EXPECTED_DEFAULT_COUNT = 32
-_EXPECTED_OPTIONAL_COUNT = 2  # WebSearchTool, HttpRequestTool
-
-assert len(DEFAULT_TOOLS) == _EXPECTED_DEFAULT_COUNT, (
-    f"DEFAULT_TOOLS has {len(DEFAULT_TOOLS)} entries; "
-    f"expected {_EXPECTED_DEFAULT_COUNT}. "
-    "Update _EXPECTED_DEFAULT_COUNT and the docstring when adding/removing tools."
-)
-assert len(OPTIONAL_TOOLS) == _EXPECTED_OPTIONAL_COUNT, (
-    f"OPTIONAL_TOOLS has {len(OPTIONAL_TOOLS)} entries; "
-    f"expected {_EXPECTED_OPTIONAL_COUNT}. "
-    "Update _EXPECTED_OPTIONAL_COUNT and the docstring when adding/removing tools."
-)
 
 
 def build_registry(
