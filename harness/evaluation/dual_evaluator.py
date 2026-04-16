@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from harness.core.llm import LLM
 from harness.pipeline.phase import DualScore, ScoreItem
-from harness.prompts import evaluator as default_prompts
+from harness.prompts import dual_evaluator as default_prompts
 
 log = logging.getLogger(__name__)
 

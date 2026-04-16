@@ -871,7 +871,7 @@ class PipelineLoop:
             "elapsed_total_s": round(total_elapsed, 2),
             "start_time": datetime.datetime.fromtimestamp(self.start_time, datetime.timezone.utc).isoformat(),
             "end_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "total_phases_run": self.total_phases_run if hasattr(self, 'total_phases_run') else 0,
+            "total_phases_run": self.total_phases_run,
             "shutdown_reason": self.shutdown_reason,
             "meta_review_count": self.meta_review_count,
             "auto_push_count": self.auto_push_count,
