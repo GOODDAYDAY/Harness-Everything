@@ -376,3 +376,56 @@ dependency_analyzer(mode="imports", include_stdlib=True, module_filter="harness.
 - Net: +313
 
 ---
+
+## Round 3 · 2025 — MetricsCollector Dataclass Field Ordering Fix
+
+### Files Modified
+
+| File | Status |
+|------|--------|
+| `harness/metrics.py` | Modified — `_phase_details` field moved before method definitions |
+
+---
+
+### What Was Changed
+
+#### `harness/metrics.py`
+
+- **Fixed dataclass field ordering anti-pattern**: `_phase_details: list[InnerRoundMetrics]`
+  was declared *after* method definitions inside `MetricsCollector`. Python
+  dataclasses require all field annotations to appear at the top of the class
+  body, before any `def` statements, to be recognised by `@dataclass`.
+  Moved `_phase_details = field(default_factory=list)` to line 44, immediately
+  after `error_count`, grouping all four fields (`output_path`, `_phases`,
+  `error_count`, `_phase_details`) at the top of the class.
+
+- **No functional logic was changed**: `tool_turn_counts = [len(r.tool_call_log) for r in inner_rounds]`
+  was already correct (using `len(r.tool_call_log)` not a broken `getattr` chain).
+  `total_tool_turns` property and `flush()` integration with `self.total_tool_turns`
+  were already present. `record_phase()` and `flush()` were already called from
+  `pipeline_loop.py`. `elapsed_s` on `ToolResult` was already retained.
+
+### Usage Example
+
+```python
+from pathlib import Path
+from harness.metrics import MetricsCollector, InnerRoundMetrics
+
+mc = MetricsCollector(output_path=Path("/tmp/metrics.json"))
+# _phase_details is now always initialized (not guarded by hasattr)
+assert mc._phase_details == []
+detail = InnerRoundMetrics(
+    phase="implement", round_index=0, tool_calls=5,
+    verdict="pass", feedback_snippet="All tests pass"
+)
+mc.record_phase_detail(detail)
+mc.flush_detail("/tmp/detail.jsonl")
+```
+
+### Lines Added vs Removed
+
+- Lines added: 1 (field declaration moved into proper position)
+- Lines removed: 1 (field declaration removed from after-method position)
+- Net: 0 (pure reorganization; no new logic)
+
+---
