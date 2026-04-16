@@ -247,6 +247,9 @@ class PipelineLoop:
             len(all_round_results), best_round_score, total_elapsed, self.artifacts.run_dir,
         )
 
+        # --- Priority 5: Auto-tag when best_score > 7.0 ---
+        await self._maybe_auto_tag(best_round_score, len(all_round_results))
+
         return PipelineResult(
             success=True,
             rounds_completed=len(all_round_results),
@@ -465,5 +468,68 @@ class PipelineLoop:
             )
         except Exception as exc:
             log.warning("_write_run_summary: failed to write summary.json: %s", exc)
+
+    async def _maybe_auto_tag(self, best_score: float, rounds_completed: int) -> None:
+        """Create an annotated git tag when best_score > 7.0 (Priority 5).
+
+        Tag format: ``v-auto-score{score:.1f}-r{rounds}``
+        Example:    ``v-auto-score8.3-r5``
+
+        Only tags when:
+        - best_score > 7.0
+        - the workspace is inside a git repository
+        - the tag does not already exist (avoids duplicate-tag errors)
+
+        Failures are logged as warnings and never propagate — tagging is a
+        best-effort observability feature and must not abort the pipeline.
+        """
+        _AUTO_TAG_THRESHOLD = 7.0
+        if best_score <= _AUTO_TAG_THRESHOLD:
+            log.info(
+                "auto_tag: skipped (best_score=%.1f ≤ %.1f threshold)",
+                best_score, _AUTO_TAG_THRESHOLD,
+            )
+            return
+
+        import asyncio as _asyncio
+
+        tag_name = f"v-auto-score{best_score:.1f}-r{rounds_completed}"
+        tag_msg = (
+            f"Auto-tag: pipeline run completed with best_score={best_score:.1f} "
+            f"in {rounds_completed} round(s)"
+        )
+        workspace = self.config.harness.workspace
+
+        async def _run_git(args: list[str]) -> tuple[int, str]:
+            try:
+                proc = await _asyncio.create_subprocess_exec(
+                    "git", *args,
+                    cwd=workspace,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=15)
+                return proc.returncode, (stdout + stderr).decode(errors="replace").strip()
+            except Exception as exc:
+                return -1, str(exc)
+
+        # Check if tag already exists to avoid duplicate-tag errors
+        rc, out = await _run_git(["tag", "-l", tag_name])
+        if rc == 0 and out.strip() == tag_name:
+            log.info("auto_tag: tag %r already exists — skipping", tag_name)
+            return
+
+        # Create annotated tag
+        rc, out = await _run_git(["tag", "-a", tag_name, "-m", tag_msg])
+        if rc == 0:
+            log.info(
+                "auto_tag: created tag %r (best_score=%.1f rounds=%d)",
+                tag_name, best_score, rounds_completed,
+            )
+        else:
+            log.warning(
+                "auto_tag: failed to create tag %r — rc=%d output=%r",
+                tag_name, rc, out,
+            )
 
 
