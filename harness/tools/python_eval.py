@@ -52,7 +52,7 @@ import sys
 import textwrap
 from typing import Any
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -186,7 +186,7 @@ class PythonEvalTool(Tool):
 
     * Check a function's return type or value::
 
-        # snippet: "from harness.config import HarnessConfig; HarnessConfig()"
+        # snippet: "from harness.core.config import HarnessConfig; HarnessConfig()"
 
     * Run a quick unit-level assertion without full pytest overhead::
 

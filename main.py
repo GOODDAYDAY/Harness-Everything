@@ -13,9 +13,9 @@ import logging
 import sys
 from pathlib import Path
 
-from harness.config import HarnessConfig, PipelineConfig
+from harness.core.config import HarnessConfig, PipelineConfig
 from harness.loop import HarnessLoop
-from harness.pipeline import PipelineLoop
+from harness.pipeline.pipeline_loop import PipelineLoop
 
 
 def setup_logging(level: str = "INFO") -> None:

@@ -8,10 +8,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from harness.config import HarnessConfig
-from harness.evaluator import Evaluator, Verdict
+from harness.core.config import HarnessConfig
+from harness.evaluation.evaluator import Evaluator, Verdict
 from harness.executor import ExecutionResult, Executor
-from harness.llm import LLM
+from harness.core.llm import LLM
 from harness.planner import Planner
 from harness.project_context import ProjectContextBuilder
 from harness.tools import build_registry

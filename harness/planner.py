@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import re
 
-from harness.config import HarnessConfig
-from harness.llm import LLM
+from harness.core.config import HarnessConfig
+from harness.core.llm import LLM
 from harness.three_way import ThreeWayResolver
 from harness.prompts import planner as default_prompts
 

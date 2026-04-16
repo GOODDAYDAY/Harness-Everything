@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from harness.llm import LLM
+from harness.core.llm import LLM
 
 log = logging.getLogger(__name__)
 
