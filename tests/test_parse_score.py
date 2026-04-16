@@ -68,8 +68,9 @@ def test_parse_score():
     
     # Test multiple scores (should take last strict)
     text = """SCORE: 5.0
-    Some intermediate calculation: SCORE: 3.0
-    Final verdict: SCORE: 7.0"""
+Some intermediate calculation: SCORE: 3.0
+Final verdict: 
+SCORE: 7.0"""
     result = parse_score(text)
     assert result == 7.0, f"Expected 7.0, got {result}"
     print("✓ Multiple scores handled correctly")
