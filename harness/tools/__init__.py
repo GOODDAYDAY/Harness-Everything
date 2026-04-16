@@ -53,7 +53,7 @@ from harness.tools.call_graph import CallGraphTool
 from harness.tools.dependency_analyzer import DependencyAnalyzerTool
 from harness.tools.http_client import HttpRequestTool
 from harness.tools.json_transform import JsonTransformTool
-from harness.tools.discovery import ToolDiscoveryTool, discover_tools
+from harness.tools.discovery import ToolDiscoveryTool
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +119,24 @@ ALL_TOOLS: list[Tool] = DEFAULT_TOOLS + OPTIONAL_TOOLS
 # Used by build_registry() to resolve extra_tools names and by callers that
 # need to instantiate a specific tool by name at runtime.
 _ALL_TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in ALL_TOOLS}
+
+# ---------------------------------------------------------------------------
+# Structural integrity assertion — validated at import time.
+# Keeps the module-level docstring count accurate and detectable by tests.
+# ---------------------------------------------------------------------------
+_EXPECTED_DEFAULT_COUNT = 30
+_EXPECTED_OPTIONAL_COUNT = 2  # WebSearchTool, HttpRequestTool
+
+assert len(DEFAULT_TOOLS) == _EXPECTED_DEFAULT_COUNT, (
+    f"DEFAULT_TOOLS has {len(DEFAULT_TOOLS)} entries; "
+    f"expected {_EXPECTED_DEFAULT_COUNT}. "
+    "Update _EXPECTED_DEFAULT_COUNT and the docstring when adding/removing tools."
+)
+assert len(OPTIONAL_TOOLS) == _EXPECTED_OPTIONAL_COUNT, (
+    f"OPTIONAL_TOOLS has {len(OPTIONAL_TOOLS)} entries; "
+    f"expected {_EXPECTED_OPTIONAL_COUNT}. "
+    "Update _EXPECTED_OPTIONAL_COUNT and the docstring when adding/removing tools."
+)
 
 
 def build_registry(
