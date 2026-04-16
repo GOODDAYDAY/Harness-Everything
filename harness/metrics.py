@@ -40,6 +40,12 @@ class PhaseMetrics:
 class MetricsCollector:
     output_path: Path
     _phases: list[PhaseMetrics] = field(default_factory=list)
+    error_count: int = 0
+
+    @property
+    def total_tool_turns(self) -> int:
+        """Sum of tool turns across all recorded phases."""
+        return sum(p.total_tool_turns for p in self._phases)
 
     def record_phase(self, phase_name: str, result: PhaseResult) -> None:
         """Extract statistics from a PhaseResult and append to internal list."""
@@ -53,13 +59,11 @@ class MetricsCollector:
         )
         best = inner_rounds[best_idx]
 
-        # tool_turns is accessed via InnerResult.exec_result when present;
-        # falls back to 0 if the attribute is not available (debate-mode rounds
-        # do not produce an ExecutionResult).
-        tool_turn_counts = [
-            getattr(getattr(r, "exec_result", None), "tool_turns", 0)
-            for r in inner_rounds
-        ]
+        # tool_call_log is populated for implement-mode rounds (list of
+        # {"tool": ..., "success": ...} dicts).  Debate-mode rounds leave it
+        # empty, so len() == 0 is the correct fallback — no attribute access
+        # gymnastics needed.
+        tool_turn_counts = [len(r.tool_call_log) for r in inner_rounds]
 
         pm = PhaseMetrics(
             phase_name=phase_name,
@@ -85,7 +89,7 @@ class MetricsCollector:
             "phases": [asdict(p) for p in self._phases],
             "totals": {
                 "phases_completed": len(self._phases),
-                "total_tool_turns": sum(p.total_tool_turns for p in self._phases),
+                "total_tool_turns": self.total_tool_turns,
             },
         }
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,21 +105,24 @@ class MetricsCollector:
                 os.unlink(tmp)
             raise
 
+    _phase_details: list[InnerRoundMetrics] = field(default_factory=list)
+
     def record_phase_detail(self, detail: InnerRoundMetrics) -> None:
-        """Record per-inner-round metrics for post-run analysis."""
-        if not hasattr(self, "_phase_details"):
-            self._phase_details: list[InnerRoundMetrics] = []
+        """Record per-inner-round metrics for post-run analysis.
+
+        Increments error_count when the detail verdict is 'error'.
+        """
         self._phase_details.append(detail)
+        if detail.verdict == "error":
+            self.error_count += 1
 
     def flush_detail(self, path: str) -> None:
         """Write accumulated InnerRoundMetrics to *path* as newline-delimited JSON.
 
-        Silently no-ops if record_phase_detail() was never called, so
-        callers that skip instrumentation do not raise AttributeError.
+        Silently no-ops when no details have been recorded.
         """
-        details = getattr(self, "_phase_details", [])
-        if not details:
+        if not self._phase_details:
             return
         with open(path, "w", encoding="utf-8") as fh:
-            for d in details:
+            for d in self._phase_details:
                 fh.write(json.dumps(asdict(d)) + "\n")
