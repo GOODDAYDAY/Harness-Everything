@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import ast
-import json
-from pathlib import Path
 from typing import Any
 
 from harness.config import HarnessConfig
@@ -19,7 +17,7 @@ class SemanticSearchTool(Tool):
         "scoring. No external ML dependency. Useful for finding code relevant "
         "to a concept when you do not know the exact symbol name."
     )
-    requires_path_check = False  # manual allowed_paths enforcement in execute()
+    requires_path_check = False  # manual allowed_paths enforcement via _check_dir_root
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -55,19 +53,9 @@ class SemanticSearchTool(Tool):
         root: str = "",
         top_k: int = 20,
     ) -> ToolResult:
-        # Path security — enforce against allowed_paths
-        search_root = Path(root).resolve() if root else Path(config.workspace).resolve()
-        allowed = [Path(p).resolve() for p in config.allowed_paths]
-        if not any(
-            search_root == a or search_root.is_relative_to(a) for a in allowed
-        ):
-            return ToolResult(
-                error=(
-                    f"PERMISSION ERROR: root {str(search_root)!r} is outside "
-                    f"allowed_paths {config.allowed_paths}"
-                ),
-                is_error=True,
-            )
+        search_root, allowed, err = self._check_dir_root(config, root)
+        if err:
+            return err
 
         # Clamp top_k to valid range
         top_k = max(1, min(100, top_k))
@@ -75,7 +63,7 @@ class SemanticSearchTool(Tool):
         # Split concept into lowercase tokens for scoring
         concept_tokens = [t.lower() for t in concept.split() if t]
 
-        py_files = sorted(search_root.rglob("*.py"))[:500]
+        py_files = self._rglob_safe(search_root, "*.py", allowed)
 
         # Collect (score, identifier, file, line) tuples
         hits: list[tuple[int, str, str, int]] = []
@@ -116,12 +104,10 @@ class SemanticSearchTool(Tool):
             for score, name, rel, lineno in hits[:top_k]
         ]
 
-        output = json.dumps(
-            {
-                "concept": concept,
-                "results": results,
-                "files_scanned": len(py_files),
-                "total_hits": len(hits),
-            }
-        )
-        return ToolResult(output=output)
+        results_dict = {
+            "concept": concept,
+            "results": results,
+            "files_scanned": len(py_files),
+            "total_hits": len(hits),
+        }
+        return ToolResult(output=self._safe_json(results_dict, max_bytes=24_000))

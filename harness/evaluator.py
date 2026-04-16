@@ -391,19 +391,3 @@ def _extract_executor_status(summary_text: str) -> str:
                 return value
     return ""
 
-
-def build_evaluator(
-    llm: LLM,
-    config: HarnessConfig,
-    mode: str = "three_way",
-) -> Evaluator:
-    """Factory: return the appropriate evaluator based on mode.
-
-    Args:
-        mode: ``"three_way"`` for ThreeWayResolver-based evaluation (default),
-              ``"dual_isolated"`` for DualEvaluator (import separately).
-    """
-    if mode == "dual_isolated":
-        from harness.dual_evaluator import DualEvaluator
-        return DualEvaluator(llm)  # type: ignore[return-value]
-    return Evaluator(llm, config)
