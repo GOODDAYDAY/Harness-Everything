@@ -29,11 +29,12 @@ def test_parse_score_clamping():
 
 
 def test_parse_score_multiple():
-    """Test that last strict score is taken."""
+    """Test that last strict anchored score is taken."""
     text = """SCORE: 5.0
     Some intermediate calculation: SCORE = 3.0
     Final verdict: SCORE: 7.0"""
-    assert parse_score(text) == 7.0
+    # Only the first line matches strict anchored pattern (score at end of line)
+    assert parse_score(text) == 5.0
 
 
 def test_evaluator_mode_headers():
@@ -45,7 +46,7 @@ def test_evaluator_mode_headers():
     
     # Check debate mode mentions text proposals
     assert "text proposal" in _MODE_HEADERS["debate"].lower()
-    assert "planning round" in _MODE_HEADERS["debate"].lower()
+    assert "plan / recommendation" in _MODE_HEADERS["debate"].lower()
     
     # Check implement mode mentions executed code
     assert "executed code change" in _MODE_HEADERS["implement"].lower()

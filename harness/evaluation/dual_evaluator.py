@@ -25,7 +25,7 @@ _SCORE_MAX: float = 10.0
 # because evaluators are instructed to place the authoritative score last on
 # its own line.  The loose fallback handles older/custom prompts that don't
 # follow the anchored format.
-_STRICT_RE = re.compile(r"^SCORE:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+_STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
 _STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 _LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 

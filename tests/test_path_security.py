@@ -12,6 +12,7 @@ import pytest
 
 from harness.core.config import HarnessConfig
 from harness.tools.file_read import ReadFileTool
+from harness.tools.file_write import WriteFileTool
 
 
 def _make_config(workspace: str) -> HarnessConfig:
@@ -34,6 +35,12 @@ def _execute_read_tool(config: HarnessConfig, path: str):
     """Execute ReadFileTool with given config and path, returning result."""
     tool = ReadFileTool()
     return _run(tool.execute(config, path=path))
+
+
+def _execute_write_tool(config: HarnessConfig, path: str, content: str = "test"):
+    """Execute WriteFileTool with given config and path, returning result."""
+    tool = WriteFileTool()
+    return _run(tool.execute(config, path=path, content=content))
 
 
 class TestUnicodePathSecurity:
