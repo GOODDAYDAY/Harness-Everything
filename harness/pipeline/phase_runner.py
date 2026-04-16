@@ -13,11 +13,11 @@ from typing import Any
 
 from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
-from harness.config import HarnessConfig, PipelineConfig
+from harness.core.config import HarnessConfig, PipelineConfig
 from harness.evaluation.dual_evaluator import DualEvaluator
 from harness.executor import executor_system_with_workspace
 from harness.hooks import build_hooks
-from harness.llm import LLM
+from harness.core.llm import LLM
 from harness.pipeline.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
 from harness.prompts import synthesis as synth_prompts
 from harness.tools.registry import ToolRegistry

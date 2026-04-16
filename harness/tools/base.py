@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class Tool(ABC):
 
         Returns the pre-resolved allowed list as the second element so
         callers never re-derive it (eliminates the asymmetry present in
-        the inline copies in cross_reference.py and semantic_search.py).
+        the inline copies in cross_reference.py and feature_search.py).
 
         Guards:
         - Null-byte rejection before any Path operation.

@@ -11,8 +11,8 @@ import logging
 import re
 from typing import Any
 
-from harness.llm import LLM
-from harness.phase import DualScore, ScoreItem
+from harness.core.llm import LLM
+from harness.pipeline.phase import DualScore, ScoreItem
 from harness.prompts import dual_evaluator as default_prompts
 
 log = logging.getLogger(__name__)

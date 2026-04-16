@@ -36,7 +36,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 
 log = logging.getLogger(__name__)
 

@@ -34,7 +34,7 @@ import json as _json
 import re
 from typing import Any
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_CHARS = 24_000

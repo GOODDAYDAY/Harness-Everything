@@ -73,7 +73,7 @@ harness/
     code_analysis.py       # AST-based analysis
     symbol_extractor.py    # Python symbol extraction
     cross_reference.py     # Import graph / xref
-    semantic_search.py     # Keyword-based semantic search
+    _ast_utils.py          # (reserved for shared AST helpers)
     find_replace.py        # Multi-file find/replace
     diff_files.py          # File differ
     test_runner.py         # Pytest integration

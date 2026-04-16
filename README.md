@@ -75,7 +75,7 @@ Pipeline Mode:
 
 **File ops**: `read_file`, `write_file`, `edit_file`, `delete_file`, `move_file`, `copy_file`, `file_patch`
 **Directory**: `list_directory`, `create_directory`, `tree`
-**Search**: `glob_search`, `grep_search`, `cross_reference`, `semantic_search`
+**Search**: `glob_search`, `grep_search`, `cross_reference`
 **Git**: `git_status`, `git_diff`, `git_log`
 **Execution**: `bash`, `python_eval`, `test_runner`
 **Analysis**: `code_analysis`, `symbol_extractor`, `find_replace`, `diff_files`

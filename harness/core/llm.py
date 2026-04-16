@@ -13,7 +13,7 @@ from typing import Any
 import anthropic
 from anthropic._exceptions import OverloadedError
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 from harness.tools.base import ToolResult
 from harness.tools.registry import ToolRegistry
 

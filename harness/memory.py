@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from harness.artifacts import ArtifactStore
-    from harness.phase import PhaseResult
+    from harness.pipeline.phase import PhaseResult
 
 log = logging.getLogger(__name__)
 

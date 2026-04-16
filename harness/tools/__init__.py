@@ -22,7 +22,7 @@ Current optional tools
                      specialised capability, so kept optional to reduce per-call
                      schema size for tasks that don't need git-history lookups.
 
-Current default tools (31 of 31)
+Current default tools (30 of 30)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 All other tools in this module (no network access required).
 """
@@ -49,7 +49,6 @@ from harness.tools.python_eval import PythonEvalTool
 from harness.tools.find_replace import FindReplaceTool
 from harness.tools.diff_files import DiffFilesTool
 from harness.tools.cross_reference import CrossReferenceTool
-from harness.tools.semantic_search import SemanticSearchTool
 from harness.tools.data_flow import DataFlowTool
 from harness.tools.feature_search import FeatureSearchTool
 from harness.tools.call_graph import CallGraphTool
@@ -90,7 +89,6 @@ DEFAULT_TOOLS: list[Tool] = [
     FindReplaceTool(),
     DiffFilesTool(),
     CrossReferenceTool(),
-    SemanticSearchTool(),
     DataFlowTool(),
     FeatureSearchTool(),
     CallGraphTool(),

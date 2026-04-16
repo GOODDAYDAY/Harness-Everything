@@ -68,7 +68,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
 
 # ---------------------------------------------------------------------------
