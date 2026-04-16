@@ -587,3 +587,47 @@ class TestParseScore:
         from harness.evaluation.dual_evaluator import parse_score
         text = "SCORE: 3\nSome analysis...\nSCORE: 9\n"
         assert parse_score(text) == 9.0
+
+
+class TestASTUtils:
+    """Tests for AST utility functions consolidated in _ast_utils.py."""
+    
+    def test_parent_class_nested(self):
+        """Test parent_class function with nested class inheritance."""
+        import ast
+        from harness.tools._ast_utils import parent_class, build_parent_map
+        
+        # Create AST for: class Outer: class Inner: pass
+        source = """
+class Outer:
+    class Inner:
+        pass
+"""
+        tree = ast.parse(source)
+        
+        # Find the Inner class node
+        inner_class = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "Inner":
+                inner_class = node
+                break
+        
+        assert inner_class is not None, "Inner class not found in AST"
+        
+        # Get parent map
+        parent_map = build_parent_map(tree)
+        
+        # Test parent_class function
+        result = parent_class(tree, inner_class)
+        assert result == "Outer", f"Expected 'Outer', got {result}"
+        
+        # Also test that parent_class returns None for top-level class
+        outer_class = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "Outer":
+                outer_class = node
+                break
+        
+        assert outer_class is not None, "Outer class not found in AST"
+        result = parent_class(tree, outer_class)
+        assert result is None, f"Expected None for top-level class, got {result}"
