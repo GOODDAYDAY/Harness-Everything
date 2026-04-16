@@ -383,6 +383,11 @@ class PipelineConfig:
     auto_tag_prefix: str = "v-auto"     # tag name prefix (legacy: "v-auto")
     auto_tag_push: bool = False         # whether to git push the tag after creating it
     auto_tag_min_score: float = 7.0     # minimum best_score to create a tag (legacy: 7.0)
+    auto_tag_at_end: bool = False       # force a tag at end of pipeline run regardless of
+                                        # interval / score / patience early stop. Use this
+                                        # for self-improvement loops where the next chunk
+                                        # is triggered by tag push: every chunk MUST emit
+                                        # a tag or the loop dies.
 
     # Rich commit metadata
     rich_commit_metadata: bool = False  # include score/round/phase in commit messages
