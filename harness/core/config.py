@@ -274,6 +274,8 @@ allowed_tools=all log_level=INFO
         import dataclasses
 
         data = dict(data)  # don't mutate caller's dict
+        # Strip JSON "comment" keys (// or _ prefix) before validation.
+        data = {k: v for k, v in data.items() if not k.startswith("//") and not k.startswith("_")}
         planner_data = data.pop("planner", {})
         evaluator_data = data.pop("evaluator", {})
 
@@ -516,6 +518,8 @@ class PipelineConfig:
         import dataclasses
 
         data = dict(data)
+        # Strip JSON "comment" keys (// or _ prefix) before validation.
+        data = {k: v for k, v in data.items() if not k.startswith("//") and not k.startswith("_")}
         harness_data = data.pop("harness", {})
         dual_data = data.pop("dual_evaluator", {})
 
@@ -554,6 +558,10 @@ class PipelineConfig:
                     raise ValueError(
                         f"PipelineConfig.phases[{i}] must be a dict, got {type(phase_raw).__name__}"
                     )
+                # Strip comment keys from phase dicts too
+                phase_raw = {k: v for k, v in phase_raw.items()
+                             if not k.startswith("//") and not k.startswith("_")}
+                phases_raw[i] = phase_raw
                 unknown_phase = set(phase_raw) - known_phase
                 if unknown_phase:
                     raise ValueError(
