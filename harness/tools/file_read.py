@@ -37,6 +37,39 @@ class ReadFileTool(Tool):
             "required": ["path"],
         }
 
+    def _validate_path_contains_no_homoglyphs(self, path: str) -> str | None:
+        """Check if path contains Unicode homoglyphs that could bypass security.
+        
+        Homoglyphs are characters that look like ASCII but are different code points.
+        For example, CYRILLIC SMALL LETTER A (U+0430) looks like ASCII 'a' (U+0061).
+        
+        Args:
+            path: The path string to validate
+            
+        Returns:
+            Error message if homoglyph found, None if path is clean
+        """
+        # Start with a minimal, high-risk character set
+        # These are visual spoofs of ASCII path delimiters or common letters
+        homoglyphs = {
+            '\u0430': 'Cyrillic small a (looks like ASCII a)',
+            '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
+            '\u0500': 'Cyrillic capital komi s (looks like ASCII O)',
+            '\u01C3': 'Latin letter retroflex click (looks like ASCII !)',
+            '\u0391': 'Greek capital alpha (looks like ASCII A)',
+            '\u03B1': 'Greek small alpha (looks like ASCII a)',
+            '\u041E': 'Cyrillic capital O (looks like ASCII O)',
+            '\u043E': 'Cyrillic small o (looks like ASCII o)',
+            '\u0555': 'Armenian comma (looks like ASCII comma)',
+            '\u058A': 'Armenian hyphen (looks like ASCII hyphen)',
+        }
+        
+        for char, description in homoglyphs.items():
+            if char in path:
+                return f"Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
+        
+        return None
+
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
     ) -> ToolResult:
@@ -52,6 +85,10 @@ class ReadFileTool(Tool):
                 error=f"offset and limit must be integers, got offset={offset!r} limit={limit!r}: {exc}",
                 is_error=True,
             )
+
+        # Validate path doesn't contain Unicode homoglyphs
+        if error_msg := self._validate_path_contains_no_homoglyphs(path):
+            return ToolResult(error=error_msg, is_error=True)
 
         resolved, err = self._resolve_and_check(config, path)
         if err:

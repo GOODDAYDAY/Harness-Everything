@@ -33,30 +33,30 @@ def _run(coro):
 class TestUnicodePathSecurity:
     """Tests for Unicode-based path traversal attacks."""
     
+    def _execute_read_tool(self, cfg, path):
+        """Helper to execute ReadFileTool with given config and path."""
+        tool = ReadFileTool()
+        return _run(tool.execute(cfg, path=path))
+    
     def test_unicode_homoglyph_not_allowed(self, tmp_path):
         """Test that visually similar Unicode characters don't bypass path checks.
         
         Some Unicode characters look like ASCII but are different code points.
         For example, CYRILLIC SMALL LETTER A (U+0430) looks like ASCII 'a' (U+0061).
         """
-        from harness.tools.file_read import ReadFileTool
-        
         cfg = _make_config(str(tmp_path))
-        tool = ReadFileTool()
         
         # Create a legitimate file
         legit_file = tmp_path / "test.txt"
         legit_file.write_text("legitimate content")
         
         # Try to access with Cyrillic 'a' (U+0430) instead of ASCII 'a' (U+0061)
-        # This should fail because the path doesn't exist
         cyrillic_path = str(tmp_path).replace('a', '\u0430') + "/test.txt"
-        result = _run(tool.execute(cfg, path=cyrillic_path))
+        result = self._execute_read_tool(cfg, cyrillic_path)
         
-        # The path doesn't exist, so we expect an error
+        # Should fail with homoglyph validation error
         assert result.is_error
-        # It should either be "file not found" or "path not allowed"
-        assert "not found" in result.error.lower() or "not allowed" in result.error.lower()
+        assert "disallowed Unicode homoglyph" in result.error
     
     def test_unicode_normalization_attack(self, tmp_path):
         """Test that Unicode normalization doesn't create path traversal opportunities.
@@ -65,10 +65,7 @@ class TestUnicodePathSecurity:
         For example, 'é' can be represented as U+00E9 (single character) or
         as U+0065 U+0301 (e + combining acute accent).
         """
-        from harness.tools.file_read import ReadFileTool
-        
         cfg = _make_config(str(tmp_path))
-        tool = ReadFileTool()
         
         # Create a file with a Unicode character in its name
         test_file = tmp_path / "café.txt"
@@ -76,7 +73,7 @@ class TestUnicodePathSecurity:
         
         # Try to access with NFD representation (if system uses NFC)
         # This is a real file, so it should work if the filesystem normalizes
-        result = _run(tool.execute(cfg, path=str(test_file)))
+        result = self._execute_read_tool(cfg, str(test_file))
         
         # The file exists, so reading should succeed
         # This test documents the behavior rather than enforcing a specific outcome
@@ -85,10 +82,7 @@ class TestUnicodePathSecurity:
     
     def test_control_characters_in_path(self, tmp_path):
         """Test that control characters other than null byte are rejected."""
-        from harness.tools.file_read import ReadFileTool
-        
         cfg = _make_config(str(tmp_path))
-        tool = ReadFileTool()
         
         # Test various control characters
         control_chars = [
@@ -111,7 +105,7 @@ class TestUnicodePathSecurity:
         
         for char in control_chars:
             path = f"test{char}file.txt"
-            result = _run(tool.execute(cfg, path=path))
+            result = self._execute_read_tool(cfg, path)
             
             # Most control characters should cause errors
             # Tab (\x09) might be allowed on some filesystems
@@ -124,24 +118,21 @@ class TestUnicodePathSecurity:
     
     def test_whitespace_traversal(self, tmp_path):
         """Test that trailing/leading whitespace doesn't bypass checks."""
-        from harness.tools.file_read import ReadFileTool
-        
         cfg = _make_config(str(tmp_path))
-        tool = ReadFileTool()
         
         # Create a legitimate file
         legit_file = tmp_path / "test.txt"
         legit_file.write_text("legitimate content")
         
         # Try with trailing spaces (might be trimmed by some systems)
-        result = _run(tool.execute(cfg, path=str(legit_file) + "   "))
+        result = self._execute_read_tool(cfg, str(legit_file) + "   ")
         
         # File with trailing spaces doesn't exist
         assert result.is_error
         assert "not found" in result.error.lower()
         
         # Try with leading spaces
-        result = _run(tool.execute(cfg, path="   " + str(legit_file)))
+        result = self._execute_read_tool(cfg, "   " + str(legit_file))
         
         # File with leading spaces doesn't exist
         assert result.is_error
@@ -151,12 +142,14 @@ class TestUnicodePathSecurity:
 class TestPathCanonicalization:
     """Tests for path canonicalization edge cases."""
     
+    def _execute_read_tool(self, cfg, path):
+        """Helper to execute ReadFileTool with given config and path."""
+        tool = ReadFileTool()
+        return _run(tool.execute(cfg, path=path))
+    
     def test_double_dot_resolution(self, tmp_path):
         """Test that multiple ../ segments are properly resolved."""
-        from harness.tools.file_read import ReadFileTool
-        
         cfg = _make_config(str(tmp_path))
-        tool = ReadFileTool()
         
         # Create a subdirectory structure
         subdir = tmp_path / "subdir"
@@ -167,7 +160,7 @@ class TestPathCanonicalization:
         # Try to access with excessive .. segments
         # From subdir, go up and back down
         path = str(subdir / ".." / "subdir" / "target.txt")
-        result = _run(tool.execute(cfg, path=path))
+        result = self._execute_read_tool(cfg, path)
         
         # Should succeed - this is a valid relative path
         assert not result.is_error
@@ -175,7 +168,7 @@ class TestPathCanonicalization:
         
         # Try with more .. than needed
         path = str(subdir / ".." / ".." / ".." / str(tmp_path.name) / "subdir" / "target.txt")
-        result = _run(tool.execute(cfg, path=path))
+        result = self._execute_read_tool(cfg, path)
         
         # This should fail because it tries to escape the workspace
         assert result.is_error
@@ -183,24 +176,21 @@ class TestPathCanonicalization:
     
     def test_current_directory_references(self, tmp_path):
         """Test that ./ and multiple ./ segments are handled correctly."""
-        from harness.tools.file_read import ReadFileTool
-        
         cfg = _make_config(str(tmp_path))
-        tool = ReadFileTool()
         
         # Create a file
         test_file = tmp_path / "test.txt"
         test_file.write_text("test content")
         
         # Access with ./ prefix
-        result = _run(tool.execute(cfg, path="./test.txt"))
+        result = self._execute_read_tool(cfg, "./test.txt")
         
         # Should succeed
         assert not result.is_error
         assert "test content" in result.output
         
         # Access with multiple ./ segments
-        result = _run(tool.execute(cfg, path="./././test.txt"))
+        result = self._execute_read_tool(cfg, "./././test.txt")
         
         # Should still succeed
         assert not result.is_error
