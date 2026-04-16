@@ -122,15 +122,20 @@ def call_name(node: ast.Call) -> str | None:
     Returns:
     - "func_name" for ast.Name nodes
     - "obj.method_name" for ast.Attribute nodes where value is a Name
+    - "b.method_name" for nested attributes like a.b.method_name (keep last two)
     - "method_name" for other ast.Attribute nodes
     - None for other call types
     """
     if isinstance(node.func, ast.Name):
         return node.func.id
     if isinstance(node.func, ast.Attribute):
+        attr = node.func.attr
         if isinstance(node.func.value, ast.Name):
-            return f"{node.func.value.id}.{node.func.attr}"
-        return node.func.attr
+            return f"{node.func.value.id}.{attr}"
+        # Nested attribute like a.b.c → keep b.c for readability
+        if isinstance(node.func.value, ast.Attribute):
+            return f"{node.func.value.attr}.{attr}"
+        return attr
     return None
 
 

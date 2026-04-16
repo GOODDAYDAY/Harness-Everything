@@ -13,19 +13,6 @@ from harness.tools.base import Tool, ToolResult
 _MAX_OUTPUT_BYTES = 24_000
 
 
-def _innermost_function(
-    node: ast.AST,
-    parents: dict[int, ast.AST],
-) -> str | None:
-    """Walk up parent pointers to find the nearest enclosing function name."""
-    current = parents.get(id(node))
-    while current is not None:
-        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return current.name
-        current = parents.get(id(current))
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Tool
 # ---------------------------------------------------------------------------

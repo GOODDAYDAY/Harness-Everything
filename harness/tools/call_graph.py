@@ -41,54 +41,6 @@ _MAX_DEPTH = 5
 
 
 # ---------------------------------------------------------------------------
-# AST helpers
-# ---------------------------------------------------------------------------
-
-def _callee_name(call_node: ast.Call) -> str | None:
-    """Extract a human-readable callee name from a Call node.
-
-    Handles:
-    * ``foo()``            → ``"foo"``
-    * ``obj.foo()``        → ``"obj.foo"``
-    * ``a.b.foo()``        → ``"b.foo"``  (attribute chain; keep last two)
-    * ``foo()()``          → ``None``     (dynamic; skip)
-    """
-    func = call_node.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        attr = func.attr
-        if isinstance(func.value, ast.Name):
-            return f"{func.value.id}.{attr}"
-        # Nested attribute like a.b.c → keep b.c for readability
-        if isinstance(func.value, ast.Attribute):
-            return f"{func.value.attr}.{attr}"
-        return attr
-    return None
-
-
-def _extract_function_calls(
-    fn_node: ast.FunctionDef | ast.AsyncFunctionDef,
-    cap: int = 50,
-) -> list[str]:
-    """Return unique callee names from the body of a function node.
-
-    Capped at *cap* entries to bound per-node output size.
-    """
-    seen: set[str] = set()
-    result: list[str] = []
-    for node in ast.walk(fn_node):
-        if isinstance(node, ast.Call):
-            name = _callee_name(node)
-            if name and name not in seen:
-                seen.add(name)
-                result.append(name)
-                if len(result) >= cap:
-                    break
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Index builder
 # ---------------------------------------------------------------------------
 
@@ -130,7 +82,7 @@ def _build_index(
                 continue
 
             bare_name = node.name
-            calls = _extract_function_calls(node)
+            calls = extract_callees(node)
             rec = {"file": rel, "line": node.lineno, "calls": calls}
 
             # Register bare name (first definition wins for qualname index)
@@ -166,7 +118,7 @@ def _build_index(
                 if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     qualname = f"{cls_node.name}.{item.name}"
                     if qualname not in defs_by_qualname:
-                        calls = _extract_function_calls(item)
+                        calls = extract_callees(item)
                         defs_by_qualname[qualname] = {
                             "file": rel,
                             "line": item.lineno,
