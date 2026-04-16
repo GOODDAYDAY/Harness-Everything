@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ class ToolResult:
     output: str = ""
     error: str = ""
     is_error: bool = False
+    elapsed_s: float = 0.0
 
     def to_api(self) -> dict[str, Any]:
         """Format as a tool_result content block for the Claude API."""
@@ -103,10 +105,12 @@ class Tool(ABC):
                 error=f"PERMISSION ERROR: root contains null byte: {root!r}",
                 is_error=True,
             )
-        search_root = (
-            Path(root).resolve() if root else Path(config.workspace).resolve()
-        )
-        allowed = [Path(p).resolve() for p in config.allowed_paths]
+        # Use os.path.realpath (calls realpath(3)) for symlink resolution —
+        # consistent with HarnessConfig.is_path_allowed() and immune to the
+        # Path.resolve() differences on Python < 3.6 edge cases.
+        raw_root = root if root else config.workspace
+        search_root = Path(os.path.realpath(raw_root))
+        allowed = [Path(os.path.realpath(p)) for p in config.allowed_paths]
         if not any(
             search_root == a or search_root.is_relative_to(a) for a in allowed
         ):
