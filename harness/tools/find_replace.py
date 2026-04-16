@@ -287,14 +287,11 @@ class FindReplaceTool(Tool):
         # ------------------------------------------------------------------ #
         # 2. Resolve root directory
         # ------------------------------------------------------------------ #
-        if path:
-            root = (Path(config.workspace) / path).resolve()
-        else:
-            root = Path(config.workspace).resolve()
-
-        root_str = str(root)
-        if err := self._check_path(config, root_str):
+        raw_root = str(Path(config.workspace) / path) if path else config.workspace
+        root_str, err = self._resolve_and_check(config, raw_root)
+        if err:
             return err
+        root = Path(root_str)
 
         if not root.is_dir():
             return ToolResult(

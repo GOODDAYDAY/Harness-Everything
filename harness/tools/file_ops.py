@@ -25,8 +25,8 @@ class DeleteFileTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        resolved = str(Path(path).resolve())
-        if err := self._check_path(config, resolved):
+        resolved, err = self._resolve_and_check(config, path)
+        if err:
             return err
         p = Path(resolved)
         if not p.exists():
@@ -53,11 +53,11 @@ class MoveFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        src = str(Path(source).resolve())
-        dst = str(Path(destination).resolve())
-        if err := self._check_path(config, src):
+        src, err = self._resolve_and_check(config, source)
+        if err:
             return err
-        if err := self._check_path(config, dst):
+        dst, err = self._resolve_and_check(config, destination)
+        if err:
             return err
         if not Path(src).exists():
             return ToolResult(error=f"Source not found: {src}", is_error=True)
@@ -84,11 +84,11 @@ class CopyFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        src = str(Path(source).resolve())
-        dst = str(Path(destination).resolve())
-        if err := self._check_path(config, src):
+        src, err = self._resolve_and_check(config, source)
+        if err:
             return err
-        if err := self._check_path(config, dst):
+        dst, err = self._resolve_and_check(config, destination)
+        if err:
             return err
         if not Path(src).is_file():
             return ToolResult(error=f"Source not found: {src}", is_error=True)

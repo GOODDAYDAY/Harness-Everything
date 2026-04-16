@@ -82,6 +82,41 @@ class Tool(ABC):
             )
         return None
 
+    def _resolve_and_check(
+        self, config: HarnessConfig, path: str
+    ) -> tuple[str, ToolResult | None]:
+        """Null-byte check → resolve → allowed-paths check in one call.
+
+        Replaces the scattered ``resolved = str(Path(path).resolve())`` +
+        ``self._check_path(config, resolved)`` pattern in every file tool.
+        Performing the null-byte check *before* ``Path(path)`` is constructed
+        closes a subtle gap: CPython raises ``ValueError`` on a null byte inside
+        ``Path()``, which surfaces as an opaque TOOL ERROR from the registry
+        rather than the expected PERMISSION ERROR.
+
+        Returns:
+            (resolved_path, None) on success.
+            ("", error_ToolResult) on any failure.
+        """
+        if "\x00" in path:
+            return "", ToolResult(
+                error=f"PERMISSION ERROR: path contains null byte: {path!r}",
+                is_error=True,
+            )
+        try:
+            resolved = str(Path(os.path.realpath(path)))
+        except (ValueError, OSError) as exc:
+            return "", ToolResult(
+                error=f"PERMISSION ERROR: invalid path {path!r}: {exc}",
+                is_error=True,
+            )
+        if not config.is_path_allowed(resolved):
+            return "", ToolResult(
+                error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
+                is_error=True,
+            )
+        return resolved, None
+
     def _check_dir_root(
         self,
         config: HarnessConfig,
