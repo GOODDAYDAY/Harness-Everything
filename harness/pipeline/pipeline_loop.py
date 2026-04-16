@@ -18,6 +18,7 @@ from harness.core.llm import LLM
 from harness.memory import MemoryStore
 from harness.metrics import MetricsCollector
 from harness.pipeline.phase import PhaseConfig, PhaseResult
+from harness.prompts.meta_review import META_REVIEW_SYSTEM, META_REVIEW_USER
 from harness.pipeline.phase_runner import PhaseRunner
 from harness.tools import build_registry
 
@@ -89,6 +90,8 @@ class PipelineLoop:
 
         # Graceful shutdown
         self._shutdown_requested: bool = False
+        # Meta-review context injected into subsequent rounds
+        self._meta_review_context: str = ""
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -143,6 +146,267 @@ class PipelineLoop:
             log.info("Shutdown state written to shutdown_state.json")
         except Exception as exc:
             log.warning("Failed to write shutdown_state.json: %s", exc)
+
+    # ---- meta-review ----
+
+    async def _run_meta_review(
+        self,
+        outer: int,
+        score_history: list[dict],
+        all_round_results: list[list[PhaseResult]],
+    ) -> str:
+        """Run a meta-review across recent rounds and return the review text."""
+        # Resume check
+        if self.checkpoint.is_meta_review_done(outer):
+            cached = self.artifacts.read(f"round_{outer + 1}", "meta_review.md") or ""
+            log.info("Meta-review for round %d already done (resumed)", outer + 1)
+            return cached
+
+        interval = self.config.meta_review_interval
+        start_round = max(0, len(all_round_results) - interval)
+
+        # Collect evaluator critiques from recent rounds
+        critiques_parts: list[str] = []
+        for ri in range(start_round, len(all_round_results)):
+            for pr in all_round_results[ri]:
+                for ir in pr.inner_results:
+                    ds = getattr(ir, "dual_score", None)
+                    if ds is None:
+                        continue
+                    basic = getattr(ds, "basic", None)
+                    diffusion = getattr(ds, "diffusion", None)
+                    crit = ""
+                    if basic and hasattr(basic, "critique"):
+                        crit += f"Basic: {basic.critique}\n"
+                    if diffusion and hasattr(diffusion, "critique"):
+                        crit += f"Diffusion: {diffusion.critique}\n"
+                    if crit:
+                        critiques_parts.append(
+                            f"Round {ri + 1} / {pr.phase.label} / inner {ir.inner_index + 1}:\n{crit}"
+                        )
+
+        # Score trend
+        recent_scores = score_history[start_round:]
+        score_trend = "\n".join(
+            f"Round {s['round']}: {s['score']}" for s in recent_scores
+        ) or "(no scores yet)"
+
+        # Git delta (hash-based incremental review)
+        git_delta = await self._get_git_delta()
+
+        # Memory context
+        memory_ctx = self.memory.format_context(None, max_entries=20)
+
+        # Render prompt
+        from string import Template
+        user_prompt = Template(META_REVIEW_USER).safe_substitute(
+            start_round=start_round + 1,
+            end_round=outer + 1,
+            score_trend=score_trend,
+            git_delta=git_delta or "(no git changes or not a git repo)",
+            critiques="\n\n".join(critiques_parts[-20:]) or "(no critiques collected)",
+            memory_context=memory_ctx or "(no memory entries)",
+        )
+
+        system = self.config.meta_review_system or META_REVIEW_SYSTEM
+
+        log.info("Running meta-review for rounds %d–%d…", start_round + 1, outer + 1)
+        response = await self.llm.call(
+            messages=[{"role": "user", "content": user_prompt}],
+            system=system,
+        )
+
+        # Write artifact and checkpoint
+        self.artifacts.write(response, f"round_{outer + 1}", "meta_review.md")
+        self.checkpoint.mark_meta_review_done(outer)
+
+        # Update review hash
+        current_hash = await self._get_head_hash()
+        if current_hash:
+            self.checkpoint.write_last_review_hash(current_hash)
+
+        log.info("Meta-review complete (%d chars)", len(response))
+        return response
+
+    async def _get_git_delta(self) -> str:
+        """Get git changes since last meta-review hash."""
+        last_hash = self.checkpoint.read_last_review_hash()
+        if not last_hash:
+            return ""
+        rc, log_out = await self._run_git(["log", f"{last_hash}..HEAD", "--oneline", "-20"])
+        if rc != 0:
+            return ""
+        rc, stat_out = await self._run_git(["diff", f"{last_hash}..HEAD", "--stat"])
+        parts = []
+        if log_out.strip():
+            parts.append(f"Commits:\n{log_out.strip()}")
+        if stat_out.strip():
+            parts.append(f"Files changed:\n{stat_out.strip()}")
+        return "\n\n".join(parts)
+
+    async def _get_head_hash(self) -> str:
+        """Get current HEAD commit hash, or '' if not a git repo."""
+        rc, out = await self._run_git(["rev-parse", "HEAD"])
+        return out.strip() if rc == 0 else ""
+
+    async def _run_git(self, args: list[str]) -> tuple[int, str]:
+        """Run a git command in the workspace. Returns (returncode, output)."""
+        workspace = self.config.harness.workspace
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                "git", *args,
+                cwd=workspace,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=15)
+            return proc.returncode, (stdout + stderr).decode(errors="replace").strip()
+        except Exception as exc:
+            return -1, str(exc)
+
+    # ---- auto-push ----
+
+    async def _maybe_auto_push(self, outer: int) -> None:
+        """Push to remote every N rounds if configured."""
+        if self.config.auto_push_interval <= 0:
+            return
+        if (outer + 1) % self.config.auto_push_interval != 0:
+            return
+
+        branch = self.config.auto_push_branch
+        if not branch:
+            rc, out = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+            if rc != 0:
+                log.warning("auto_push: could not determine current branch: %s", out)
+                return
+            branch = out.strip()
+
+        remote = self.config.auto_push_remote
+        rc, out = await self._run_git(["push", remote, branch])
+        if rc == 0:
+            log.info("auto_push: pushed to %s/%s", remote, branch)
+        else:
+            log.warning("auto_push: push failed — rc=%d output=%r", rc, out)
+
+    # ---- manual mode pause ----
+
+    async def _manual_review_pause(self, meta_review_text: str) -> str:
+        """Pause for human input after meta-review. Returns human feedback."""
+        import sys
+
+        print("\n" + "=" * 60)
+        print("META-REVIEW COMPLETE — Manual mode pause")
+        print("=" * 60)
+        print(meta_review_text[:3000])
+        if len(meta_review_text) > 3000:
+            print(f"\n… [{len(meta_review_text) - 3000} chars truncated]")
+        print("=" * 60)
+        print("Enter feedback (empty line to continue, 'quit' to stop):")
+
+        loop = _asyncio.get_running_loop()
+        lines: list[str] = []
+        while True:
+            line = await loop.run_in_executor(None, sys.stdin.readline)
+            line = line.rstrip("\n")
+            if line == "":
+                break
+            if line.lower() == "quit":
+                self._shutdown_requested = True
+                break
+            lines.append(line)
+
+        feedback = "\n".join(lines)
+        if feedback:
+            self.artifacts.write(
+                feedback,
+                f"round_{self._current_outer + 1}",
+                "human_feedback.txt",
+            )
+        return feedback
+
+    # ---- prompt auto-update ----
+
+    async def _auto_update_prompts(
+        self,
+        meta_review_text: str,
+        phases: list[PhaseConfig],
+        outer: int,
+    ) -> list[PhaseConfig]:
+        """Use LLM to rewrite phase prompts based on meta-review suggestions."""
+        from string import Template
+        import copy
+
+        updated: list[PhaseConfig] = []
+        version = (outer + 1) // max(self.config.meta_review_interval, 1)
+
+        for phase in phases:
+            if not phase.system_prompt:
+                updated.append(phase)
+                continue
+
+            prompt = (
+                f"You are rewriting a pipeline phase prompt based on meta-review feedback.\n\n"
+                f"## Current Prompt\n```\n{phase.system_prompt[:4000]}\n```\n\n"
+                f"## Meta-Review Suggestions\n{meta_review_text[:3000]}\n\n"
+                f"Rewrite the prompt to address the suggestions. "
+                f"CRITICAL: preserve ALL template variables ($file_context, $prior_best, "
+                f"$syntax_errors, $falsifiable_criterion, etc.) exactly as they appear. "
+                f"Output ONLY the new prompt text, nothing else."
+            )
+            try:
+                new_prompt = await self.llm.call(
+                    messages=[{"role": "user", "content": prompt}],
+                    system="You rewrite prompts. Output only the new prompt.",
+                )
+            except Exception as exc:
+                log.warning(
+                    "auto_update_prompts: failed for phase %s: %s", phase.label, exc
+                )
+                updated.append(phase)
+                continue
+
+            # Validate: all $variables from original must be in new
+            import re as _re
+            orig_vars = set(_re.findall(r"\$\w+", phase.system_prompt))
+            new_vars = set(_re.findall(r"\$\w+", new_prompt))
+            missing = orig_vars - new_vars
+            if missing:
+                log.warning(
+                    "auto_update_prompts: phase %s — new prompt missing variables %s, "
+                    "keeping original",
+                    phase.label, missing,
+                )
+                updated.append(phase)
+                continue
+
+            # Write version history
+            self.artifacts.write(
+                new_prompt,
+                f"round_{outer + 1}",
+                "prompt_versions",
+                f"{phase.label}_v{version}.txt",
+            )
+
+            new_phase = copy.copy(phase)
+            object.__setattr__(new_phase, "system_prompt", new_prompt)
+            updated.append(new_phase)
+            log.info(
+                "auto_update_prompts: updated phase %s prompt (v%d, %d→%d chars)",
+                phase.label, version, len(phase.system_prompt), len(new_prompt),
+            )
+
+        # Write history log (append to JSONL)
+        history_entry = json.dumps({
+            "round": outer + 1,
+            "version": version,
+            "phases_updated": [
+                p.label for p, orig in zip(updated, phases)
+                if p.system_prompt != orig.system_prompt
+            ],
+        })
+        existing = self.artifacts.read("prompt_history.jsonl") or ""
+        self.artifacts.write(existing + history_entry + "\n", "prompt_history.jsonl")
+        return updated
 
     async def run(self) -> PipelineResult:
         """Execute all outer rounds with resume + early stopping."""
@@ -240,6 +504,35 @@ class PipelineLoop:
                     _tcl = getattr(_ir, "tool_call_log", None) or []
                     _total_tool_calls += len(_tcl)
                     _total_tool_errors += sum(1 for t in _tcl if not t.get("success", True))
+
+            # --- Meta-review: periodic cross-round analysis ---
+            self._current_outer = outer  # expose to _manual_review_pause
+            if (
+                self.config.meta_review_interval > 0
+                and (outer + 1) % self.config.meta_review_interval == 0
+                and outer + 1 < self.config.outer_rounds  # skip on last round
+            ):
+                meta_text = await self._run_meta_review(
+                    outer, score_history, all_round_results,
+                )
+                if self.config.run_mode == "manual" and meta_text:
+                    feedback = await self._manual_review_pause(meta_text)
+                    if feedback:
+                        self._meta_review_context = (
+                            meta_text[:2000]
+                            + "\n\n## Human Feedback\n\n" + feedback[:1000]
+                        )
+                    elif self.config.meta_review_inject:
+                        self._meta_review_context = meta_text[:3000]
+                elif self.config.meta_review_inject and meta_text:
+                    self._meta_review_context = meta_text[:3000]
+
+                # Auto-update prompts based on meta-review
+                if self.config.auto_update_prompts and meta_text:
+                    phases = await self._auto_update_prompts(meta_text, phases, outer)
+
+            # --- Auto-push ---
+            await self._maybe_auto_push(outer)
 
             # Early stopping — always update best_round_score, but only count
             # non-improvement from round 2 onwards.  Round 1 (outer == 0)
@@ -372,14 +665,21 @@ class PipelineLoop:
 
             phase_start = time.monotonic()
             try:
-                # Inject memory context from prior rounds into the carry-forward
+                # Inject memory + meta-review context into the carry-forward
                 # text so the LLM can build on accumulated learnings.
                 memory_ctx = self.memory.format_context(phase.label, max_entries=8)
                 phase_prior = prior_best
+                if self._meta_review_context:
+                    phase_prior = (
+                        "## Meta-Review Findings\n\n"
+                        + self._meta_review_context
+                        + "\n\n"
+                        + (phase_prior or "")
+                    )
                 if memory_ctx:
                     phase_prior = (
                         memory_ctx
-                        + ("\n\n" + prior_best if prior_best else "")
+                        + ("\n\n" + phase_prior if phase_prior else "")
                     )
 
                 phase_result = await self.runner.run_phase(outer, phase, phase_prior)
@@ -572,29 +872,15 @@ class PipelineLoop:
             f"Auto-tag: pipeline run completed with best_score={best_score:.1f} "
             f"in {rounds_completed} round(s)"
         )
-        workspace = self.config.harness.workspace
-
-        async def _run_git(args: list[str]) -> tuple[int, str]:
-            try:
-                proc = await _asyncio.create_subprocess_exec(
-                    "git", *args,
-                    cwd=workspace,
-                    stdout=_asyncio.subprocess.PIPE,
-                    stderr=_asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=15)
-                return proc.returncode, (stdout + stderr).decode(errors="replace").strip()
-            except Exception as exc:
-                return -1, str(exc)
 
         # Check if tag already exists to avoid duplicate-tag errors
-        rc, out = await _run_git(["tag", "-l", tag_name])
+        rc, out = await self._run_git(["tag", "-l", tag_name])
         if rc == 0 and out.strip() == tag_name:
             log.info("auto_tag: tag %r already exists — skipping", tag_name)
             return
 
         # Create annotated tag
-        rc, out = await _run_git(["tag", "-a", tag_name, "-m", tag_msg])
+        rc, out = await self._run_git(["tag", "-a", tag_name, "-m", tag_msg])
         if rc == 0:
             log.info(
                 "auto_tag: created tag %r (best_score=%.1f rounds=%d)",
