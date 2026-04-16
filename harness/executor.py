@@ -6,8 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from harness.config import HarnessConfig
-from harness.llm import LLM
+from harness.core.config import HarnessConfig
+from harness.core.llm import LLM
 from harness.tools.registry import ToolRegistry
 
 log = logging.getLogger(__name__)

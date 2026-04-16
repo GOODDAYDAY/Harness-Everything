@@ -505,7 +505,7 @@ class PipelineConfig:
         phases_raw: list[Any] = data.get("phases", [])
         if phases_raw:
             # Import here to avoid a circular import at module load time
-            from harness.phase import PhaseConfig as _PhaseConfig
+            from harness.pipeline.phase import PhaseConfig as _PhaseConfig
             known_phase = {f.name for f in dataclasses.fields(_PhaseConfig)}
             # These fields have no defaults and MUST be supplied
             required_phase = {

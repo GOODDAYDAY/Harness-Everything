@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from harness.phase import InnerResult, PhaseResult
+from harness.pipeline.phase import InnerResult, PhaseResult
 
 log = logging.getLogger(__name__)
 

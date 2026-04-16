@@ -24,9 +24,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 from harness.executor import ExecutionResult
-from harness.llm import LLM
+from harness.core.llm import LLM
 from harness.static_analysis import StaticReport, run_static_checks
 from harness.three_way import ThreeWayResolver
 from harness.prompts import evaluator as default_prompts

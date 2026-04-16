@@ -21,7 +21,7 @@ Checks performed
 
 3. **Symbol existence** — for every ``from X import Y``, verify that symbol
    ``Y`` is actually exported by module ``X`` when that module is reachable
-   and parseable.  A missing symbol (e.g. ``from harness.llm import LLMCLient``
+   and parseable.  A missing symbol (e.g. ``from harness.core.llm import LLMCLient``
    when the class is spelled ``LLM``) is reported as an ``ERROR`` finding.
 
 4. **Structural diff** — compare the *set of top-level class and function

@@ -11,7 +11,17 @@ complementary heuristics:
 4. **Config keys** — module-level assignments whose name contains the keyword
    (covers ``CHECKPOINT_DIR = …``, ``retry_limit: int = …``, etc.).
 
+Supports two scoring modes:
+- ``substring`` (default): match if keyword appears anywhere in the name.
+- ``token_overlap``: split keyword into tokens, score by how many tokens appear
+  in each identifier name. Higher scores rank first. Useful for multi-word
+  concepts like ``'file permission check'``.
+
 All analysis is pure AST + text scanning — no external dependencies.
+
+.. note::
+   This tool supersedes the former ``semantic_search`` tool, whose token-overlap
+   scoring is now available via ``scoring='token_overlap'``.
 """
 
 from __future__ import annotations
@@ -20,7 +30,7 @@ import ast
 import re
 from typing import Any
 
-from harness.config import HarnessConfig
+from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000
@@ -76,6 +86,18 @@ class FeatureSearchTool(Tool):
                     ),
                     "default": ["symbols", "files", "comments", "config"],
                 },
+                "scoring": {
+                    "type": "string",
+                    "enum": ["substring", "token_overlap"],
+                    "description": (
+                        "Matching mode for symbol names. "
+                        "'substring' (default): match if keyword appears in the name. "
+                        "'token_overlap': split keyword into tokens and score by how many "
+                        "tokens appear in the identifier — useful for multi-word concepts "
+                        "like 'file permission check'. Results are ranked by score."
+                    ),
+                    "default": "substring",
+                },
             },
             "required": ["keyword"],
         }
@@ -87,6 +109,7 @@ class FeatureSearchTool(Tool):
         root: str = "",
         max_results: int = 30,
         categories: list[str] | None = None,
+        scoring: str = "substring",
     ) -> ToolResult:
         keyword = keyword.strip()
         if not keyword:
@@ -104,7 +127,9 @@ class FeatureSearchTool(Tool):
             categories = ["symbols", "files", "comments", "config"]
         active = set(categories)
 
+        use_token_overlap = scoring == "token_overlap"
         kw_lower = keyword.lower()
+        kw_tokens = [t.lower() for t in keyword.split() if t] if use_token_overlap else []
         # Compile a case-insensitive regex for comment/docstring scanning
         kw_re = re.compile(re.escape(keyword), re.IGNORECASE)
 
@@ -175,18 +200,29 @@ class FeatureSearchTool(Tool):
                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                         # Symbol name match
                         if "symbols" in active and len(symbol_hits) < max_results:
-                            if kw_lower in node.name.lower():
+                            ident_lower = node.name.lower()
+                            matched = False
+                            overlap_score = 0
+                            if use_token_overlap:
+                                overlap_score = sum(1 for t in kw_tokens if t in ident_lower)
+                                matched = overlap_score > 0
+                            else:
+                                matched = kw_lower in ident_lower
+                            if matched:
                                 kind = (
                                     "class" if isinstance(node, ast.ClassDef)
                                     else "async_function" if isinstance(node, ast.AsyncFunctionDef)
                                     else "function"
                                 )
-                                symbol_hits.append({
+                                hit: dict[str, Any] = {
                                     "file": rel,
                                     "line": node.lineno,
                                     "kind": kind,
                                     "name": node.name,
-                                })
+                                }
+                                if use_token_overlap:
+                                    hit["score"] = overlap_score
+                                symbol_hits.append(hit)
 
                         # Docstring match
                         if "comments" in active and len(comment_hits) < max_results:
@@ -238,6 +274,10 @@ class FeatureSearchTool(Tool):
                                 "name": node.target.id,
                                 "value_snippet": val_snippet,
                             })
+
+        # Sort symbol hits by score (descending) in token_overlap mode
+        if use_token_overlap and symbol_hits:
+            symbol_hits.sort(key=lambda h: (-h.get("score", 0), h["name"]))
 
         results: dict[str, Any] = {
             "keyword": keyword,
