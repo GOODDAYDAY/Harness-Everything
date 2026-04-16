@@ -109,7 +109,7 @@ class TestUnicodePathSecurity:
             "\x06",  # ACK
             "\x07",  # BEL
             "\x08",  # BS
-            "\x09",  # TAB (should be allowed)
+            "\x09",  # TAB
             "\x0a",  # LF (newline)
             "\x0b",  # VT
             "\x0c",  # FF
@@ -122,14 +122,8 @@ class TestUnicodePathSecurity:
             path = f"test{char}file.txt"
             result = _execute_read_tool(cfg, path)
             
-            # Most control characters should cause errors
-            # Tab (\x09) might be allowed on some filesystems
-            if char == "\x09":
-                # Tab in filename might be allowed
-                continue
-                
-            # Should get an error (file doesn't exist or path invalid)
-            assert result.is_error
+            # All control characters should be rejected
+            assert result.is_error, f"Control character {repr(char)} should be rejected"
     
     def test_whitespace_traversal(self, tmp_path):
         """Test that trailing/leading whitespace doesn't bypass checks."""
