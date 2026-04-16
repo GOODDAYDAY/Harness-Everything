@@ -97,6 +97,10 @@ class PipelineLoop:
         self.auto_push_count: int = 0
         self.total_phases_run: int = 0
         self.shutdown_reason: str = "completed"  # "completed", "signal", "max_rounds", "error"
+        # Traceability improvements
+        self.start_time: float = time.time()
+        self.score_history: list[float] = []  # Track scores for trend detection
+        self.score_trend_warnings: list[dict] = []  # Track score trend warnings
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -485,15 +489,20 @@ class PipelineLoop:
                 if round_score < _prev_score:
                     _decline_streak += 1
                     if _decline_streak >= _DECLINE_WARN_STREAK:
-                        log.warning(
-                            "TREND WARNING: score has declined for %d consecutive "
-                            "round(s) (%.1f → %.1f → … → %.1f). "
-                            "Consider adjusting the prompt or stopping early.",
-                            _decline_streak,
-                            score_history[-_decline_streak]["score"],
-                            score_history[-1]["score"],
-                            round_score,
+                        warning_msg = (
+                            f"TREND WARNING: score has declined for {_decline_streak} consecutive "
+                            f"round(s) ({score_history[-_decline_streak]['score']} → "
+                            f"{score_history[-1]['score']} → … → {round_score}). "
+                            f"Consider adjusting the prompt or stopping early."
                         )
+                        log.warning(warning_msg)
+                        # Store warning for inclusion in summary
+                        self.score_trend_warnings.append({
+                            "round": outer + 1,
+                            "decline_streak": _decline_streak,
+                            "message": warning_msg,
+                            "scores": [score_history[-_decline_streak]["score"], score_history[-1]["score"], round_score]
+                        })
                 else:
                     _decline_streak = 0
             _prev_score = round_score
@@ -859,6 +868,7 @@ class PipelineLoop:
             "tool_error_rate": tool_error_rate,
             "total_tool_calls": total_tool_calls,
             "elapsed_total_s": round(total_elapsed, 2),
+            "start_time": datetime.datetime.fromtimestamp(self.start_time, datetime.timezone.utc).isoformat(),
             "end_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "total_phases_run": self.total_phases_run if hasattr(self, 'total_phases_run') else 0,
             "shutdown_reason": self.shutdown_reason,
