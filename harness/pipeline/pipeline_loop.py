@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio as _asyncio
 import json
 import logging
 import re
+import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,9 +87,62 @@ class PipelineLoop:
             output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
         )
 
+        # Graceful shutdown
+        self._shutdown_requested: bool = False
+
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
         return [PhaseConfig.from_dict(p) for p in self.config.phases]
+
+    # ---- graceful shutdown ----
+
+    def _request_shutdown(self) -> None:
+        """Signal callback: request graceful shutdown after current phase."""
+        if not self._shutdown_requested:
+            self._shutdown_requested = True
+            log.warning(
+                "Shutdown requested (signal received). "
+                "Finishing current phase, then exiting cleanly…"
+            )
+
+    def _install_signal_handlers(self) -> None:
+        """Register SIGINT/SIGTERM to trigger graceful shutdown."""
+        try:
+            loop = _asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, self._request_shutdown)
+            log.debug("Signal handlers installed (SIGINT, SIGTERM)")
+        except NotImplementedError:
+            # Windows: add_signal_handler is not supported.
+            log.debug("Signal handlers not available on this platform")
+
+    def _uninstall_signal_handlers(self) -> None:
+        """Restore default signal handlers."""
+        try:
+            loop = _asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.remove_signal_handler(sig)
+        except (NotImplementedError, RuntimeError):
+            pass
+
+    def _write_shutdown_state(
+        self,
+        outer: int,
+        best_round_score: float,
+        score_history: list[dict],
+    ) -> None:
+        """Persist shutdown state so the operator knows where the run stopped."""
+        payload = {
+            "reason": "signal",
+            "completed_rounds": outer + 1,
+            "best_score": round(best_round_score, 2),
+            "score_history": score_history,
+        }
+        try:
+            self.artifacts.write(json.dumps(payload, indent=2), "shutdown_state.json")
+            log.info("Shutdown state written to shutdown_state.json")
+        except Exception as exc:
+            log.warning("Failed to write shutdown_state.json: %s", exc)
 
     async def run(self) -> PipelineResult:
         """Execute all outer rounds with resume + early stopping."""
@@ -116,6 +171,9 @@ class PipelineLoop:
         # Run-level tool call counters for summary.json tool_error_rate
         _total_tool_calls: int = 0
         _total_tool_errors: int = 0
+
+        self._shutdown_requested = False
+        self._install_signal_handlers()
 
         for outer in range(self.config.outer_rounds):
             round_start = time.monotonic()
@@ -214,6 +272,17 @@ class PipelineLoop:
                     )
                     break
 
+            # Graceful shutdown check (between rounds)
+            if self._shutdown_requested:
+                log.info(
+                    "Graceful shutdown after round %d/%d",
+                    outer + 1, self.config.outer_rounds,
+                )
+                self._write_shutdown_state(outer, best_round_score, score_history)
+                break
+
+        self._uninstall_signal_handlers()
+
         total_elapsed = time.monotonic() - pipeline_start
 
         self._metrics_collector.flush()
@@ -224,8 +293,9 @@ class PipelineLoop:
         self._metrics_collector.flush_detail(detail_path)
 
         # Final summary
+        stop_reason = "shutdown" if self._shutdown_requested else "complete"
         self.artifacts.write_final_summary(
-            f"# Pipeline Complete\n\n"
+            f"# Pipeline {stop_reason.title()}\n\n"
             f"Rounds: {len(all_round_results)}\n"
             f"Best score: {best_round_score:.1f}\n"
             f"Elapsed: {total_elapsed:.1f}s\n\n"
@@ -243,15 +313,16 @@ class PipelineLoop:
         )
 
         log.info(
-            "Pipeline complete: rounds=%d  best=%.1f  total=%.1fs  artifacts=%s",
-            len(all_round_results), best_round_score, total_elapsed, self.artifacts.run_dir,
+            "Pipeline %s: rounds=%d  best=%.1f  total=%.1fs  artifacts=%s",
+            stop_reason, len(all_round_results), best_round_score,
+            total_elapsed, self.artifacts.run_dir,
         )
 
         # --- Priority 5: Auto-tag when best_score > 7.0 ---
         await self._maybe_auto_tag(best_round_score, len(all_round_results))
 
         return PipelineResult(
-            success=True,
+            success=not self._shutdown_requested,
             rounds_completed=len(all_round_results),
             phases_results=all_round_results,
             final_proposal=prior_best or "",
@@ -268,6 +339,11 @@ class PipelineLoop:
         phase_scores: list[float] = []
 
         for phase in phases:
+            # Graceful shutdown: skip remaining phases
+            if self._shutdown_requested:
+                log.info("  phase=%s  status=skipped (shutdown requested)", phase.label)
+                break
+
             # Skip logic
             if phase.should_skip(outer):
                 if not self.checkpoint.is_phase_skipped(outer, phase.label):
@@ -490,8 +566,6 @@ class PipelineLoop:
                 best_score, _AUTO_TAG_THRESHOLD,
             )
             return
-
-        import asyncio as _asyncio
 
         tag_name = f"v-auto-score{best_score:.1f}-r{rounds_completed}"
         tag_msg = (
