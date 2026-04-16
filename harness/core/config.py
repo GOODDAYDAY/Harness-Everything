@@ -366,6 +366,25 @@ class PipelineConfig:
     # more code visibility.  Default matches the original hard-coded limit.
     max_file_context_chars: int = 60_000
 
+    # Meta-review: periodic pause to review progress across rounds
+    meta_review_interval: int = 0    # 0 = disabled; N = run meta-review every N rounds
+    meta_review_system: str = ""     # custom system prompt (empty = use default)
+    meta_review_inject: bool = False  # prepend meta-review findings to next round's prompts
+
+    # Auto-push
+    auto_push_interval: int = 0    # 0 = disabled; N = push every N outer rounds
+    auto_push_remote: str = "origin"
+    auto_push_branch: str = ""     # empty = push current branch
+
+    # Rich commit metadata
+    rich_commit_metadata: bool = False  # include score/round/phase in commit messages
+
+    # Prompt auto-update
+    auto_update_prompts: bool = False  # allow meta-review to modify phase prompts
+
+    # Manual/Automatic dual mode
+    run_mode: str = "automatic"  # "automatic" or "manual" (pause at meta-review)
+
     def __post_init__(self) -> None:
         # --- validate evaluation_mode (Literal enforcement at runtime) ---
         _VALID_EVAL_MODES = ("three_way", "dual_isolated")
@@ -427,6 +446,23 @@ class PipelineConfig:
             raise ValueError(
                 f"PipelineConfig.synthesis_system must be a string, "
                 f"got {type(self.synthesis_system).__name__!r}"
+            )
+
+        # --- validate meta-review fields ---
+        if self.meta_review_interval < 0:
+            raise ValueError(
+                f"PipelineConfig.meta_review_interval must be >= 0, "
+                f"got {self.meta_review_interval}"
+            )
+        if self.auto_push_interval < 0:
+            raise ValueError(
+                f"PipelineConfig.auto_push_interval must be >= 0, "
+                f"got {self.auto_push_interval}"
+            )
+        if self.run_mode not in ("automatic", "manual"):
+            raise ValueError(
+                f"PipelineConfig.run_mode must be 'automatic' or 'manual', "
+                f"got {self.run_mode!r}"
             )
 
         # --- scale warnings for inner_rounds / outer_rounds ---

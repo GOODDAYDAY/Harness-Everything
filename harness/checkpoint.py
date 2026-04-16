@@ -67,3 +67,21 @@ class CheckpointManager:
     def mark_synthesis_done(self, outer: int, phase_label: str) -> None:
         segs = self.store.phase_dir(outer, phase_label)
         self.store.write("", *segs, "synthesis.done")
+
+    # ---- meta-review ----
+
+    def is_meta_review_done(self, outer: int) -> bool:
+        return self.store.exists(f"round_{outer + 1}", "meta_review.done")
+
+    def mark_meta_review_done(self, outer: int) -> None:
+        self.store.write("", f"round_{outer + 1}", "meta_review.done")
+
+    # ---- hash-based incremental review ----
+
+    def read_last_review_hash(self) -> str:
+        """Read the last reviewed commit hash, or '' if none."""
+        return (self.store.read("meta_review_hash.txt") or "").strip()
+
+    def write_last_review_hash(self, commit_hash: str) -> None:
+        """Persist the commit hash after a meta-review completes."""
+        self.store.write(commit_hash, "meta_review_hash.txt")
