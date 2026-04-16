@@ -57,8 +57,8 @@ import ast
 import importlib.util
 import logging
 import py_compile
+import re
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -170,7 +170,6 @@ def _check_syntax(path: Path, rel: str) -> list[Finding]:
         msg = str(exc.msg).strip()
         # Try to extract line number from the message
         line = 0
-        import re
         m = re.search(r":(\d+):", msg)
         if m:
             line = int(m.group(1))

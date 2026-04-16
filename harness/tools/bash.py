@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
 from typing import Any
 
@@ -48,7 +49,6 @@ class BashTool(Tool):
             return None
         first = tokens[0]
         # Also strip any path prefix so "/usr/bin/rm" matches "rm"
-        import os
         first_base = os.path.basename(first)
         for denied in denylist:
             if first == denied or first_base == denied:

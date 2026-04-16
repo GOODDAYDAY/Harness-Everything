@@ -17,6 +17,15 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class InnerRoundMetrics:
+    phase: str
+    round_index: int
+    tool_calls: int
+    verdict: str          # e.g. "pass" / "fail" / "error"
+    feedback_snippet: str  # first 200 chars of verdict feedback
+
+
+@dataclass
 class PhaseMetrics:
     phase_name: str
     inner_rounds: int
@@ -91,3 +100,22 @@ class MetricsCollector:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
             raise
+
+    def record_phase_detail(self, detail: InnerRoundMetrics) -> None:
+        """Record per-inner-round metrics for post-run analysis."""
+        if not hasattr(self, "_phase_details"):
+            self._phase_details: list[InnerRoundMetrics] = []
+        self._phase_details.append(detail)
+
+    def flush_detail(self, path: str) -> None:
+        """Write accumulated InnerRoundMetrics to *path* as newline-delimited JSON.
+
+        Silently no-ops if record_phase_detail() was never called, so
+        callers that skip instrumentation do not raise AttributeError.
+        """
+        details = getattr(self, "_phase_details", [])
+        if not details:
+            return
+        with open(path, "w", encoding="utf-8") as fh:
+            for d in details:
+                fh.write(json.dumps(asdict(d)) + "\n")
