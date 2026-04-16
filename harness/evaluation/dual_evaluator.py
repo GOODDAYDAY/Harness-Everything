@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from harness.core.llm import LLM
 from harness.pipeline.phase import DualScore, ScoreItem
@@ -32,20 +32,188 @@ _LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 # whether they are reviewing a text proposal or an implement-mode code change.
 _MODE_HEADERS: dict[str, str] = {
     "debate": (
-        "## Evaluation Mode: DEBATE\n"
-        "You are reviewing a **text proposal** (plan / recommendation).\n"
-        "Evaluate the plan's specificity, completeness, and correctness of reasoning.\n"
-        "Do NOT penalise for lack of executed tool calls — this is a planning round.\n\n"
+        "## EVALUATION MODE: DEBATE (TEXT PROPOSAL)\n"
+        "You are reviewing a **text proposal** (plan / recommendation).\n\n"
+        "KEY DIFFERENCES FROM IMPLEMENT MODE:\n"
+        "1. Evaluate the **reasoning quality**, not executed code\n"
+        "2. Assess **specificity** of proposed changes (file/function names)\n"
+        "3. Check **completeness** against the task requirements\n"
+        "4. Do NOT penalize for lack of tool calls or execution results\n"
+        "5. Focus on whether the plan would work IF implemented correctly\n\n"
+        "CRITICAL: A good debate proposal must name concrete code entities "
+        "(files, functions, classes) from the source context. "
+        "Vague proposals score ≤4 on Specificity.\n\n"
+        "**STRUCTURED OUTPUT REQUIREMENTS:**\n"
+        "1. Use exact section headers from your system prompt\n"
+        "2. Place SCORE: X.X on its own line at the very end\n"
+        "3. Reference specific file::function in all findings\n"
+        "4. Provide numbered, actionable feedback items\n"
+        "5. Include concrete calibration anchors in your scoring\n\n"
     ),
     "implement": (
-        "## Evaluation Mode: IMPLEMENT\n"
-        "You are reviewing an **executed code change** (implement round).\n"
-        "Evaluate the actual code state after execution: correctness of edits, "
-        "test results, and tool call success/failure, not the quality of the plan.\n"
-        "A proposal section may be present for context but the CODE STATE is "
-        "the authoritative subject.\n\n"
+        "## EVALUATION MODE: IMPLEMENT (EXECUTED CODE)\n"
+        "You are reviewing an **executed code change** (implement round).\n\n"
+        "KEY DIFFERENCES FROM DEBATE MODE:\n"
+        "1. Evaluate the **actual code state** after execution\n"
+        "2. Check **correctness of edits** (syntax, logic, test results)\n"
+        "3. Verify **tool call success/failure** from execution logs\n"
+        "4. The proposal text is for context only; CODE STATE is authoritative\n"
+        "5. Penalize missing tests, syntax errors, broken functionality\n\n"
+        "CRITICAL: Look for concrete evidence in the changed files and test results. "
+        "A plan that looks good but produces broken code scores ≤5 on Correctness.\n\n"
+        "**STRUCTURED OUTPUT REQUIREMENTS:**\n"
+        "1. Use exact section headers from your system prompt\n"
+        "2. Place SCORE: X.X on its own line at the very end\n"
+        "3. Reference specific file::function in all findings\n"
+        "4. Provide numbered, actionable feedback items\n"
+        "5. Include concrete calibration anchors in your scoring\n"
+        "6. Focus on executed code, not the proposal text\n\n"
     ),
 }
+
+
+def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dict[str, Any]:
+    """Extract structured feedback from evaluator output.
+    
+    Args:
+        text: Evaluator output text
+        evaluator_type: "basic" or "diffusion"
+    
+    Returns:
+        Dictionary with extracted structured data
+    """
+    result = {
+        "score": None,
+        "analysis": {},
+        "defect": None,
+        "feedback_items": [],
+        "improvement_suggestion": None,
+    }
+    
+    # Extract score
+    score_match = _STRICT_RE.findall(text)
+    if score_match:
+        result["score"] = float(score_match[-1])
+    
+    # Extract analysis dimensions
+    if "ANALYSIS:" in text:
+        analysis_section = text.split("ANALYSIS:")[1].split("\n\n")[0]
+        # Look for dimension scores
+        dimension_pattern = r"([A-D])\.\s+([^:]+):\s*(\d+(?:\.\d+)?)"
+        matches = re.findall(dimension_pattern, analysis_section)
+        for letter, dimension, score in matches:
+            result["analysis"][dimension.strip()] = float(score)
+    
+    # Extract defect/risk
+    if evaluator_type == "basic" and "TOP DEFECT:" in text:
+        defect_section = text.split("TOP DEFECT:")[1].split("\n")[0].strip()
+        if defect_section.lower() != "none":
+            result["defect"] = defect_section
+    elif evaluator_type == "diffusion" and "KEY RISK:" in text:
+        risk_section = text.split("KEY RISK:")[1].split("\n")[0].strip()
+        if risk_section.lower() != "none":
+            result["defect"] = risk_section
+    
+    # Extract feedback items
+    feedback_section_name = "ACTIONABLE FEEDBACK:" if evaluator_type == "basic" else "ACTIONABLE MITIGATIONS:"
+    if feedback_section_name in text:
+        feedback_section = text.split(feedback_section_name)[1].split("\n\n")[0]
+        # Extract numbered items
+        item_pattern = r"^\s*(\d+)\.\s+(.+)$"
+        for line in feedback_section.split('\n'):
+            match = re.match(item_pattern, line.strip())
+            if match:
+                result["feedback_items"].append(match.group(2).strip())
+    
+    # Extract improvement suggestion
+    if "WHAT WOULD MAKE THIS 10/10:" in text:
+        improvement = text.split("WHAT WOULD MAKE THIS 10/10:")[1].split("\n")[0].strip()
+        if improvement.lower() != "already perfect":
+            result["improvement_suggestion"] = improvement
+    
+    return result
+
+
+def validate_evaluator_output(text: str, evaluator_type: str = "basic") -> tuple[bool, list[str]]:
+    """Validate evaluator output structure and return (is_valid, issues).
+    
+    Args:
+        text: Evaluator output text to validate
+        evaluator_type: "basic" or "diffusion" to check appropriate structure
+    
+    Returns:
+        Tuple of (is_valid, list_of_issues)
+    """
+    issues = []
+    
+    # Check for required sections based on evaluator type
+    if evaluator_type == "basic":
+        required_sections = ["ANALYSIS:", "TOP DEFECT:", "SCORE:"]
+        optional_sections = ["DELTA VS PRIOR BEST:", "ACTIONABLE FEEDBACK:", "WHAT WOULD MAKE THIS 10/10:"]
+        defect_section = "TOP DEFECT:"
+        feedback_section = "ACTIONABLE FEEDBACK:"
+    else:  # diffusion
+        required_sections = ["ANALYSIS:", "KEY RISK:", "SCORE:"]
+        optional_sections = ["DELTA VS PRIOR BEST:", "ACTIONABLE MITIGATIONS:", "WHAT WOULD MAKE THIS 10/10:"]
+        defect_section = "KEY RISK:"
+        feedback_section = "ACTIONABLE MITIGATIONS:"
+    
+    # Check for required sections
+    for section in required_sections:
+        if section not in text:
+            issues.append(f"Missing required section: {section}")
+    
+    # Check for SCORE format - must be on its own line
+    score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
+    if score_lines:
+        score_line = score_lines[-1].strip()
+        # Check for proper SCORE: X.X format
+        if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\s*$', score_line):
+            issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X'")
+        # Check that score is the last thing in the output (most reliable)
+        if not text.strip().endswith(score_line):
+            issues.append("SCORE should be the last line of the output for reliable parsing")
+    else:
+        issues.append("No SCORE line found")
+    
+    # Check ANALYSIS section has proper structure
+    if "ANALYSIS:" in text:
+        analysis_section = text.split("ANALYSIS:")[1].split("\n\n")[0]
+        # Check for dimension scores
+        if evaluator_type == "basic":
+            dimensions = ["A. Correctness", "B. Completeness", "C. Specificity", "D. Architecture fit"]
+        else:
+            dimensions = ["A. Caller impact", "B. Maintenance debt", "C. Emergent behaviour", "D. Rollback safety"]
+        
+        for dim in dimensions:
+            if dim not in analysis_section:
+                issues.append(f"ANALYSIS missing dimension: {dim}")
+    
+    # Check defect/risk section has concrete reference
+    if defect_section in text:
+        defect_text = text.split(defect_section)[1].split("\n")[0].strip()
+        if defect_text.lower() != "none":
+            # Should contain file::function reference
+            if "::" not in defect_text:
+                issues.append(f"{defect_section} should reference file::function, got: '{defect_text}'")
+    
+    # Check for structured feedback if present
+    if feedback_section in text:
+        feedback_text = text.split(feedback_section)[1].split("\n\n")[0]
+        # Check for numbered items
+        lines = [line.strip() for line in feedback_text.split('\n') if line.strip()]
+        numbered_items = [line for line in lines if re.match(r'^\d+\.\s', line)]
+        if not numbered_items:
+            issues.append(f"{feedback_section} should contain numbered items (1., 2., etc.)")
+    
+    # Check WHAT WOULD MAKE THIS 10/10 section if present
+    if "WHAT WOULD MAKE THIS 10/10:" in text:
+        ten_text = text.split("WHAT WOULD MAKE THIS 10/10:")[1].split("\n")[0].strip()
+        if ten_text.lower() != "already perfect" and len(ten_text) < 10:
+            issues.append("WHAT WOULD MAKE THIS 10/10: should provide concrete improvement")
+    
+    is_valid = len(issues) == 0
+    return is_valid, issues
 
 
 def parse_score(
@@ -54,29 +222,49 @@ def parse_score(
 ) -> float:
     """Extract a numeric score from evaluator output and clamp it to [0, 10].
 
-    Extraction strategy (two-tier):
-    1. **Strict** — search for ``^SCORE: N$`` (anchored to line boundaries).
+    Extraction strategy (three-tier):
+    1. **Strict anchored** — search for ``^SCORE: N$`` (anchored to line boundaries).
        Takes the **last** strict match.  This reliably captures the
        authoritative final score placed at the end of the output, ignoring
        any inline arithmetic lines such as ``SCORE = (A×0.4)+… = 6.0``.
-    2. **Loose fallback** — if no strict match, apply the caller-supplied
+    2. **Strict unanchored** — search for ``SCORE: N`` (not anchored) as fallback.
+    3. **Loose fallback** — if no strict match, apply the caller-supplied
        ``pattern`` (default: ``SCORE[:\\s]+N``).  Takes the last match.
 
     Returns 0.0 and logs a warning when no match is found.
     Logs a warning when the extracted value is outside [0, 10].
     """
-    strict = _STRICT_RE.findall(text)
-    if strict:
-        raw = float(strict[-1])
+    # Clean the text - remove markdown code blocks if present
+    clean_text = text
+    if "```" in text:
+        # Extract content from code blocks
+        parts = text.split("```")
+        if len(parts) > 1:
+            # Take the last code block or the content between first and second ```
+            clean_text = parts[1] if len(parts) >= 3 else parts[0]
+    
+    # Try strict anchored pattern first (most reliable)
+    strict_anchored = _STRICT_RE.findall(clean_text)
+    if strict_anchored:
+        raw = float(strict_anchored[-1])
+        log.debug("parse_score: found anchored SCORE: %.2f", raw)
     else:
-        loose = re.findall(pattern, text, re.IGNORECASE)
-        if not loose:
-            log.warning(
-                "parse_score: no score token found in evaluator output (len=%d)",
-                len(text),
-            )
-            return 0.0
-        raw = float(loose[-1])
+        # Try strict unanchored pattern
+        strict_unanchored = re.findall(r"SCORE:\s*(\d+(?:\.\d+)?)", clean_text)
+        if strict_unanchored:
+            raw = float(strict_unanchored[-1])
+            log.debug("parse_score: found unanchored SCORE: %.2f", raw)
+        else:
+            # Fall back to loose pattern
+            loose = re.findall(pattern, clean_text, re.IGNORECASE)
+            if not loose:
+                log.warning(
+                    "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
+                    clean_text,
+                )
+                return 0.0
+            raw = float(loose[-1])
+            log.debug("parse_score: found loose SCORE: %.2f", raw)
 
     clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
     if clamped != raw:
@@ -156,11 +344,39 @@ class DualEvaluator:
 
         basic_score = parse_score(basic_resp.text, score_pattern)
         diffusion_score = parse_score(diffusion_resp.text, score_pattern)
+        
+        # Validate output structure
+        basic_valid, basic_issues = validate_evaluator_output(basic_resp.text, "basic")
+        diffusion_valid, diffusion_issues = validate_evaluator_output(diffusion_resp.text, "diffusion")
+        
+        if not basic_valid:
+            log.warning(
+                "Basic evaluator output structure issues: %s",
+                "; ".join(basic_issues)
+            )
+        
+        if not diffusion_valid:
+            log.warning(
+                "Diffusion evaluator output structure issues: %s",
+                "; ".join(diffusion_issues)
+            )
 
+        # Extract structured feedback
+        basic_feedback = extract_structured_feedback(basic_resp.text, "basic")
+        diffusion_feedback = extract_structured_feedback(diffusion_resp.text, "diffusion")
+        
         log.info(
-            "DualEvaluator[%s]: basic=%.1f diffusion=%.1f combined=%.1f",
-            mode, basic_score, diffusion_score, basic_score + diffusion_score,
+            "DualEvaluator[%s]: basic=%.1f (valid=%s, feedback=%d items) diffusion=%.1f (valid=%s, feedback=%d items) combined=%.1f",
+            mode, basic_score, basic_valid, len(basic_feedback.get("feedback_items", [])),
+            diffusion_score, diffusion_valid, len(diffusion_feedback.get("feedback_items", [])),
+            basic_score + diffusion_score,
         )
+        
+        # Log key findings for debugging
+        if basic_feedback.get("defect"):
+            log.debug("Basic evaluator top defect: %s", basic_feedback["defect"])
+        if diffusion_feedback.get("defect"):
+            log.debug("Diffusion evaluator key risk: %s", diffusion_feedback["defect"])
 
         return DualScore(
             basic=ScoreItem(basic_score, basic_resp.text),

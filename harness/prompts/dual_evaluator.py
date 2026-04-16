@@ -8,17 +8,27 @@ ROLE: Evaluate correctness, completeness, and specificity. You are looking \
 for concrete defects — not stylistic preferences, not hypothetical risks, \
 not observations that do not affect the score.
 
-CALIBRATION ANCHORS — read these before scoring anything:
+CALIBRATION ANCHORS — concrete examples to align your scoring:
   0: Broken, dangerous, or entirely off-topic.
-  3: Works for a trivial case but points in the wrong direction; major \
-     requirement missed or fundamentally flawed approach.
-  5: Correct approach but generic — no specific file/function/class names \
-     cited from the source context; a developer would need to look up what \
-     to change.
-  7: Correct + specific + testable — names concrete code entities, covers \
-     the main requirement, would pass code review with minor comments.
-  10: Correct + specific + tested + measurable — every claim is backed by a \
-      named test, metric, or verification step; zero nits. Extremely rare.
+  2: Works for a trivial case but points in the wrong direction; major requirement missed.
+  4: Correct approach but generic — no specific file/function/class names cited.
+  6: Correct + specific — names concrete code entities but missing edge cases.
+  8: Correct + specific + testable — covers main requirement, would pass code review.
+  10: Correct + specific + tested + measurable — every claim backed by named test/metric.
+
+CONCRETE SCORING EXAMPLES:
+- Score 2: Proposal says "improve error handling" without naming which function or what errors
+- Score 4: Proposal says "fix the bug in parse_score" but doesn't show the fix
+- Score 6: Proposal says "update parse_score in dual_evaluator.py to handle markdown" with example
+- Score 8: Proposal includes exact code change for parse_score with test cases
+- Score 10: Proposal includes code, tests, and validation of edge cases with metrics
+
+SCORING GUIDELINES:
+- Score 0-3: Critical failure — task fundamentally incomplete or broken
+- Score 4-5: Major issues — core functionality missing or incorrect  
+- Score 6-7: Moderate issues — works but with significant problems
+- Score 8-9: Minor issues — works well with small improvements needed
+- Score 10: Perfect — no issues found, all requirements fully met
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \
@@ -89,6 +99,11 @@ TOP DEFECT: <the single most critical issue, stated as: \
 "FILE::function — problem description and what a correct fix looks like"; \
 or "none" if score ≥ 9>
 
+ACTIONABLE FEEDBACK:
+  1. <Highest priority fix: file.py::function — exact change needed>
+  2. <Next priority fix (omit if none)>
+  3. <Additional improvements (omit if none)>
+
 WHAT WOULD MAKE THIS 10/10: <one concrete sentence naming the exact change \
 — file, function, and behaviour — that would raise this to a perfect score; \
 or "already perfect" if score = 10>
@@ -104,16 +119,27 @@ ROLE: Assume the proposal is correctly implemented and runs without errors. \
 Your job is to assess consequences *beyond* the directly touched code — \
 caller impact, maintenance cost, emergent behaviour, rollback safety.
 
-CALIBRATION ANCHORS — read these before scoring anything:
-  0: Catastrophic. Irreversible or systemically destabilising.
-  3: Dangerous. Breaks unrelated functionality or creates lasting technical \
-     debt with no mitigation path.
-  5: Concerning but manageable — significant cascade effects that require \
-     explicit mitigation; a reviewer would block this without a plan.
-  7: Moderate. Some callers or files affected; impact is bounded and a \
-     one-sentence mitigation addresses it adequately.
-  10: Negligible ripple. Trivial to roll back; zero maintenance overhead. \
-      Extremely rare; requires explicit justification.
+CALIBRATION ANCHORS — concrete examples to align your scoring:
+  0: Catastrophic — irreversible or systemically destabilising.
+  2: Dangerous — breaks unrelated functionality with no mitigation path.
+  4: Concerning — significant cascade effects requiring explicit mitigation.
+  6: Moderate — some callers affected but impact is bounded.
+  8: Minor — trivial ripple effects easily addressed.
+  10: Negligible — zero maintenance overhead, trivial rollback.
+
+CONCRETE SCORING EXAMPLES:
+- Score 2: Changes a public API used by 10+ callers without updating any of them
+- Score 4: Modifies a shared data structure requiring updates in 3-5 files
+- Score 6: Changes internal function signature affecting 1-2 callers
+- Score 8: Adds new optional parameter with backward-compatible default
+- Score 10: Pure refactoring within a single module with no external dependencies
+
+SCORING GUIDELINES:
+- Score 0-3: Critical second-order risks — would cause system-wide issues
+- Score 4-5: Major cascade effects — requires extensive mitigation planning
+- Score 6-7: Moderate impact — bounded effects with clear mitigation
+- Score 8-9: Minor ripple — minimal impact on system
+- Score 10: No discernible second-order effects
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification. \
 A change that modifies a public API or shared data structure almost never \
@@ -181,6 +207,11 @@ ANALYSIS:
 KEY RISK: <the single most significant second-order concern, stated as: \
 "FILE::function — scenario description → concrete mitigation step"; \
 or "none" if score ≥ 9>
+
+ACTIONABLE MITIGATIONS:
+  1. <Highest priority mitigation: file.py::function — exact guard needed>
+  2. <Next priority mitigation (omit if none)>
+  3. <Additional safeguards (omit if none)>
 
 WHAT WOULD MAKE THIS 10/10: <one concrete sentence naming the exact \
 architectural or systemic change that would eliminate the primary risk; \
