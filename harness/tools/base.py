@@ -45,6 +45,11 @@ class Tool(ABC):
     # against allowed_paths in config.
     requires_path_check: bool = False
 
+    # Tool categories for per-phase filtering via PhaseConfig.tool_tags.
+    # Valid tags: "file_read", "file_write", "search", "git", "analysis",
+    #             "execution", "network", "testing"
+    tags: frozenset[str] = frozenset()
+
     @abstractmethod
     def input_schema(self) -> dict[str, Any]:
         """Return JSON Schema for the tool input."""

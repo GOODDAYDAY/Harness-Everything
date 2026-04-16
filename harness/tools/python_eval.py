@@ -210,6 +210,7 @@ class PythonEvalTool(Tool):
     # No path check on the snippet itself; workspace membership is enforced via
     # cwd + PYTHONPATH pointing only at the workspace.
     requires_path_check = False
+    tags = frozenset({"execution"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

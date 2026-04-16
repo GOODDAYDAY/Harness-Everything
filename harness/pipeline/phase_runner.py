@@ -503,6 +503,19 @@ class PhaseRunner:
         proposal = resp.text
         self.artifacts.write(proposal, *segs, "proposal.txt")
 
+        # Skip evaluation for short proposals (saves 2 API calls).
+        if phase.min_proposal_chars and len(proposal.strip()) < phase.min_proposal_chars:
+            log.info(
+                "R%d/phase=%s/inner=%d: proposal too short (%d < %d chars), skipping eval",
+                outer + 1, phase.label, inner + 1,
+                len(proposal.strip()), phase.min_proposal_chars,
+            )
+            dual_score = DualScore(
+                basic=ScoreItem(0.0, "[skipped — proposal below min_proposal_chars]"),
+                diffusion=ScoreItem(0.0, "[skipped — proposal below min_proposal_chars]"),
+            )
+            return InnerResult(proposal=proposal, dual_score=dual_score)
+
         dual_score = await self._evaluate_and_log(
             outer, phase, inner, proposal, file_context, segs,
         )
@@ -524,9 +537,20 @@ class PhaseRunner:
         )
 
         _impl_t0 = time.monotonic()
+        # Dynamic tool filtering: if the phase specifies tool_tags, only
+        # expose matching tools to the executor LLM.
+        active_registry = self.registry
+        if phase.tool_tags:
+            active_registry = self.registry.filter_by_tags(frozenset(phase.tool_tags))
+            log.info(
+                "R%d/phase=%s/inner=%d: filtered tools by tags %s → %d tools",
+                outer + 1, phase.label, inner + 1,
+                phase.tool_tags, len(active_registry.names),
+            )
+
         text, exec_log = await self.llm.call_with_tools(
             [{"role": "user", "content": prompt}],
-            self.registry,
+            active_registry,
             system=executor_system_with_workspace(self.harness.workspace),
             max_turns=self.harness.max_tool_turns,
         )
@@ -596,9 +620,21 @@ class PhaseRunner:
             f"## Code State After\n\n{code_state_capped}"
         )
 
-        dual_score = await self._evaluate_and_log(
-            outer, phase, inner, eval_subject, file_context, segs,
-        )
+        # Skip evaluation for short proposals (saves 2 API calls).
+        if phase.min_proposal_chars and len(text.strip()) < phase.min_proposal_chars:
+            log.info(
+                "R%d/phase=%s/inner=%d: impl output too short (%d < %d chars), skipping eval",
+                outer + 1, phase.label, inner + 1,
+                len(text.strip()), phase.min_proposal_chars,
+            )
+            dual_score = DualScore(
+                basic=ScoreItem(0.0, "[skipped — output below min_proposal_chars]"),
+                diffusion=ScoreItem(0.0, "[skipped — output below min_proposal_chars]"),
+            )
+        else:
+            dual_score = await self._evaluate_and_log(
+                outer, phase, inner, eval_subject, file_context, segs,
+            )
 
         # Syntax check (inline, not hook — needed for carry-forward)
         syntax_errors = ""

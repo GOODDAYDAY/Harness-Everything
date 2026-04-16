@@ -293,6 +293,7 @@ class CodeAnalysisTool(Tool):
         "No code is executed — pure static analysis."
     )
     requires_path_check = True
+    tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

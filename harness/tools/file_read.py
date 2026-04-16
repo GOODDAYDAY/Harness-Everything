@@ -16,6 +16,7 @@ class ReadFileTool(Tool):
         "1-based) and limit (max lines to read) for large files."
     )
     requires_path_check = True
+    tags = frozenset({"file_read"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
