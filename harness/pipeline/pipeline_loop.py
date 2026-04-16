@@ -294,6 +294,7 @@ class PipelineLoop:
         rc, out = await self._run_git(["push", remote, branch])
         if rc == 0:
             log.info("auto_push: pushed to %s/%s", remote, branch)
+            self.auto_push_count += 1
         else:
             log.warning("auto_push: push failed — rc=%d output=%r", rc, out)
 
