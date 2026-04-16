@@ -29,7 +29,7 @@ All other tools in this module (no network access required).
 
 import logging
 
-from harness.tools.base import Tool, ToolResult
+from harness.tools.base import Tool
 from harness.tools.registry import ToolRegistry
 from harness.tools.file_read import ReadFileTool
 from harness.tools.file_write import WriteFileTool

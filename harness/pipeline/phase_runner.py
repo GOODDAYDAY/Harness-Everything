@@ -9,11 +9,10 @@ import re
 import time
 from pathlib import Path
 from string import Template
-from typing import Any
 
 from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
-from harness.core.config import HarnessConfig, PipelineConfig
+from harness.core.config import PipelineConfig
 from harness.evaluation.dual_evaluator import DualEvaluator
 from harness.executor import executor_system_with_workspace
 from harness.hooks import build_hooks
