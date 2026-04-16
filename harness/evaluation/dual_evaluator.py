@@ -89,7 +89,19 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dic
         "defect": None,
         "feedback_items": [],
         "improvement_suggestion": None,
+        "delta": None,
     }
+    
+    # Validate the output first
+    is_valid, issues = validate_evaluator_output(text, evaluator_type)
+    if not is_valid:
+        result["error"] = "Invalid evaluator output: " + "; ".join(issues)
+        return result
+    
+    # Extract delta text
+    if "DELTA VS PRIOR BEST:" in text:
+        delta_section = text.split("DELTA VS PRIOR BEST:")[1].split("\n")[0].strip()
+        result["delta"] = delta_section
     
     # Extract score
     score_match = _STRICT_RE.findall(text)
@@ -160,6 +172,17 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         defect_section = "KEY RISK:"
         feedback_section = "ACTIONABLE MITIGATIONS:"
     
+    # DELTA VS PRIOR BEST is required and must have descriptive text
+    if "DELTA VS PRIOR BEST:" not in text:
+        issues.append("Missing 'DELTA VS PRIOR BEST:' section")
+    else:
+        delta_lines = [line for line in text.split('\n') if line.strip().startswith("DELTA VS PRIOR BEST:")]
+        if delta_lines:
+            delta_line = delta_lines[0]
+            delta_text = delta_line.split("DELTA VS PRIOR BEST:")[1].strip()
+            if not delta_text or len(delta_text) < 5:
+                issues.append("'DELTA VS PRIOR BEST:' must have descriptive text (minimum 5 characters)")
+    
     # Check for required sections
     for section in required_sections:
         if section not in text:
@@ -178,9 +201,17 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
     else:
         issues.append("No SCORE line found")
     
-    # Check ANALYSIS section has proper structure
+    # Check ANALYSIS section has proper structure with strict pattern matching
     if "ANALYSIS:" in text:
         analysis_section = text.split("ANALYSIS:")[1].split("\n\n")[0]
+        # Check each analysis line matches pattern: ^[A-D]\. .+: [0-9.]+ — .+
+        analysis_lines = [line.strip() for line in analysis_section.split('\n') if line.strip()]
+        for line in analysis_lines:
+            if re.match(r'^[A-D]\.\s+.+:\s*\d+(?:\.\d+)?\s*—\s*.+$', line):
+                continue
+            elif line.startswith(('A.', 'B.', 'C.', 'D.')):
+                issues.append(f"Analysis line doesn't match required format '^[A-D]\\. .+: [0-9.]+ — .+': {line}")
+        
         # Check for dimension scores
         if evaluator_type == "basic":
             dimensions = ["A. Correctness", "B. Completeness", "C. Specificity", "D. Architecture fit"]
@@ -191,13 +222,23 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             if dim not in analysis_section:
                 issues.append(f"ANALYSIS missing dimension: {dim}")
     
-    # Check defect/risk section has concrete reference
+    # Check defect/risk section has concrete reference with path sanitization
     if defect_section in text:
         defect_text = text.split(defect_section)[1].split("\n")[0].strip()
         if defect_text.lower() != "none":
             # Should contain file::function reference
             if "::" not in defect_text:
                 issues.append(f"{defect_section} should reference file::function, got: '{defect_text}'")
+            else:
+                # Sanitize path - check for path traversal attempts
+                file_part = defect_text.split("::")[0].strip()
+                if file_part.startswith(('..', '/', '\\')) or '..' in file_part:
+                    issues.append(f"{defect_section} contains potential path traversal: {file_part}")
+                # Only allow alphanumerics, underscores, dots, and :: in the file::function part
+                # Allow descriptive text after the file::function reference
+                file_func_part = defect_text.split("—")[0].strip() if "—" in defect_text else defect_text
+                if not re.match(r'^[\w\.\-]+::[\w\.\-]+$', file_func_part.replace(' ', '')):
+                    issues.append(f"{defect_section} file::function part contains invalid characters: {file_func_part}")
     
     # Check for structured feedback if present
     if feedback_section in text:
@@ -226,6 +267,10 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             # Implement mode should mention executed code or code state
             if "executed code" not in text.lower() and "code state" not in text.lower():
                 issues.append("Implement mode output should mention 'executed code' or 'code state'")
+    
+    # Token budget check (warning only)
+    if len(text) > 8000:  # Rough estimate: ~2000 tokens
+        issues.append("WARNING: Evaluator output may exceed token budget (consider truncation)")
     
     is_valid = len(issues) == 0
     return is_valid, issues
