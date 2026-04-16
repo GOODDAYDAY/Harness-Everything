@@ -74,6 +74,11 @@ SCORE: 8.1"""
     is_valid, issues = validate_evaluator_output(basic_output, "basic")
     assert is_valid, f"Basic evaluator output should be valid, issues: {issues}"
     
+    # Test that DELTA VS PRIOR BEST header is present and has content
+    assert "DELTA VS PRIOR BEST:" in basic_output
+    delta_line = [line for line in basic_output.split('\n') if line.startswith("DELTA VS PRIOR BEST:")][0]
+    assert len(delta_line) > len("DELTA VS PRIOR BEST:") + 1  # Must have descriptive text
+    
     # Test diffusion evaluator structure
     diffusion_output = """DELTA VS PRIOR BEST: Better risk assessment
 ANALYSIS:
@@ -90,15 +95,21 @@ SCORE: 8.1"""
     
     is_valid, issues = validate_evaluator_output(diffusion_output, "diffusion")
     assert is_valid, f"Diffusion evaluator output should be valid, issues: {issues}"
+    
+    # Test that DELTA VS PRIOR BEST header is present and has content
+    assert "DELTA VS PRIOR BEST:" in diffusion_output
+    delta_line = [line for line in diffusion_output.split('\n') if line.startswith("DELTA VS PRIOR BEST:")][0]
+    assert len(delta_line) > len("DELTA VS PRIOR BEST:") + 1  # Must have descriptive text
 
 
 def test_extract_structured_feedback():
     """Test extraction of structured feedback from evaluator output."""
     from harness.evaluation.dual_evaluator import extract_structured_feedback
     
-    basic_output = """ANALYSIS:
-A. Correctness: 8.5
-B. Completeness: 7.0
+    basic_output = """DELTA VS PRIOR BEST: Better error handling
+ANALYSIS:
+A. Correctness: 8.5 — Logic is sound
+B. Completeness: 7.0 — Missing edge cases
 TOP DEFECT: test.py::function — missing error handling
 ACTIONABLE FEEDBACK:
 1. Add try/except in test.py::function
@@ -114,6 +125,7 @@ SCORE: 7.8"""
     assert len(feedback["feedback_items"]) == 2
     assert "Add try/except in test.py::function" in feedback["feedback_items"]
     assert feedback["improvement_suggestion"] == "Add unit tests"
+    assert feedback["delta"] == "Better error handling"
 
 
 def test_parse_score_with_markdown():
