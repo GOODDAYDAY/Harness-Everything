@@ -687,9 +687,14 @@ class PhaseRunner:
 
         Shared by both debate and implement rounds to avoid duplicating the
         evaluate → write-artifacts → log pattern.
+
+        The ``phase.mode`` value is forwarded to ``DualEvaluator.evaluate()``
+        so evaluators apply the correct rubric: debate mode evaluates plan
+        quality; implement mode evaluates executed code state.
         """
         dual_score = await self.dual_evaluator.evaluate(
             eval_subject, file_context,
+            mode=phase.mode,
             basic_system=self.config.dual_evaluator.basic_system,
             diffusion_system=self.config.dual_evaluator.diffusion_system,
         )

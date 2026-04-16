@@ -75,6 +75,13 @@ _CONV_PRUNE_TARGET_CHARS: int = 400_000      # prune down to this target
 # tool output it just received; only older outputs are compressed.
 _CONV_PRUNE_KEEP_RECENT_PAIRS: int = 4
 
+# Minimum character count for a non-tool-call LLM response to be considered
+# plausible.  Responses shorter than this with no tool calls almost always
+# indicate truncation, a stop-sequence mis-fire, or a context-overflow
+# condition — not a valid empty answer.  A warning is logged so operators can
+# diagnose silent failures before they corrupt scores or produce empty output.
+_SHORT_RESPONSE_CHARS: int = 50
+
 
 async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> Any:
     """Execute ``coro_factory()`` with exponential-backoff retry on transient errors.
@@ -172,6 +179,22 @@ def _prune_conversation_tool_outputs(
     Preserves the *keep_recent_pairs* most recent assistant+user (tool-result)
     message pairs verbatim so the model still sees fresh context.  Only
     tool-result content blocks in older user-role messages are truncated.
+
+    SAFETY INVARIANTS (verified by design, not runtime checks):
+    1. System prompt is NEVER at risk.  It is passed as the ``system`` keyword
+       argument directly to the Anthropic API, separate from ``messages``.  It
+       is not present in the ``conversation`` list at all — so this function
+       physically cannot touch it.
+    2. Plain-text initial user messages are NEVER pruned.  The candidate index
+       list is built by selecting only user messages whose ``content`` is a
+       *list* containing at least one ``{"type": "tool_result"}`` block.  A
+       plain-text opening turn has ``content`` as a bare string, so it is
+       excluded from pruning candidates before the loop even starts.
+    3. No messages are removed or reordered.  The Anthropic API requires that
+       every ``tool_use`` block has a matching ``tool_result`` block with the
+       same ``tool_use_id``.  Removing messages would break this invariant.
+       This function only shortens text inside existing tool_result sub-blocks,
+       keeping the structural pairing intact.
 
     The Anthropic API requires structural integrity: every tool_use block must
     have a matching tool_result block with the same ID.  This function never
@@ -382,8 +405,27 @@ class LLM:
                 elapsed,
             )
 
+        response_text = "\n".join(text_parts)
+
+        # Warn when the model returns a very short text response with no tool
+        # calls.  Responses shorter than _SHORT_RESPONSE_CHARS that contain no
+        # tool calls usually indicate a truncated or failed generation — the
+        # model ran out of tokens, was cut off by a stop sequence, or received
+        # a context that left nothing meaningful to say.  These near-empty
+        # responses look like valid LLMResponse objects but carry no useful
+        # content; scoring them later (e.g. in parse_score) silently returns 0.
+        if len(response_text) < _SHORT_RESPONSE_CHARS and not tool_calls:
+            log.warning(
+                "LLM call: suspiciously short response (%d chars, no tool calls) — "
+                "possible truncation or failed generation "
+                "(stop=%r, model=%s)",
+                len(response_text),
+                resp.stop_reason,
+                self.config.model,
+            )
+
         return LLMResponse(
-            text="\n".join(text_parts),
+            text=response_text,
             tool_calls=tool_calls,
             stop_reason=resp.stop_reason,
             raw=resp,
