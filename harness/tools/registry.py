@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from typing import Any
 
 from harness.config import HarnessConfig
@@ -106,9 +108,21 @@ class ToolRegistry:
         if err := _check_unknown_params(tool, params):
             return err
 
+        _t0 = time.monotonic()
         try:
-            return await tool.execute(config, **params)
+            result = await tool.execute(config, **params)
+            _duration_ms = round((time.monotonic() - _t0) * 1000)
+            log.info(
+                "TOOL_TRACE %s",
+                json.dumps({
+                    "name": name,
+                    "success": not result.is_error,
+                    "duration_ms": _duration_ms,
+                }),
+            )
+            return result
         except TypeError as exc:
+            _duration_ms = round((time.monotonic() - _t0) * 1000)
             # Most common cause: the LLM omitted a required parameter or passed
             # a value of the wrong type.  Surfacing this as a schema error gives
             # the model an accurate signal to fix its next call rather than
@@ -119,19 +133,42 @@ class ToolRegistry:
                 f"typed per the tool's JSON schema.  "
                 f"Required params: {_required_params(tool)}"
             )
-            log.warning("registry: schema error in tool %r: %s", name, exc)
+            log.warning(
+                "tool_call: name=%r schema_error duration_ms=%d — %s",
+                name, _duration_ms, exc,
+            )
+            log.info(
+                "TOOL_TRACE %s",
+                json.dumps({"name": name, "success": False, "duration_ms": _duration_ms, "error_type": "schema"}),
+            )
             return ToolResult(error=msg, is_error=True)
         except PermissionError as exc:
+            _duration_ms = round((time.monotonic() - _t0) * 1000)
             msg = (
                 f"PERMISSION ERROR in {name!r}: {exc}. "
                 f"The path may be outside the allowed directories.  "
                 f"Allowed paths: {config.allowed_paths}"
             )
-            log.warning("registry: permission error in tool %r: %s", name, exc)
+            log.warning(
+                "tool_call: name=%r permission_error duration_ms=%d — %s",
+                name, _duration_ms, exc,
+            )
+            log.info(
+                "TOOL_TRACE %s",
+                json.dumps({"name": name, "success": False, "duration_ms": _duration_ms, "error_type": "permission"}),
+            )
             return ToolResult(error=msg, is_error=True)
         except Exception as exc:
+            _duration_ms = round((time.monotonic() - _t0) * 1000)
             msg = f"TOOL ERROR in {name!r} — {type(exc).__name__}: {exc}"
-            log.warning("registry: unexpected error in tool %r: %s", name, exc)
+            log.warning(
+                "tool_call: name=%r tool_error duration_ms=%d — %s",
+                name, _duration_ms, exc,
+            )
+            log.info(
+                "TOOL_TRACE %s",
+                json.dumps({"name": name, "success": False, "duration_ms": _duration_ms, "error_type": "tool"}),
+            )
             return ToolResult(error=msg, is_error=True)
 
 
