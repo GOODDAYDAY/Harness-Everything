@@ -308,6 +308,7 @@ class FilePatchTool(Tool):
         "Use dry_run=true to preview changes without writing."
     )
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

@@ -149,6 +149,7 @@ class FindReplaceTool(Tool):
         "Safety cap: max_files_changed (default 50) limits blast radius."
     )
     requires_path_check = True
+    tags = frozenset({"file_write"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

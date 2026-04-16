@@ -60,6 +60,7 @@ class DataFlowTool(Tool):
         "Uses AST analysis — no external dependencies."
     )
     requires_path_check = False  # manual allowed_paths enforcement via _check_dir_root
+    tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

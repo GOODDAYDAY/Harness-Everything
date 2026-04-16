@@ -291,6 +291,7 @@ class TestRunnerTool(Tool):
         "Set format='json' for machine-readable output."
     )
     requires_path_check = True
+    tags = frozenset({"testing"})
 
     # Memoised: None = unknown, True = available, False = unavailable
     _json_report_available: bool | None = None

@@ -306,6 +306,7 @@ class SymbolExtractorTool(Tool):
         "Does not execute any code."
     )
     requires_path_check = True
+    tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

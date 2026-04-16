@@ -383,6 +383,7 @@ class WebSearchTool(Tool):
     )
     # No path check needed — this tool accesses the network, not the filesystem.
     requires_path_check = False
+    tags = frozenset({"network"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

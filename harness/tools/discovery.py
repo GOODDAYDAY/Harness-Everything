@@ -202,6 +202,7 @@ class ToolDiscoveryTool(Tool):
         "Useful for discovering available capabilities before choosing a tool."
     )
     requires_path_check = False  # no filesystem access
+    tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

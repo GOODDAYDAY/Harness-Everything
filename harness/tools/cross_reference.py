@@ -74,6 +74,7 @@ class CrossReferenceTool(Tool):
         "regex, no false positives from comments."
     )
     requires_path_check = False  # manual allowed_paths enforcement in execute()
+    tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

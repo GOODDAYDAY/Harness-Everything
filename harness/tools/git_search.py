@@ -91,6 +91,7 @@ class GitSearchTool(Tool):
         "mode='log_file': commit history for a specific file path."
     )
     requires_path_check = False  # uses workspace root; no arbitrary path access
+    tags = frozenset({"git"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

@@ -50,6 +50,7 @@ class FeatureSearchTool(Tool):
         "No external dependencies — pure AST and text analysis."
     )
     requires_path_check = False  # manual allowed_paths enforcement via _check_dir_root
+    tags = frozenset({"search"})
 
     def input_schema(self) -> dict[str, Any]:
         return {

@@ -16,6 +16,7 @@ class GlobSearchTool(Tool):
         "Returns matching file paths sorted by modification time."
     )
     requires_path_check = True
+    tags = frozenset({"search"})
 
     def input_schema(self) -> dict[str, Any]:
         return {
