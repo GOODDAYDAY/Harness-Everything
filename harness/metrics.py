@@ -41,6 +41,7 @@ class MetricsCollector:
     output_path: Path
     _phases: list[PhaseMetrics] = field(default_factory=list)
     error_count: int = 0
+    _phase_details: list[InnerRoundMetrics] = field(default_factory=list)
 
     @property
     def total_tool_turns(self) -> int:
@@ -104,8 +105,6 @@ class MetricsCollector:
             with contextlib.suppress(OSError):
                 os.unlink(tmp)
             raise
-
-    _phase_details: list[InnerRoundMetrics] = field(default_factory=list)
 
     def record_phase_detail(self, detail: InnerRoundMetrics) -> None:
         """Record per-inner-round metrics for post-run analysis.
