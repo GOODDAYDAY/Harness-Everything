@@ -425,9 +425,24 @@ class PhaseRunner:
 
         # 3. Run verification hooks (implement mode only)
         if phase.mode == "implement":
-            hooks = build_hooks(phase)
+            hooks = build_hooks(phase, pipeline_config=self.config)
+            # Build changes summary from tool call logs of the best inner round.
+            changes_summary = ""
+            if best_result and best_result.tool_call_log:
+                file_tools = {"write_file", "edit_file", "file_patch", "find_replace"}
+                changed = [
+                    e["tool"] for e in best_result.tool_call_log
+                    if e["tool"] in file_tools and e.get("success", True)
+                ]
+                if changed:
+                    changes_summary = f"{len(changed)} file edit(s)"
             for hook in hooks:
-                ctx = {"outer": outer, "phase_name": phase.name}
+                ctx = {
+                    "outer": outer,
+                    "phase_name": phase.name,
+                    "best_score": best_result.combined_score if best_result else 0.0,
+                    "changes_summary": changes_summary,
+                }
                 hook_result = await hook.run(self.harness, ctx)
                 log.info("Hook %s: passed=%s", hook.name, hook_result.passed)
 
