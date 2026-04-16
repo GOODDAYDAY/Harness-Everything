@@ -282,6 +282,40 @@ class TestPathSecurity:
         assert result.is_error
         assert "PERMISSION ERROR" in result.error
 
+    def test_resolve_and_check_blocks_unicode_homoglyph(self, tmp_path):
+        """_resolve_and_check must reject paths containing Unicode compatibility characters."""
+        from harness.tools.file_read import ReadFileTool
+        cfg = _make_config(str(tmp_path))
+        tool = ReadFileTool()
+        
+        # Test with superscript 2 (U+00B2) which NFKC normalizes to ASCII '2'
+        # This is a compatibility character that could be used to obscure the real filename
+        superscript_path = str(tmp_path / "file¹.txt")  # Note: superscript 1 (U+00B9)
+        result = _run(tool.execute(cfg, path=superscript_path))
+        
+        assert result.is_error
+        assert "PERMISSION ERROR" in result.error
+        assert "Unicode homoglyphs" in result.error
+        
+        # Test with decomposed e + acute accent (U+0065 U+0301) which NFKC normalizes to é (U+00E9)
+        decomposed_path = str(tmp_path / "cafe\u0301.txt")  # "cafe" + combining acute accent
+        result = _run(tool.execute(cfg, path=decomposed_path))
+        
+        assert result.is_error
+        assert "PERMISSION ERROR" in result.error
+        assert "Unicode homoglyphs" in result.error
+        
+        # Also test that legitimate Unicode characters are allowed
+        # e.g., "café.txt" with the precomposed é character (U+00E9)
+        legit_unicode = str(tmp_path / "café.txt")  # Precomposed é
+        legit_file = tmp_path / "café.txt"
+        legit_file.write_text("test content")
+        result = _run(tool.execute(cfg, path=legit_unicode))
+        
+        # Should succeed - legitimate Unicode filename
+        assert not result.is_error
+        assert "test content" in result.output
+
 
 # ---------------------------------------------------------------------------
 # 4. Config comment stripping: PipelineConfig.from_dict() and HarnessConfig.from_dict()
@@ -553,3 +587,47 @@ class TestParseScore:
         from harness.evaluation.dual_evaluator import parse_score
         text = "SCORE: 3\nSome analysis...\nSCORE: 9\n"
         assert parse_score(text) == 9.0
+
+
+class TestASTUtils:
+    """Tests for AST utility functions consolidated in _ast_utils.py."""
+    
+    def test_parent_class_nested(self):
+        """Test parent_class function with nested class inheritance."""
+        import ast
+        from harness.tools._ast_utils import parent_class, build_parent_map
+        
+        # Create AST for: class Outer: class Inner: pass
+        source = """
+class Outer:
+    class Inner:
+        pass
+"""
+        tree = ast.parse(source)
+        
+        # Find the Inner class node
+        inner_class = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "Inner":
+                inner_class = node
+                break
+        
+        assert inner_class is not None, "Inner class not found in AST"
+        
+        # Get parent map
+        parent_map = build_parent_map(tree)
+        
+        # Test parent_class function
+        result = parent_class(tree, inner_class)
+        assert result == "Outer", f"Expected 'Outer', got {result}"
+        
+        # Also test that parent_class returns None for top-level class
+        outer_class = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "Outer":
+                outer_class = node
+                break
+        
+        assert outer_class is not None, "Outer class not found in AST"
+        result = parent_class(tree, outer_class)
+        assert result is None, f"Expected None for top-level class, got {result}"

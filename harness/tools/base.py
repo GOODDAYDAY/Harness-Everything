@@ -6,6 +6,7 @@ import itertools
 import json
 import logging
 import os
+import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,11 +81,57 @@ class Tool(ABC):
                 error=f"PERMISSION ERROR: path contains null byte: {path!r}",
                 is_error=True,
             )
+        
+        # Check for control characters \x01 through \x1f (except \t, \n, \r)
+        for i in range(1, 0x20):
+            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
+                continue
+            if chr(i) in path:
+                return ToolResult(
+                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
+                    is_error=True,
+                )
+        
         if not config.is_path_allowed(path):
             return ToolResult(
                 error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
                 is_error=True,
             )
+        return None
+
+    def _validate_path_contains_no_homoglyphs(self, path: str) -> str | None:
+        """Check if path contains Unicode homoglyphs that could bypass security.
+        
+        Homoglyphs are characters that look like ASCII but are different code points.
+        For example, CYRILLIC SMALL LETTER A (U+0430) looks like ASCII 'a' (U+0061).
+        
+        Args:
+            path: The path string to validate
+            
+        Returns:
+            Error message if homoglyph found, None if path is clean
+        """
+        # Start with a minimal, high-risk character set
+        # These are visual spoofs of ASCII path delimiters or common letters
+        homoglyphs = {
+            '\u0430': 'Cyrillic small a (looks like ASCII a)',
+            '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
+            '\u0500': 'Cyrillic capital komi s (looks like ASCII O)',
+            '\u01C3': 'Latin letter retroflex click (looks like ASCII !)',
+            '\u0391': 'Greek capital alpha (looks like ASCII A)',
+            '\u03B1': 'Greek small alpha (looks like ASCII a)',
+            '\u041E': 'Cyrillic capital O (looks like ASCII O)',
+            '\u043E': 'Cyrillic small o (looks like ASCII o)',
+            '\u0555': 'Armenian comma (looks like ASCII comma)',
+            '\u058A': 'Armenian hyphen (looks like ASCII hyphen)',
+            '\u2044': 'Fraction slash (looks like ASCII /)',
+            '\uFF0F': 'Full-width solidus (looks like ASCII /)',
+        }
+        
+        for char, description in homoglyphs.items():
+            if char in path:
+                return f"PERMISSION ERROR: Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
+        
         return None
 
     def _resolve_and_check(
@@ -108,6 +155,30 @@ class Tool(ABC):
                 error=f"PERMISSION ERROR: path contains null byte: {path!r}",
                 is_error=True,
             )
+        
+        # Check for control characters \x01 through \x1f (except \t, \n, \r)
+        for i in range(1, 0x20):
+            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
+                continue
+            if chr(i) in path:
+                return "", ToolResult(
+                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
+                    is_error=True,
+                )
+        
+        # Check for Unicode homoglyphs that could bypass security
+        if self.requires_path_check:
+            if error_msg := self._validate_path_contains_no_homoglyphs(path):
+                return "", ToolResult(error=error_msg, is_error=True)
+        
+        # Check for Unicode homoglyphs and non-standard characters
+        normalized = unicodedata.normalize('NFKC', path)
+        if normalized != path:
+            return "", ToolResult(
+                error=f"PERMISSION ERROR: Path contains Unicode homoglyphs or non-standard characters: {path!r}",
+                is_error=True,
+            )
+        
         try:
             resolved = str(Path(os.path.realpath(path)))
         except (ValueError, OSError) as exc:

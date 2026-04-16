@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import glob as glob_mod
 import py_compile
-import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,26 +140,35 @@ class GitCommitHook(VerificationHook):
                 continue
 
             try:
-                # git add -A
-                add = subprocess.run(
-                    ["git", "add", "-A"],
-                    cwd=repo_path, capture_output=True, text=True, timeout=30,
+                # git add -A (async)
+                add_proc = await asyncio.create_subprocess_exec(
+                    "git", "add", "-A",
+                    cwd=repo_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                if add.returncode != 0:
-                    results.append(f"{repo}: git add failed: {add.stderr.strip()}")
+                stdout, stderr = await asyncio.wait_for(add_proc.communicate(), timeout=30)
+                if add_proc.returncode != 0:
+                    results.append(f"{repo}: git add failed: {stderr.decode().strip()}")
                     all_passed = False
                     continue
 
-                # git commit
-                commit = subprocess.run(
-                    ["git", "commit", "--allow-empty", "-m", commit_msg],
-                    cwd=repo_path, capture_output=True, text=True, timeout=30,
+                # git commit (async)
+                commit_proc = await asyncio.create_subprocess_exec(
+                    "git", "commit", "--allow-empty", "-m", commit_msg,
+                    cwd=repo_path,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                if commit.returncode == 0:
+                stdout, stderr = await asyncio.wait_for(commit_proc.communicate(), timeout=30)
+                if commit_proc.returncode == 0:
                     results.append(f"{repo}: committed")
                 else:
-                    results.append(f"{repo}: commit failed: {commit.stderr.strip()}")
+                    results.append(f"{repo}: commit failed: {stderr.decode().strip()}")
                     all_passed = False
+            except asyncio.TimeoutError:
+                results.append(f"{repo}: git command timed out")
+                all_passed = False
             except Exception as e:
                 results.append(f"{repo}: error: {e}")
                 all_passed = False

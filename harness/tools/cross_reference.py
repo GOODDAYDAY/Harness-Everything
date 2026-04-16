@@ -7,53 +7,16 @@ import json
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools._ast_utils import build_parent_map
+from harness.tools._ast_utils import (
+    parent_class,
+    function_signature,
+    call_name,
+    extract_callees,
+)
 from harness.tools.base import Tool, ToolResult
 
 
-def _parent_class(tree: ast.AST, target: ast.AST) -> str | None:
-    """Return the *direct* parent ClassDef name of `target`, or None."""
-    parent_map = build_parent_map(tree)
-    node: ast.AST | None = target
-    while node is not None:
-        p = parent_map.get(id(node))
-        if p is None:
-            return None
-        if isinstance(p, ast.ClassDef):
-            return p.name
-        node = p
-    return None
 
-
-def _sig(node: ast.FunctionDef | ast.AsyncFunctionDef, lines: list[str]) -> str:
-    return lines[node.lineno - 1].strip()
-
-
-def _call_name(node: ast.Call) -> str | None:
-    if isinstance(node.func, ast.Name):
-        return node.func.id
-    if isinstance(node.func, ast.Attribute):
-        if isinstance(node.func.value, ast.Name):
-            return f"{node.func.value.id}.{node.func.attr}"
-        return node.func.attr
-    return None
-
-
-def _extract_callees(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
-    cap: int = 30,
-) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for n in ast.walk(node):
-        if isinstance(n, ast.Call):
-            name = _call_name(n)
-            if name and name not in seen:
-                seen.add(name)
-                result.append(name)
-                if len(result) >= cap:
-                    break
-    return result
 
 
 _MAX_OUTPUT_BYTES = 8_192
@@ -135,15 +98,15 @@ class CrossReferenceTool(Tool):
                     name_match = node.name == func_name
                     class_match = (
                         class_name is None
-                        or _parent_class(tree, node) == class_name
+                        or parent_class(tree, node) == class_name
                     )
                     if name_match and class_match and definition is None:
                         definition = {
                             "file": rel,
                             "line": node.lineno,
-                            "signature": _sig(node, lines),
+                            "signature": function_signature(node, lines),
                         }
-                        callees = _extract_callees(node)
+                        callees = extract_callees(node)
                 elif class_name is None and isinstance(node, ast.ClassDef):
                     if node.name == func_name and definition is None:
                         definition = {
@@ -154,7 +117,7 @@ class CrossReferenceTool(Tool):
 
                 # Caller detection
                 if isinstance(node, ast.Call) and len(callers) < 50:
-                    cname = _call_name(node)
+                    cname = call_name(node)
                     if cname and func_name in cname:
                         lineno = getattr(node, "lineno", 0)
                         snippet = (
