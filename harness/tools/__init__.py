@@ -17,7 +17,7 @@ Current optional tools
 ~~~~~~~~~~~~~~~~~~~~~~
 * ``web_search``  — DuckDuckGo search + page fetch; network access required.
 
-Current default tools (30 of 30)
+Current default tools (31 of 31)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 All other tools in this module.
 """
@@ -51,6 +51,7 @@ from harness.tools.call_graph import CallGraphTool
 from harness.tools.dependency_analyzer import DependencyAnalyzerTool
 from harness.tools.http_client import HttpRequestTool
 from harness.tools.json_transform import JsonTransformTool
+from harness.tools.discovery import ToolDiscoveryTool, discover_tools
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ DEFAULT_TOOLS: list[Tool] = [
     DependencyAnalyzerTool(),
     HttpRequestTool(),
     JsonTransformTool(),
+    ToolDiscoveryTool(),
 ]
 
 # ---------------------------------------------------------------------------
