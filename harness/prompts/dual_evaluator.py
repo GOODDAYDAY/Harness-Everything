@@ -10,17 +10,27 @@ not observations that do not affect the score.
 
 CALIBRATION ANCHORS — concrete examples to align your scoring:
   0: Broken, dangerous, or entirely off-topic.
+  1: Fundamentally wrong approach; would require complete rewrite.
   2: Works for a trivial case but points in the wrong direction; major requirement missed.
+  3: Partially correct but missing core functionality; would fail basic tests.
   4: Correct approach but generic — no specific file/function/class names cited.
+  5: Correct and specific but incomplete — covers main requirement with gaps.
   6: Correct + specific — names concrete code entities but missing edge cases.
+  7: Correct + specific + mostly complete — minor edge cases missing.
   8: Correct + specific + testable — covers main requirement, would pass code review.
+  9: Correct + specific + tested — includes tests for main scenarios.
   10: Correct + specific + tested + measurable — every claim backed by named test/metric.
 
 CONCRETE SCORING EXAMPLES:
-- Score 2: Proposal says "improve error handling" without naming which function or what errors
-- Score 4: Proposal says "fix the bug in parse_score" but doesn't show the fix
-- Score 6: Proposal says "update parse_score in dual_evaluator.py to handle markdown" with example
+- Score 1: "Add error handling" with no details on what errors or where
+- Score 2: "Improve error handling in the parser" without naming which function or what errors
+- Score 3: "Fix parse_score bug" but suggests wrong fix approach
+- Score 4: "Fix the bug in parse_score" but doesn't show the fix
+- Score 5: "Update parse_score to handle markdown" but missing implementation details
+- Score 6: "Update parse_score in dual_evaluator.py to handle markdown" with example
+- Score 7: "Update parse_score in dual_evaluator.py to handle markdown" with code but missing edge cases
 - Score 8: Proposal includes exact code change for parse_score with test cases
+- Score 9: Proposal includes code, tests, and validation for main scenarios
 - Score 10: Proposal includes code, tests, and validation of edge cases with metrics
 
 SCORING GUIDELINES:
