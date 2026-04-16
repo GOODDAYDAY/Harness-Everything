@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -402,26 +403,47 @@ class PhaseRunner:
         best_result: InnerResult | None = None
         carry_syntax_errors = ""
 
-        for inner in range(n_inner):
-            # Resume check
-            if self.checkpoint.is_inner_done(outer, label, inner):
-                result = self._load_inner_result(outer, label, inner)
-                log.info("Phase %s inner %d: resumed from disk", label, inner + 1)
-            else:
-                current_prior = self._select_prior(
-                    inner, prior_best, best_result
+        if phase.mode == "debate" and n_inner > 1:
+            # Debate rounds are side-effect-free (no file writes), so we can
+            # run them all in parallel with the same initial prior.  This
+            # cuts wall-clock time roughly by n_inner.
+            async def _debate_inner(idx: int) -> InnerResult:
+                if self.checkpoint.is_inner_done(outer, label, idx):
+                    r = self._load_inner_result(outer, label, idx)
+                    log.info("Phase %s inner %d: resumed from disk", label, idx + 1)
+                    return r
+                r = await self._run_inner_round(
+                    outer, phase, idx, file_context, prior_best, "",
                 )
-                result = await self._run_inner_round(
-                    outer, phase, inner, file_context,
-                    current_prior, carry_syntax_errors,
-                )
-                self.checkpoint.mark_inner_done(outer, label, inner)
+                self.checkpoint.mark_inner_done(outer, label, idx)
+                return r
 
-            all_results.append(result)
-            carry_syntax_errors = result.syntax_errors
+            all_results = list(
+                await asyncio.gather(*[_debate_inner(i) for i in range(n_inner)])
+            )
+            best_result = max(all_results, key=lambda r: r.combined_score)
+        else:
+            # Implement mode (or single inner round): stay sequential because
+            # tool_use rounds mutate the workspace and would conflict.
+            for inner in range(n_inner):
+                if self.checkpoint.is_inner_done(outer, label, inner):
+                    result = self._load_inner_result(outer, label, inner)
+                    log.info("Phase %s inner %d: resumed from disk", label, inner + 1)
+                else:
+                    current_prior = self._select_prior(
+                        inner, prior_best, best_result
+                    )
+                    result = await self._run_inner_round(
+                        outer, phase, inner, file_context,
+                        current_prior, carry_syntax_errors,
+                    )
+                    self.checkpoint.mark_inner_done(outer, label, inner)
 
-            if best_result is None or result.combined_score > best_result.combined_score:
-                best_result = result
+                all_results.append(result)
+                carry_syntax_errors = result.syntax_errors
+
+                if best_result is None or result.combined_score > best_result.combined_score:
+                    best_result = result
 
         # 3. Run verification hooks (implement mode only)
         if phase.mode == "implement":
