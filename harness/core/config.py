@@ -44,7 +44,7 @@ class HarnessConfig:
     # (e.g., Claude Code's 127.0.0.1:9099).
     # Examples:
     #   "https://api.anthropic.com"            — Anthropic direct
-    #   "https://api.deepseek.com/v1"          — DeepSeek
+    #   "https://api.deepseek.com/anthropic"   — DeepSeek (Anthropic-compat; /v1 is OpenAI-format)
     #   "https://your-gateway.example.com/v1"  — custom gateway
     api_key: str = ""
     # API key / auth token.  If empty, uses ANTHROPIC_AUTH_TOKEN or
@@ -378,6 +378,12 @@ class PipelineConfig:
     auto_push_remote: str = "origin"
     auto_push_branch: str = ""     # empty = push current branch
 
+    # Auto-tag (configurable; legacy end-of-run tag still fires when interval=0)
+    auto_tag_interval: int = 0          # 0 = legacy end-of-run only; N = tag every N rounds
+    auto_tag_prefix: str = "v-auto"     # tag name prefix (legacy: "v-auto")
+    auto_tag_push: bool = False         # whether to git push the tag after creating it
+    auto_tag_min_score: float = 7.0     # minimum best_score to create a tag (legacy: 7.0)
+
     # Rich commit metadata
     rich_commit_metadata: bool = False  # include score/round/phase in commit messages
 
@@ -460,6 +466,16 @@ class PipelineConfig:
             raise ValueError(
                 f"PipelineConfig.auto_push_interval must be >= 0, "
                 f"got {self.auto_push_interval}"
+            )
+        if self.auto_tag_interval < 0:
+            raise ValueError(
+                f"PipelineConfig.auto_tag_interval must be >= 0, "
+                f"got {self.auto_tag_interval}"
+            )
+        if not isinstance(self.auto_tag_prefix, str) or not self.auto_tag_prefix.strip():
+            raise ValueError(
+                f"PipelineConfig.auto_tag_prefix must be a non-empty string, "
+                f"got {self.auto_tag_prefix!r}"
             )
         if self.run_mode not in ("automatic", "manual"):
             raise ValueError(

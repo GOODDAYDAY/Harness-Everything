@@ -1,0 +1,77 @@
+name: Deploy harness on tag
+
+on:
+  push:
+    tags:
+      - 'harness-r*'
+
+# Need write permission to advance the harness-last-good marker tag.
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: harness-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout (for advancing last-good tag locally)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H 43.128.100.101 >> ~/.ssh/known_hosts
+
+      - name: Smoke test new tag on server
+        id: smoke
+        continue-on-error: true
+        run: |
+          ssh ubuntu@43.128.100.101 'bash -se' <<EOF
+            set -e
+            cd /home/ubuntu/harness-everything
+            git fetch --tags --prune --force
+            git checkout ${{ github.ref_name }}
+            .venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
+            .venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineLoop; from harness.core.config import PipelineConfig; print('imports ok')"
+          EOF
+
+      - name: On smoke pass — advance harness-last-good tag
+        if: steps.smoke.outcome == 'success'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f harness-last-good ${{ github.ref_name }}
+          git push -f origin harness-last-good
+
+      - name: On smoke fail — rollback server to harness-last-good
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          ssh ubuntu@43.128.100.101 'bash -se' <<'EOF'
+            set -e
+            cd /home/ubuntu/harness-everything
+            git fetch --tags --prune --force
+            if ! git rev-parse --verify harness-last-good >/dev/null 2>&1; then
+              echo "ABORT: harness-last-good tag does not exist — first deploy was bad. Manual fix required."
+              exit 1
+            fi
+            git checkout harness-last-good
+            echo "ROLLED BACK to harness-last-good"
+          EOF
+
+      - name: Restart harness service
+        run: |
+          ssh ubuntu@43.128.100.101 'systemctl --user restart harness.service'
+
+      - name: Fail the workflow if smoke failed
+        if: steps.smoke.outcome == 'failure'
+        run: |
+          echo "::error::Smoke test failed for ${{ github.ref_name }} — server rolled back to harness-last-good. Investigate the bad tag before pushing more."
+          exit 1

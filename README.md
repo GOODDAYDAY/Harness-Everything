@@ -146,7 +146,7 @@ Switch to DeepSeek, a custom gateway, or any other provider by changing `base_ur
 ```json
 {
   "model": "deepseek-chat",
-  "base_url": "https://api.deepseek.com/v1",
+  "base_url": "https://api.deepseek.com/anthropic",
   "api_key": "your-deepseek-key"
 }
 ```
