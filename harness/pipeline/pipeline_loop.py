@@ -5,21 +5,26 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
-from harness.config import PipelineConfig
-from harness.llm import LLM
+from harness.core.config import PipelineConfig
+from harness.core.llm import LLM
 from harness.memory import MemoryStore
 from harness.metrics import MetricsCollector
-from harness.phase import PhaseConfig, PhaseResult
-from harness.phase_runner import PhaseRunner
+from harness.pipeline.phase import PhaseConfig, PhaseResult
+from harness.pipeline.phase_runner import PhaseRunner
 from harness.tools import build_registry
 
 log = logging.getLogger(__name__)
+
+# Number of consecutive declining round scores that triggers an early-stop
+# warning and is logged for operators.
+_DECLINE_WARN_STREAK: int = 3
 
 # Matches the "**Best**: 7.5" line written by PhaseRunner._write_phase_summary.
 _BEST_SCORE_RE = re.compile(r"^\*\*Best\*\*:\s*(\d+(?:\.\d+)?)", re.MULTILINE)
@@ -100,6 +105,15 @@ class PipelineLoop:
         no_improve_count = 0
         all_round_results: list[list[PhaseResult]] = []
         pipeline_start = time.monotonic()
+        # score_history: (round_index_1based, score) — used for trend detection
+        # and the run-level summary.json
+        score_history: list[dict] = []
+        # Consecutive-decline tracking for trend detection (Priority 4)
+        _decline_streak: int = 0
+        _prev_score: float | None = None
+        # Run-level tool call counters for summary.json tool_error_rate
+        _total_tool_calls: int = 0
+        _total_tool_errors: int = 0
 
         self.metrics = MetricsCollector(
             output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
@@ -138,8 +152,38 @@ class PipelineLoop:
                 }),
             )
 
+            score_history.append({"round": outer + 1, "score": round(round_score, 2)})
+
+            # --- Priority 4: Score trend detection ---
+            # Detect 3 consecutive declining scores and log a warning.
+            if _prev_score is not None:
+                if round_score < _prev_score:
+                    _decline_streak += 1
+                    if _decline_streak >= _DECLINE_WARN_STREAK:
+                        log.warning(
+                            "TREND WARNING: score has declined for %d consecutive "
+                            "round(s) (%.1f → %.1f → … → %.1f). "
+                            "Consider adjusting the prompt or stopping early.",
+                            _decline_streak,
+                            score_history[-_decline_streak]["score"],
+                            score_history[-1]["score"],
+                            round_score,
+                        )
+                else:
+                    _decline_streak = 0
+            _prev_score = round_score
+
             # Write round summary
             self._write_round_summary(outer, all_round_results[-1], prior_best, round_score)
+
+            # --- Priority 1: Per-round structured metrics.json ---
+            self._write_round_metrics_json(outer, all_round_results[-1], round_score, round_elapsed)
+            # Accumulate run-level tool call counts from the round's inner results
+            for _pr in all_round_results[-1]:
+                for _ir in _pr.inner_results:
+                    _tcl = getattr(_ir, "tool_call_log", None) or []
+                    _total_tool_calls += len(_tcl)
+                    _total_tool_errors += sum(1 for t in _tcl if not t.get("success", True))
 
             # Early stopping — always update best_round_score, but only count
             # non-improvement from round 2 onwards.  Round 1 (outer == 0)
@@ -191,10 +235,24 @@ class PipelineLoop:
             f"## Final Proposal\n\n{prior_best or '(none)'}\n"
         )
 
+        # --- Priority 2: Write run-level summary.json ---
+        self._write_run_summary(
+            rounds_completed=len(all_round_results),
+            best_score=best_round_score,
+            score_history=score_history,
+            total_elapsed=total_elapsed,
+            total_tool_calls=_total_tool_calls,
+            total_tool_errors=_total_tool_errors,
+        )
+
         log.info(
             "Pipeline complete: rounds=%d  best=%.1f  total=%.1fs  artifacts=%s",
             len(all_round_results), best_round_score, total_elapsed, self.artifacts.run_dir,
         )
+
+        # --- Priority 5: Auto-tag when best_score > 7.0 ---
+        if best_round_score > 7.0:
+            self._auto_tag(best_round_score, len(all_round_results))
 
         return PipelineResult(
             success=True,
@@ -303,3 +361,154 @@ class PipelineLoop:
             f"## Best Proposal\n\n{best_proposal or '(none)'}\n"
         )
         self.artifacts.write(content, f"round_{outer + 1}", "summary.md")
+
+    def _write_round_metrics_json(
+        self,
+        outer: int,
+        results: list[PhaseResult],
+        round_score: float,
+        elapsed_s: float,
+    ) -> None:
+        """Write per-round structured metrics.json inside the round artifact dir.
+
+        Schema (Priority 1):
+        {
+            "round": <int>,
+            "score": <float>,
+            "elapsed_s": <float>,
+            "phases": [
+                {
+                    "phase": <label>,
+                    "best_score": <float>,
+                    "inner_rounds": <int>,
+                    "tool_calls": <int>   // sum across inner rounds
+                },
+                ...
+            ]
+        }
+        """
+        phases_data = []
+        for r in results:
+            # Use structured tool_call_log (populated in _run_implement_round).
+            # Fall back to line-count for any round where the field is absent
+            # (debate-mode rounds, resumed rounds without the field).
+            total_tool_calls = 0
+            error_tool_calls = 0
+            for ir in r.inner_results:
+                tcl = getattr(ir, "tool_call_log", None) or []
+                if tcl:
+                    total_tool_calls += len(tcl)
+                    error_tool_calls += sum(1 for t in tcl if not t.get("success", True))
+                else:
+                    # Fallback: count "- " prefixed lines in implement_log
+                    impl_log = getattr(ir, "implement_log", "") or ""
+                    if impl_log:
+                        total_tool_calls += impl_log.count("\n- ")
+            phases_data.append({
+                "phase": r.phase.label,
+                "best_score": round(r.best_score, 2),
+                "inner_rounds": len(r.inner_results),
+                "tool_calls": total_tool_calls,
+                "tool_error_calls": error_tool_calls,
+            })
+        total_round_calls = sum(p["tool_calls"] for p in phases_data)
+        total_round_errors = sum(p["tool_error_calls"] for p in phases_data)
+        payload = {
+            "round": outer + 1,
+            "score": round(round_score, 2),
+            "elapsed_s": round(elapsed_s, 2),
+            "phases": phases_data,
+            "tool_calls_total": total_round_calls,
+            "tool_error_rate": round(total_round_errors / total_round_calls, 3) if total_round_calls else 0.0,
+        }
+        try:
+            self.artifacts.write(
+                json.dumps(payload, indent=2),
+                f"round_{outer + 1}",
+                "metrics.json",
+            )
+        except Exception as exc:
+            log.warning("_write_round_metrics_json: failed to write metrics: %s", exc)
+
+    def _write_run_summary(
+        self,
+        rounds_completed: int,
+        best_score: float,
+        score_history: list[dict],
+        total_elapsed: float,
+        total_tool_calls: int = 0,
+        total_tool_errors: int = 0,
+    ) -> None:
+        """Write run-level summary.json at the root of the artifact store.
+
+        Schema (Priority 2):
+        {
+            "total_rounds": <int>,
+            "best_score": <float>,
+            "score_history": [{"round": <int>, "score": <float>}, ...],
+            "tool_error_rate": <float>,   // fraction of calls that returned an error
+            "total_tool_calls": <int>,
+            "elapsed_total_s": <float>
+        }
+        """
+        tool_error_rate = (
+            round(total_tool_errors / total_tool_calls, 3)
+            if total_tool_calls > 0 else 0.0
+        )
+        payload: dict = {
+            "total_rounds": rounds_completed,
+            "best_score": round(best_score, 2),
+            "score_history": score_history,
+            "tool_error_rate": tool_error_rate,
+            "total_tool_calls": total_tool_calls,
+            "elapsed_total_s": round(total_elapsed, 2),
+        }
+        # Also include MetricsCollector phase-level totals when available
+        if hasattr(self, "metrics") and self.metrics is not None:
+            payload["metrics_tool_turns"] = sum(
+                p.total_tool_turns for p in self.metrics._phases
+            )
+        try:
+            self.artifacts.write(json.dumps(payload, indent=2), "summary.json")
+            log.info(
+                "summary.json written: rounds=%d best=%.1f tool_error_rate=%.3f elapsed=%.1fs",
+                rounds_completed, best_score, tool_error_rate, total_elapsed,
+            )
+        except Exception as exc:
+            log.warning("_write_run_summary: failed to write summary.json: %s", exc)
+
+    def _auto_tag(self, best_score: float, rounds_completed: int) -> None:
+        """Create a git tag when best_score > 7.0 (Priority 5).
+
+        Tag format: ``v-pipeline-score<score>-r<rounds>-auto``
+        Example:    ``v-pipeline-score8.5-r3-auto``
+
+        Uses subprocess to call ``git tag`` in the workspace directory.
+        Failures (not a git repo, tag already exists, etc.) are logged as
+        warnings and never raise — a tagging failure must not abort the run.
+        """
+        tag_name = (
+            f"v-pipeline-score{best_score:.1f}-r{rounds_completed}-auto"
+            .replace(".", "_")
+        )
+        message = (
+            f"Auto-tag: pipeline complete, best_score={best_score:.1f}, "
+            f"rounds={rounds_completed}"
+        )
+        try:
+            result = subprocess.run(
+                ["git", "tag", "-a", tag_name, "-m", message],
+                cwd=self.config.harness.workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                log.info("Auto-tag created: %s", tag_name)
+            else:
+                log.warning(
+                    "Auto-tag %r failed (rc=%d): %s",
+                    tag_name, result.returncode, result.stderr.strip(),
+                )
+        except Exception as exc:
+            log.warning("Auto-tag failed: %s", exc)
