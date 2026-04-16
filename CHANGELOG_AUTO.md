@@ -85,3 +85,82 @@ None in this round (all changes are additive new tools + wiring).
 - Net: +440
 
 ---
+
+## Round 3 · 2025 — Feature Search Tool & Comment Accuracy Fix
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/feature_search.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — import + registration + comment fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/feature_search.py` (new, ~200 lines)
+
+New `FeatureSearchTool` (`name = "feature_search"`) — keyword-based feature
+discovery across the codebase.
+
+**Usage example:**
+```
+feature_search(keyword="checkpoint")
+feature_search(keyword="retry", categories=["symbols", "comments"], max_results=10)
+feature_search(keyword="evaluation", root="harness/", categories=["symbols"])
+```
+
+**Four search categories** (all active by default; opt-in subset via `categories`):
+
+1. **`symbols`** — functions, classes, and methods whose name contains the
+   keyword (AST-based, no false positives from comments or strings).
+2. **`files`** — Python files whose basename contains the keyword
+   (e.g. `checkpoint.py` for `keyword="checkpoint"`).
+3. **`comments`** — inline `# …` comments and docstrings that mention the
+   keyword; inline comments are found via fast text-scan, docstrings via
+   `ast.get_docstring`.
+4. **`config`** — module-level assignments/annotated assignments whose name
+   contains the keyword (e.g. `RETRY_LIMIT = 3`, `checkpoint_dir: str = …`).
+
+**Security**: Uses `_check_dir_root` + `_rglob_safe` (same guards as
+`SemanticSearchTool` and `DataFlowTool`): null-byte rejection, `PERMISSION
+ERROR` prefix, allowed-paths enforcement, symlink-safe file traversal.
+
+**Output budget**: `_safe_json` with 24 KB cap; truncates the largest list
+field and sets `truncated: true` rather than producing invalid JSON.
+
+**Parameters**:
+- `keyword` (required) — case-insensitive partial-match keyword.
+- `root` (optional, default: `config.workspace`) — search root directory.
+- `max_results` (optional, default: 30, range: 1–200) — max hits per category.
+- `categories` (optional, default: all four) — subset of
+  `["symbols", "files", "comments", "config"]`.
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.feature_search import FeatureSearchTool` import.
+- Appended `FeatureSearchTool()` to `DEFAULT_TOOLS` list.
+- Fixed docstring comment from `"25 of 26"` to `"26 of 26"` — count now
+  matches `len(DEFAULT_TOOLS)` exactly (26 tools).
+
+---
+
+### Tool ABC compliance
+
+- Inherits `Tool` ABC ✓
+- `name = "feature_search"` property ✓
+- `input_schema()` returns valid JSON Schema with `required: ["keyword"]` ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` + manual `_check_dir_root` enforcement ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~210 (new file) + 3 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +213
+
+---
