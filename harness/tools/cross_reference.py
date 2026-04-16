@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import json
-from pathlib import Path
 from typing import Any
 
 from harness.config import HarnessConfig
@@ -108,25 +107,15 @@ class CrossReferenceTool(Tool):
         root: str = "",
         include_tests: bool = True,
     ) -> ToolResult:
-        # Path security — enforce against allowed_paths
-        search_root = Path(root).resolve() if root else Path(config.workspace).resolve()
-        allowed = [Path(p).resolve() for p in config.allowed_paths]
-        if not any(
-            search_root == a or search_root.is_relative_to(a) for a in allowed
-        ):
-            return ToolResult(
-                error=(
-                    f"PERMISSION ERROR: root {str(search_root)!r} is outside "
-                    f"allowed_paths {config.allowed_paths}"
-                ),
-                is_error=True,
-            )
+        search_root, allowed, err = self._check_dir_root(config, root)
+        if err:
+            return err
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
         func_name = parts[1] if len(parts) == 2 else parts[0]
 
-        py_files = sorted(search_root.rglob("*.py"))[:500]
+        py_files = self._rglob_safe(search_root, "*.py", allowed)
 
         definition: dict[str, Any] | None = None
         callers: list[dict[str, Any]] = []

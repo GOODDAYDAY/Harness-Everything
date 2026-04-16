@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import itertools
+import json
+import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from harness.config import HarnessConfig
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,3 +79,119 @@ class Tool(ABC):
                 is_error=True,
             )
         return None
+
+    def _check_dir_root(
+        self,
+        config: HarnessConfig,
+        root: str,
+    ) -> tuple[Path, list[Path], ToolResult | None]:
+        """Validate *root* against allowed_paths.
+
+        Returns (resolved_root, allowed_list, None) on success or
+        (Path('.'), [], error_ToolResult) on failure.
+
+        Returns the pre-resolved allowed list as the second element so
+        callers never re-derive it (eliminates the asymmetry present in
+        the inline copies in cross_reference.py and semantic_search.py).
+
+        Guards:
+        - Null-byte rejection before any Path operation.
+        - 'PERMISSION ERROR' prefix so HarnessLoop's error-category logic fires.
+        """
+        if "\x00" in root:
+            return Path("."), [], ToolResult(
+                error=f"PERMISSION ERROR: root contains null byte: {root!r}",
+                is_error=True,
+            )
+        search_root = (
+            Path(root).resolve() if root else Path(config.workspace).resolve()
+        )
+        allowed = [Path(p).resolve() for p in config.allowed_paths]
+        if not any(
+            search_root == a or search_root.is_relative_to(a) for a in allowed
+        ):
+            return search_root, [], ToolResult(
+                error=(
+                    f"PERMISSION ERROR: root {str(search_root)!r} is outside "
+                    f"allowed_paths {config.allowed_paths}"
+                ),
+                is_error=True,
+            )
+        return search_root, allowed, None
+
+    @staticmethod
+    def _rglob_safe(
+        root: Path,
+        pattern: str,
+        allowed: list[Path],
+        limit: int = 500,
+    ) -> list[Path]:
+        """rglob that rejects files resolving outside allowed_paths.
+
+        Uses itertools.islice on the raw generator BEFORE sorting to avoid
+        materialising the full file list into memory (fixes the OOM risk
+        present when sorted() wraps an unbounded rglob generator directly).
+        OSError on dangling symlinks is silently skipped.
+
+        NOTE: Python < 3.13 rglob follows symlinks during traversal.
+        The islice(limit * 4) cap bounds memory exposure to 4× limit entries
+        before the allowed-paths filter runs. Upgrade path: pass
+        follow_symlinks=False to rglob when Python 3.13 is baseline.
+        """
+        # islice at 4× limit so we have headroom after the allowed-path filter
+        # without materialising the full workspace.
+        candidates = itertools.islice(root.rglob(pattern), limit * 4)
+        results: list[Path] = []
+        for f in candidates:
+            if len(results) >= limit:
+                break
+            try:
+                resolved = f.resolve()
+            except OSError:
+                log.debug("_rglob_safe: skipping unresolvable path %s", f)
+                continue
+            if any(resolved == a or resolved.is_relative_to(a) for a in allowed):
+                results.append(f)
+            else:
+                log.debug(
+                    "_rglob_safe: skipping %s — resolves outside allowed_paths",
+                    f,
+                )
+        return results
+
+    @staticmethod
+    def _safe_json(obj: object, max_bytes: int = 24_000) -> str:
+        """Serialize *obj* to JSON, trimming list fields if the result
+        exceeds *max_bytes*.
+
+        Produces valid JSON with a top-level 'truncated: true' flag rather
+        than byte-slicing the serialized string (which produces invalid JSON).
+        Iterates at most 20 times; if still over budget, returns a minimal
+        error envelope. The 20-iteration cap is safe because each pass
+        reduces the largest list by half.
+        """
+        raw = json.dumps(obj)
+        if len(raw) <= max_bytes:
+            return raw
+
+        # Work on a shallow copy to avoid mutating the caller's data
+        work: dict = dict(obj) if isinstance(obj, dict) else {"data": obj}
+        work["truncated"] = True
+
+        for _ in range(20):
+            raw = json.dumps(work)
+            if len(raw) <= max_bytes:
+                return raw
+            # Trim the longest list-valued key by half
+            list_keys = [k for k, v in work.items() if isinstance(v, list)]
+            if not list_keys:
+                break
+            biggest_key = max(list_keys, key=lambda k: len(work[k]))
+            current_len = len(work[biggest_key])
+            new_len = max(1, current_len // 2)
+            if new_len == current_len:
+                break  # Can't shrink further; bail to error envelope
+            work[biggest_key] = work[biggest_key][:new_len]
+
+        # Final fallback: minimal error envelope always fits
+        return json.dumps({"error": "output too large to serialize", "truncated": True})

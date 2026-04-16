@@ -176,6 +176,12 @@ class PipelineLoop:
 
         self.metrics.flush()
 
+        if hasattr(self, "metrics") and self.metrics is not None:
+            detail_path = str(
+                Path(self.config.harness.workspace) / "pipeline_round_details.jsonl"
+            )
+            self.metrics.flush_detail(detail_path)
+
         # Final summary
         self.artifacts.write_final_summary(
             f"# Pipeline Complete\n\n"
