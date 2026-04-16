@@ -876,16 +876,43 @@ class PipelineLoop:
         Failures are logged as warnings — tagging is best-effort and must
         never abort the pipeline.
         """
-        if source == "end_of_run" and self.config.auto_tag_interval > 0:
+        # End-of-run path with auto_tag_at_end takes precedence: it bypasses
+        # both the interval-suppression and the min_score gate.  This is what
+        # guarantees a tag for self-improvement loops where the next chunk is
+        # only triggered by a tag push.
+        force_at_end = (source == "end_of_run") and self.config.auto_tag_at_end
+
+        if source == "end_of_run" and self.config.auto_tag_interval > 0 and not force_at_end:
             return
 
         threshold = self.config.auto_tag_min_score
-        if best_score < threshold:
+        if best_score < threshold and not force_at_end:
             log.info(
                 "auto_tag: skipped (best_score=%.1f < %.1f threshold)",
                 best_score, threshold,
             )
             return
+
+        # When forcing at end-of-run, the branch may have unpushed commits
+        # (patience early stop, or interval not reached).  Push the branch
+        # first so the tag refers to commits the remote already has — without
+        # this the tag push fails with 'missing necessary objects'.
+        if force_at_end and self.config.auto_tag_push:
+            branch = self.config.auto_push_branch
+            if not branch:
+                rc_b, out_b = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+                branch = out_b.strip() if rc_b == 0 else ""
+            if branch and branch != "HEAD":
+                rc, out = await self._run_git(
+                    ["push", self.config.auto_push_remote, branch]
+                )
+                if rc == 0:
+                    log.info("auto_tag(end): pushed branch %s before tagging", branch)
+                else:
+                    log.warning(
+                        "auto_tag(end): pre-tag branch push failed — rc=%d output=%r",
+                        rc, out,
+                    )
 
         rc_sha, sha_out = await self._run_git(["rev-parse", "--short=7", "HEAD"])
         short_sha = sha_out.strip() if rc_sha == 0 and sha_out.strip() else "nosha"
