@@ -110,13 +110,26 @@ class GitCommitHook(VerificationHook):
 
     name = "git_commit"
 
-    def __init__(self, repos: list[str] | None = None) -> None:
+    def __init__(
+        self, repos: list[str] | None = None, rich_metadata: bool = False
+    ) -> None:
         self.repos = repos or []
+        self.rich_metadata = rich_metadata
 
     async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
         outer = context.get("outer", 0)
         phase_name = context.get("phase_name", "unknown")
-        commit_msg = f"harness: R{outer + 1} {phase_name}"
+
+        if self.rich_metadata:
+            score = context.get("best_score", 0.0)
+            changes = context.get("changes_summary", "")
+            commit_msg = (
+                f"harness: R{outer + 1} {phase_name} [score={score:.1f}]"
+            )
+            if changes:
+                commit_msg += f"\n\nChanges: {changes}"
+        else:
+            commit_msg = f"harness: R{outer + 1} {phase_name}"
 
         results: list[str] = []
         all_passed = True
@@ -156,8 +169,14 @@ class GitCommitHook(VerificationHook):
         return HookResult(passed=all_passed, output=output)
 
 
-def build_hooks(phase_config: Any) -> list[VerificationHook]:
-    """Build verification hooks from a PhaseConfig."""
+def build_hooks(
+    phase_config: Any, *, pipeline_config: Any = None
+) -> list[VerificationHook]:
+    """Build verification hooks from a PhaseConfig.
+
+    ``pipeline_config`` (PipelineConfig) is optional; when provided its
+    ``rich_commit_metadata`` flag is forwarded to ``GitCommitHook``.
+    """
     hooks: list[VerificationHook] = []
 
     if phase_config.syntax_check_patterns:
@@ -167,6 +186,9 @@ def build_hooks(phase_config: Any) -> list[VerificationHook]:
         hooks.append(PytestHook(phase_config.test_path))
 
     if phase_config.commit_on_success and phase_config.commit_repos:
-        hooks.append(GitCommitHook(phase_config.commit_repos))
+        rich = bool(
+            pipeline_config and getattr(pipeline_config, "rich_commit_metadata", False)
+        )
+        hooks.append(GitCommitHook(phase_config.commit_repos, rich_metadata=rich))
 
     return hooks
