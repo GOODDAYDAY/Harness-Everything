@@ -164,3 +164,101 @@ field and sets `truncated: true` rather than producing invalid JSON.
 - Net: +213
 
 ---
+
+## Round 4 · 2025 — Call Graph Tool
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/call_graph.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — import + registration + docstring count fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/call_graph.py` (new, ~280 lines)
+
+New `CallGraphTool` (`name = "call_graph"`) — AST-based call graph builder.
+
+**Usage examples:**
+```
+call_graph(function_name="run_phase")
+call_graph(function_name="MyClass.my_method", depth=2)
+call_graph(function_name="execute", root="harness/tools", depth=3, include_builtins=False)
+call_graph(function_name="flush", root="harness", depth=5, include_builtins=True)
+```
+
+**How it works:**
+
+1. All `.py` files under `root` are parsed once with `ast.parse` to build two
+   complementary indexes:
+   - `defs_by_qualname` — maps `"ClassName.method"` and `"func_name"` to their
+     definition record `{file, line, calls}`.
+   - `defs_by_bare` — maps the bare function name to all definition records
+     (handles same-name-different-file overloads).
+2. A **BFS** expansion starting from `function_name` traces outgoing calls level
+   by level up to `depth` hops.  BFS ensures the shortest-path depth assignment
+   wins if cycles exist.
+3. A **visited set** prevents infinite loops on mutually recursive call graphs.
+4. **Node cap** of 200 stops runaway expansion on large workspaces and sets
+   `truncated: true` in the output.
+
+**Parameters:**
+- `function_name` (required) — seed function. Supports `my_func` and
+  `MyClass.my_method` forms.
+- `root` (optional, default: `config.workspace`) — search root directory.
+- `depth` (optional, default: 3, range: 1–5) — how many call levels to trace.
+- `include_builtins` (optional, default: false) — whether to include Python
+  built-ins and stdlib names in the graph. Default `false` keeps output focused
+  on project code.
+
+**Output structure:**
+```json
+{
+  "root_function": "my_func",
+  "depth": 3,
+  "nodes_total": 12,
+  "nodes_found": 9,
+  "nodes_external": 3,
+  "truncated": false,
+  "graph": {
+    "my_func": {"file": "harness/foo.py", "line": 42, "calls": ["helper", "util"], "depth": 0, "found": true},
+    "helper":  {"file": "harness/bar.py", "line": 10, "calls": ["log.info"], "depth": 1, "found": true},
+    "util":    {"file": null, "line": null, "calls": [], "depth": 1, "found": false}
+  }
+}
+```
+
+**Security:** Uses `_check_dir_root` + `_rglob_safe` — null-byte rejection,
+`PERMISSION ERROR` prefix, allowed-paths enforcement, symlink-safe traversal.
+
+**Output budget:** `_safe_json` with 24 KB cap.
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.call_graph import CallGraphTool` import.
+- Appended `CallGraphTool()` to `DEFAULT_TOOLS` list.
+- Fixed docstring count from `"26 of 26"` to `"27 of 27"`.
+
+---
+
+### Tool ABC compliance
+
+- Inherits `Tool` ABC ✓
+- `name = "call_graph"` property ✓
+- `input_schema()` returns valid JSON Schema with `required: ["function_name"]` ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` + manual `_check_dir_root` enforcement ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~280 (new file) + 3 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +283
+
+---
