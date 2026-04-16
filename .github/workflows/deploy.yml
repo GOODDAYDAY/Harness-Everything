@@ -37,8 +37,11 @@ jobs:
           ssh ubuntu@43.128.100.101 'bash -se' <<EOF
             set -e
             cd /home/ubuntu/harness-everything
-            git fetch --tags --prune --force
-            git checkout ${{ github.ref_name }}
+            git fetch --all --tags --prune --force
+            # Sync local main branch to the new tag (not detached HEAD), so the
+            # service's auto_push later sees a real branch to push from.
+            git checkout main
+            git reset --hard ${{ github.ref_name }}
             .venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
             .venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineLoop; from harness.core.config import PipelineConfig; print('imports ok')"
           EOF
@@ -57,12 +60,13 @@ jobs:
           ssh ubuntu@43.128.100.101 'bash -se' <<'EOF'
             set -e
             cd /home/ubuntu/harness-everything
-            git fetch --tags --prune --force
+            git fetch --all --tags --prune --force
             if ! git rev-parse --verify harness-last-good >/dev/null 2>&1; then
               echo "ABORT: harness-last-good tag does not exist — first deploy was bad. Manual fix required."
               exit 1
             fi
-            git checkout harness-last-good
+            git checkout main
+            git reset --hard harness-last-good
             echo "ROLLED BACK to harness-last-good"
           EOF
 
