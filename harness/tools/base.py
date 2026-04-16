@@ -6,6 +6,7 @@ import itertools
 import json
 import logging
 import os
+import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,6 +109,15 @@ class Tool(ABC):
                 error=f"PERMISSION ERROR: path contains null byte: {path!r}",
                 is_error=True,
             )
+        
+        # Check for Unicode homoglyphs and non-standard characters
+        normalized = unicodedata.normalize('NFKC', path)
+        if normalized != path:
+            return "", ToolResult(
+                error=f"PERMISSION ERROR: Path contains Unicode homoglyphs or non-standard characters: {path!r}",
+                is_error=True,
+            )
+        
         try:
             resolved = str(Path(os.path.realpath(path)))
         except (ValueError, OSError) as exc:
