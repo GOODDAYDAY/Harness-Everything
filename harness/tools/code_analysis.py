@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import dotted_name, extract_calls, safe_parse
 from harness.tools.base import Tool, ToolResult
 
 # ---------------------------------------------------------------------------
@@ -43,34 +44,11 @@ def _complexity(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
     return count
 
 
-def _dotted_name(node: ast.expr) -> str:
-    """Flatten an attribute chain to a dotted string, e.g. ``os.path.join``."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return f"{_dotted_name(node.value)}.{node.attr}"
-    return "<expr>"
-
-
-def _calls_in(func_node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
-    """Return deduplicated list of call targets inside *func_node* (best-effort)."""
-    seen: set[str] = set()
-    calls: list[str] = []
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Call):
-            name = _dotted_name(node.func)
-            if name not in seen:
-                seen.add(name)
-                calls.append(name)
-    return calls
-
-
 def _analyse_source(source: str, filename: str) -> dict[str, Any]:
     """Parse *source* and return a structured analysis dict."""
-    try:
-        tree = ast.parse(source, filename=filename)
-    except SyntaxError as exc:
-        return {"error": f"SyntaxError at line {exc.lineno}: {exc.msg}"}
+    tree = safe_parse(source, filename)
+    if tree is None:
+        return {"error": f"SyntaxError in {filename}"}
 
     imports: list[dict[str, Any]] = []
     symbols: list[dict[str, Any]] = []
@@ -105,7 +83,7 @@ def _analyse_source(source: str, filename: str) -> dict[str, Any]:
             is_async = isinstance(node, ast.AsyncFunctionDef)
             args = [a.arg for a in node.args.args]
             complexity = _complexity(node)
-            calls = _calls_in(node)
+            calls = extract_calls(node)
             symbols.append({
                 "kind": "async_function" if is_async else "function",
                 "name": node.name,
@@ -129,7 +107,7 @@ def _analyse_source(source: str, filename: str) -> dict[str, Any]:
                     is_async = isinstance(child, ast.AsyncFunctionDef)
                     args = [a.arg for a in child.args.args]
                     complexity = _complexity(child)
-                    calls = _calls_in(child)
+                    calls = extract_calls(child)
                     methods.append({
                         "name": child.name,
                         "line": child.lineno,
