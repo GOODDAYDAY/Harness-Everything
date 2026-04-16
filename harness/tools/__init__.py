@@ -17,7 +17,7 @@ Current optional tools
 ~~~~~~~~~~~~~~~~~~~~~~
 * ``web_search``  — DuckDuckGo search + page fetch; network access required.
 
-Current default tools (25 of 26)
+Current default tools (26 of 26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 All other tools in this module.
 """
@@ -46,6 +46,7 @@ from harness.tools.diff_files import DiffFilesTool
 from harness.tools.cross_reference import CrossReferenceTool
 from harness.tools.semantic_search import SemanticSearchTool
 from harness.tools.data_flow import DataFlowTool
+from harness.tools.feature_search import FeatureSearchTool
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ DEFAULT_TOOLS: list[Tool] = [
     CrossReferenceTool(),
     SemanticSearchTool(),
     DataFlowTool(),
+    FeatureSearchTool(),
 ]
 
 # ---------------------------------------------------------------------------
