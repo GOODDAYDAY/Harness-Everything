@@ -218,7 +218,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic") -> tuple
 
 def parse_score(
     text: str,
-    pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)",
+    pattern: str = r"SCORE[=:\s]+(\d+(?:\.\d+)?)",
 ) -> float:
     """Extract a numeric score from evaluator output and clamp it to [0, 10].
 
@@ -229,7 +229,7 @@ def parse_score(
        any inline arithmetic lines such as ``SCORE = (A×0.4)+… = 6.0``.
     2. **Strict unanchored** — search for ``SCORE: N`` (not anchored) as fallback.
     3. **Loose fallback** — if no strict match, apply the caller-supplied
-       ``pattern`` (default: ``SCORE[:\\s]+N``).  Takes the last match.
+       ``pattern`` (default: ``SCORE[=:\\s]+N``).  Takes the last match.
 
     Returns 0.0 and logs a warning when no match is found.
     Logs a warning when the extracted value is outside [0, 10].
@@ -237,34 +237,28 @@ def parse_score(
     # Clean the text - remove markdown code blocks if present
     clean_text = text
     if "```" in text:
-        # Extract content from code blocks
+        # Remove code blocks entirely by joining non-code parts
         parts = text.split("```")
-        if len(parts) > 1:
-            # Take the last code block or the content between first and second ```
-            clean_text = parts[1] if len(parts) >= 3 else parts[0]
+        # Keep only parts outside code blocks (even-indexed parts)
+        non_code_parts = [parts[i] for i in range(0, len(parts), 2)]
+        clean_text = "".join(non_code_parts)
     
-    # Try strict anchored pattern first (most reliable)
-    strict_anchored = _STRICT_RE.findall(clean_text)
-    if strict_anchored:
-        raw = float(strict_anchored[-1])
-        log.debug("parse_score: found anchored SCORE: %.2f", raw)
+    # Try strict unanchored pattern first (captures all strict matches)
+    strict_unanchored = re.findall(r"SCORE:\s*(\d+(?:\.\d+)?)", clean_text)
+    if strict_unanchored:
+        raw = float(strict_unanchored[-1])
+        log.debug("parse_score: found strict SCORE: %.2f", raw)
     else:
-        # Try strict unanchored pattern
-        strict_unanchored = re.findall(r"SCORE:\s*(\d+(?:\.\d+)?)", clean_text)
-        if strict_unanchored:
-            raw = float(strict_unanchored[-1])
-            log.debug("parse_score: found unanchored SCORE: %.2f", raw)
-        else:
-            # Fall back to loose pattern
-            loose = re.findall(pattern, clean_text, re.IGNORECASE)
-            if not loose:
-                log.warning(
-                    "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
-                    clean_text,
-                )
-                return 0.0
-            raw = float(loose[-1])
-            log.debug("parse_score: found loose SCORE: %.2f", raw)
+        # Fall back to loose pattern
+        loose = re.findall(pattern, clean_text, re.IGNORECASE)
+        if not loose:
+            log.warning(
+                "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
+                clean_text,
+            )
+            return 0.0
+        raw = float(loose[-1])
+        log.debug("parse_score: found loose SCORE: %.2f", raw)
 
     clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
     if clamped != raw:
