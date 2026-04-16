@@ -262,3 +262,117 @@ call_graph(function_name="flush", root="harness", depth=5, include_builtins=True
 - Net: +283
 
 ---
+
+## Round 5 · 2025 — Dependency Analyzer Tool
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/dependency_analyzer.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — import + registration + docstring count fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/dependency_analyzer.py` (new, ~310 lines)
+
+New `DependencyAnalyzerTool` (`name = "dependency_analyzer"`) — AST-based
+Python import dependency graph builder and circular import detector.
+
+**Usage examples:**
+```
+dependency_analyzer()
+dependency_analyzer(mode="graph", module_filter="harness.tools")
+dependency_analyzer(mode="cycles", root="harness")
+dependency_analyzer(mode="imports", include_stdlib=True, module_filter="harness.tools.bash")
+```
+
+**Three output modes** (controlled by `mode` parameter):
+
+1. **`graph`** (default) — Full module → [dependencies] adjacency dict plus
+   embedded `cycles` list.  Each key is a dotted module name relative to the
+   search root; values are sorted lists of imported module names.
+2. **`cycles`** — Only circular import chains.  Runs the DFS cycle-detector
+   and returns all detected back-edge cycles (capped at 20 to bound output).
+3. **`imports`** — Per-file listing: each entry shows the relative file path,
+   its dotted module name, and the filtered import list.
+
+**Key implementation details:**
+
+- **Pure AST parsing** — no `importlib`, no code execution.  Works safely on
+  any codebase including packages with missing dependencies.
+- **Relative import resolution** — `from . import utils` in
+  `harness/tools/foo.py` resolves to `harness.tools.utils` using the file's
+  own package prefix; `from ..config import X` resolves to `harness.config`.
+- **Workspace-local filtering** — `include_stdlib=False` (default) uses
+  `_collect_known_modules` to derive all top-level package names from the
+  scanned files, then filters imports to only those with matching prefixes.
+  This keeps the graph focused on project code and suppresses hundreds of
+  stdlib edges.
+- **Cycle detection** — iterative DFS with WHITE/GRAY/BLACK colouring to
+  find back-edges without hitting Python's recursion limit on large graphs.
+  Capped at 20 cycles per run.
+- **`module_filter`** parameter — dotted prefix to restrict output
+  (e.g. `"harness.tools"` shows only tool modules).
+
+**Parameters:**
+- `root` (optional, default: `config.workspace`) — directory to analyze.
+- `mode` (optional, default: `"graph"`) — `"graph"` | `"cycles"` | `"imports"`.
+- `include_stdlib` (optional, default: `false`) — include stdlib/third-party
+  imports in the graph.
+- `module_filter` (optional, default: `""`) — dotted prefix filter.
+
+**Output structure (graph mode):**
+```json
+{
+  "root": "/path/to/workspace",
+  "mode": "graph",
+  "modules_total": 26,
+  "files_scanned": 26,
+  "cycles_found": 0,
+  "cycles": [],
+  "graph": {
+    "harness.tools.bash": ["harness.config", "harness.tools.base"],
+    "harness.tools.call_graph": ["harness.config", "harness.tools.base"],
+    ...
+  }
+}
+```
+
+**Security:** Uses `_check_dir_root` + `_rglob_safe` — null-byte rejection,
+`PERMISSION ERROR` prefix, allowed-paths enforcement, symlink-safe traversal.
+
+**Output budget:** `_safe_json` with 24 KB cap.
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.dependency_analyzer import DependencyAnalyzerTool` import.
+- Appended `DependencyAnalyzerTool()` to `DEFAULT_TOOLS` list.
+- Fixed docstring count from `"27 of 27"` to `"28 of 28"`.
+
+---
+
+### Tool ABC compliance
+
+- Inherits `Tool` ABC ✓
+- `name = "dependency_analyzer"` property ✓
+- `input_schema()` returns valid JSON Schema (no required params — all optional) ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` + manual `_check_dir_root` enforcement ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+### Git tag
+
+`v-tool-dependency_analyzer-auto`
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~310 (new file) + 3 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +313
+
+---
