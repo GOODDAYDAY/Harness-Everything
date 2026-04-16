@@ -391,8 +391,8 @@ class FilePatchTool(Tool):
         dry_run: bool,
     ) -> ToolResult:
         """Parse and apply all hunks from *patch_text* to the file at *path*."""
-        resolved = str(Path(path).resolve())
-        if err := self._check_path(config, resolved):
+        resolved, err = self._resolve_and_check(config, path)
+        if err:
             return err
 
         p = Path(resolved)
@@ -461,9 +461,11 @@ class FilePatchTool(Tool):
         files_written: list[str] = []
 
         for rel_path, patch_text in file_patches.items():
-            # Resolve relative to workspace
-            resolved = str((Path(config.workspace) / rel_path).resolve())
-            if chk_err := self._check_path(config, resolved):
+            # Resolve relative to workspace; _resolve_and_check handles null-byte
+            # rejection and realpath-based symlink resolution.
+            raw = str(Path(config.workspace) / rel_path)
+            resolved, chk_err = self._resolve_and_check(config, raw)
+            if chk_err:
                 errors.append(f"{rel_path}: {chk_err.error}")
                 continue
 

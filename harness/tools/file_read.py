@@ -52,8 +52,8 @@ class ReadFileTool(Tool):
                 is_error=True,
             )
 
-        resolved = str(Path(path).resolve())
-        if err := self._check_path(config, resolved):
+        resolved, err = self._resolve_and_check(config, path)
+        if err:
             return err
 
         p = Path(resolved)

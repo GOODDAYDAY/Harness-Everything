@@ -14,11 +14,11 @@ from typing import Any
 from harness.artifacts import ArtifactStore
 from harness.checkpoint import CheckpointManager
 from harness.config import HarnessConfig, PipelineConfig
-from harness.dual_evaluator import DualEvaluator
+from harness.evaluation.dual_evaluator import DualEvaluator
 from harness.executor import executor_system_with_workspace
-from harness.hooks import HookResult, VerificationHook, build_hooks
+from harness.hooks import build_hooks
 from harness.llm import LLM
-from harness.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
+from harness.pipeline.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
 from harness.prompts import synthesis as synth_prompts
 from harness.tools.registry import ToolRegistry
 
@@ -542,16 +542,23 @@ class PhaseRunner:
         self.artifacts.write(implement_log, *segs, "implement_output.txt")
 
         # Build structured per-call records and write tool_metrics.json.
-        # The exec_log entries are {"tool": name, "input": {...}, "output": "..."}
-        # from llm.call_with_tools.  We derive success from whether the output
-        # starts with a known error prefix (SCHEMA ERROR / PERMISSION ERROR /
-        # TOOL ERROR) since ToolResult.is_error is not propagated through the log.
+        # exec_log entries now carry "is_error" and "duration_ms" directly from
+        # llm.call_with_tools (added in the traceability pass).  Fall back to
+        # string-prefix heuristic for entries from older/custom LLM wrappers
+        # that may not include these fields.
         _error_prefixes = ("SCHEMA ERROR", "PERMISSION ERROR", "TOOL ERROR")
         tool_call_records: list[dict] = []
         for e in exec_log:
-            out = e.get("output", "") or ""
-            success = not any(out.startswith(pfx) for pfx in _error_prefixes)
-            tool_call_records.append({"tool": e["tool"], "success": success})
+            if "is_error" in e:
+                success = not e["is_error"]
+            else:
+                out = e.get("output", "") or ""
+                success = not any(out.startswith(pfx) for pfx in _error_prefixes)
+            tool_call_records.append({
+                "tool": e["tool"],
+                "success": success,
+                "duration_ms": e.get("duration_ms", 0),
+            })
         tool_metrics_payload = {
             "round": outer + 1,
             "phase": phase.label,
@@ -797,7 +804,7 @@ class PhaseRunner:
         self, outer: int, label: str, inner: int
     ) -> InnerResult:
         """Reconstruct an InnerResult from disk artifacts."""
-        from harness.dual_evaluator import parse_score
+        from harness.evaluation.dual_evaluator import parse_score
 
         segs = self.artifacts.inner_dir(outer, label, inner)
         proposal = self.artifacts.read(*segs, "proposal.txt")

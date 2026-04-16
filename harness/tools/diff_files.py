@@ -181,8 +181,8 @@ class DiffFilesTool(Tool):
         # ------------------------------------------------------------------ #
         # 1. Validate and read path_a
         # ------------------------------------------------------------------ #
-        resolved_a = str(Path(path_a).resolve())
-        if err := self._check_path(config, resolved_a):
+        resolved_a, err = self._resolve_and_check(config, path_a)
+        if err:
             return err
 
         p_a = Path(resolved_a)
@@ -205,8 +205,8 @@ class DiffFilesTool(Tool):
                     error="mode='file_vs_file' requires path_b to be supplied",
                     is_error=True,
                 )
-            resolved_b = str(Path(path_b).resolve())
-            if err := self._check_path(config, resolved_b):
+            resolved_b, err = self._resolve_and_check(config, path_b)
+            if err:
                 return err
 
             p_b = Path(resolved_b)

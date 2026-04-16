@@ -796,3 +796,59 @@ accessible) — the ACE vector identified in prior rounds is absent from
 - Net: +14
 
 ---
+
+---
+
+## Round 3 · 5_traceability_and_structure — tool registry hardening
+
+### Files Modified
+- `harness/tools/__init__.py` — removed unused `discover_tools` import; added
+  import-time count assertions
+
+### Files Created
+- `harness/tools/generate_manifest.py` — runnable script to regenerate the
+  manifest from the live tool lists
+- `harness/tools/registry_manifest.json` — machine-readable catalogue of all
+  default and optional tools
+
+### Changes Made
+
+**Dead import removed** (`harness/tools/__init__.py`):
+- Removed `discover_tools` from the `from harness.tools.discovery import ...`
+  line. `discover_tools` was imported but never referenced in `__init__.py`
+  (not in DEFAULT_TOOLS, OPTIONAL_TOOLS, ALL_TOOLS, _ALL_TOOLS_BY_NAME, or
+  build_registry). Verified with `grep -rn discover_tools` — zero callers
+  outside `discovery.py` itself.
+- Lines removed: 1 (the `, discover_tools` import fragment)
+
+**Import-time count assertions** (`harness/tools/__init__.py`):
+- Added `_EXPECTED_DEFAULT_COUNT = 30` and `_EXPECTED_OPTIONAL_COUNT = 2`
+  sentinel constants plus two `assert` statements that fire at import time if
+  the documented counts drift from reality. Turns a silent documentation lie
+  into an immediate `AssertionError` with a clear fix message.
+- Lines added: 12
+
+**Registry manifest** (`harness/tools/registry_manifest.json`):
+- New committed JSON file listing all default and optional tool names with
+  counts. Gives downstream consumers (admin scripts, test fixtures, CI checks)
+  a single machine-readable source of truth without importing the full tool
+  stack.
+- Lines added: 41
+
+**Manifest generator** (`harness/tools/generate_manifest.py`):
+- New runnable module (`python -m harness.tools.generate_manifest`) that
+  regenerates `registry_manifest.json` from the live `DEFAULT_TOOLS` /
+  `OPTIONAL_TOOLS` lists. Keeps the committed manifest in sync after any tool
+  additions or removals.
+- Lines added: 27
+
+### Security Improvement
+`HttpRequestTool` remains in `OPTIONAL_TOOLS` (moved in a prior round),
+preventing accidental outbound network calls in air-gapped environments.
+The new count assertions make any future accidental promotion of a network
+tool back to `DEFAULT_TOOLS` immediately visible at import time.
+
+### Lines Added vs Removed
+- Lines removed: 1 (dead `discover_tools` import)
+- Lines added: 80 (assertions + manifest + generator)
+- Net: +79 (all new lines are structured/executable content, not comments)

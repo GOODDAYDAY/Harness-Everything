@@ -523,7 +523,13 @@ class LLM:
                         call_detail,
                     )
                 execution_log.append(
-                    {"tool": tc["name"], "input": tc["input"], "output": result.output or result.error}
+                    {
+                        "tool": tc["name"],
+                        "input": tc["input"],
+                        "output": result.output or result.error,
+                        "duration_ms": round(result.elapsed_s * 1000),
+                        "is_error": result.is_error,
+                    }
                 )
                 tool_results.append(
                     {
