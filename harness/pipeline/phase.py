@@ -80,7 +80,10 @@ class PhaseConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PhaseConfig:
-        return cls(**data)
+        # Strip JSON "comment" keys (// or _ prefix) before construction.
+        cleaned = {k: v for k, v in data.items()
+                   if not k.startswith("//") and not k.startswith("_")}
+        return cls(**cleaned)
 
 
 @dataclass
