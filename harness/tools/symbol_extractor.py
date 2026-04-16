@@ -73,19 +73,6 @@ def _get_source_segment(source: str, node: ast.AST) -> str:
     return "".join(lines[start:end])
 
 
-def _dedent_source(text: str) -> str:
-    """Remove common leading whitespace from a multi-line source block."""
-    return textwrap.dedent(text)
-
-
-def _node_qualname(node: ast.AST, class_name: str | None = None) -> str:
-    """Compute the qualified name for a function/class node."""
-    name = getattr(node, "name", "")
-    if class_name:
-        return f"{class_name}.{name}"
-    return name
-
-
 # ---------------------------------------------------------------------------
 # Core extraction: one file → list of SymbolMatch
 # ---------------------------------------------------------------------------
@@ -167,7 +154,7 @@ def _extract_symbols_from_source(
             qname = node.name
             if _matches(qname, qname):
                 kind = "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function"
-                text = _dedent_source(_get_source_segment(source, node))
+                text = textwrap.dedent(_get_source_segment(source, node))
                 matches.append(
                     _SymbolMatch(
                         qualname=qname,
@@ -184,7 +171,7 @@ def _extract_symbols_from_source(
             class_name = node.name
             # Match the class itself (bare name, no dot)
             if _matches(class_name, class_name):
-                text = _dedent_source(_get_source_segment(source, node))
+                text = textwrap.dedent(_get_source_segment(source, node))
                 matches.append(
                     _SymbolMatch(
                         qualname=class_name,
@@ -203,7 +190,7 @@ def _extract_symbols_from_source(
                     method_qname = f"{class_name}.{child.name}"
                     if _matches(method_qname, child.name):
                         kind = "async_method" if isinstance(child, ast.AsyncFunctionDef) else "method"
-                        text = _dedent_source(_get_source_segment(source, child))
+                        text = textwrap.dedent(_get_source_segment(source, child))
                         matches.append(
                             _SymbolMatch(
                                 qualname=method_qname,
@@ -512,10 +499,4 @@ class SymbolExtractorTool(Tool):
 
         output_lines = [" ".join(header_parts), ""]
         output_lines.append(_format_matches_text(all_matches))
-
-        if syntax_errors and p.is_dir():
-            # In directory mode, only show errors if *no* matches were found in
-            # certain files — otherwise it's just noise
-            pass  # suppress per-file "not found" notes in directory scan
-
         return ToolResult(output="\n".join(output_lines))
