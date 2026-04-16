@@ -95,6 +95,7 @@ class PipelineLoop:
         # Run metrics tracking
         self.meta_review_count: int = 0
         self.auto_push_count: int = 0
+        self.total_phases_run: int = 0
         self.shutdown_reason: str = "completed"  # "completed", "signal", "max_rounds", "error"
 
     def _build_phases(self) -> list[PhaseConfig]:
@@ -673,6 +674,8 @@ class PipelineLoop:
                 if resumed_score is not None:
                     phase_scores.append(resumed_score)
                     log.info("    ↳ recovered score=%.1f", resumed_score)
+                # Count resumed phases for total phases run tracking
+                self.total_phases_run += 1
                 continue
 
             phase_start = time.monotonic()
@@ -701,11 +704,13 @@ class PipelineLoop:
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
                 self._metrics_collector.record_phase(phase.name, phase_result)
+                # Increment total phases run counter for traceability
+                self.total_phases_run += 1
                 _phase_elapsed = time.monotonic() - phase_start
                 log.info(
-                    "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d",
+                    "  phase=%s  status=done  score=%.1f  elapsed=%.1fs  memory_entries=%d  total_phases=%d",
                     phase.label, phase_result.best_score, _phase_elapsed,
-                    self.memory.entry_count,
+                    self.memory.entry_count, self.total_phases_run,
                 )
                 log.info(
                     "METRIC %s",
@@ -716,6 +721,7 @@ class PipelineLoop:
                         "best_score": round(phase_result.best_score, 2),
                         "inner_results": len(phase_result.inner_results),
                         "elapsed_s": round(_phase_elapsed, 2),
+                        "total_phases_run": self.total_phases_run,
                     }),
                 )
             except Exception as e:
@@ -832,9 +838,16 @@ class PipelineLoop:
             "score_history": [{"round": <int>, "score": <float>}, ...],
             "tool_error_rate": <float>,   // fraction of calls that returned an error
             "total_tool_calls": <int>,
-            "elapsed_total_s": <float>
+            "elapsed_total_s": <float>,
+            "end_time": <iso8601>,
+            "total_phases_run": <int>,
+            "shutdown_reason": <str>,
+            "meta_review_count": <int>,
+            "auto_push_count": <int>
         }
         """
+        import datetime
+        
         tool_error_rate = (
             round(total_tool_errors / total_tool_calls, 3)
             if total_tool_calls > 0 else 0.0
@@ -846,13 +859,19 @@ class PipelineLoop:
             "tool_error_rate": tool_error_rate,
             "total_tool_calls": total_tool_calls,
             "elapsed_total_s": round(total_elapsed, 2),
+            "end_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "total_phases_run": self.total_phases_run if hasattr(self, 'total_phases_run') else 0,
+            "shutdown_reason": self.shutdown_reason,
+            "meta_review_count": self.meta_review_count,
+            "auto_push_count": self.auto_push_count,
         }
         payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
         try:
             self.artifacts.write(json.dumps(payload, indent=2), "summary.json")
             log.info(
-                "summary.json written: rounds=%d best=%.1f tool_error_rate=%.3f elapsed=%.1fs",
+                "summary.json written: rounds=%d best=%.1f tool_error_rate=%.3f elapsed=%.1fs phases=%d",
                 rounds_completed, best_score, tool_error_rate, total_elapsed,
+                payload["total_phases_run"],
             )
         except Exception as exc:
             log.warning("_write_run_summary: failed to write summary.json: %s", exc)

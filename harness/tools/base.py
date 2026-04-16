@@ -81,6 +81,17 @@ class Tool(ABC):
                 error=f"PERMISSION ERROR: path contains null byte: {path!r}",
                 is_error=True,
             )
+        
+        # Check for control characters \x01 through \x1f (except \t, \n, \r)
+        for i in range(1, 0x20):
+            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
+                continue
+            if chr(i) in path:
+                return ToolResult(
+                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
+                    is_error=True,
+                )
+        
         if not config.is_path_allowed(path):
             return ToolResult(
                 error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
@@ -109,6 +120,16 @@ class Tool(ABC):
                 error=f"PERMISSION ERROR: path contains null byte: {path!r}",
                 is_error=True,
             )
+        
+        # Check for control characters \x01 through \x1f (except \t, \n, \r)
+        for i in range(1, 0x20):
+            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
+                continue
+            if chr(i) in path:
+                return "", ToolResult(
+                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
+                    is_error=True,
+                )
         
         # Check for Unicode homoglyphs and non-standard characters
         normalized = unicodedata.normalize('NFKC', path)

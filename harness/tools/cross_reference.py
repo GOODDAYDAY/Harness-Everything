@@ -107,7 +107,7 @@ class CrossReferenceTool(Tool):
                             "line": node.lineno,
                             "signature": function_signature(node, lines),
                         }
-                        callees = _extract_callees(node)
+                        callees = extract_callees(node)
                 elif class_name is None and isinstance(node, ast.ClassDef):
                     if node.name == func_name and definition is None:
                         definition = {
