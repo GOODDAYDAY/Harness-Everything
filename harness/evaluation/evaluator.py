@@ -391,3 +391,46 @@ def _extract_executor_status(summary_text: str) -> str:
                 return value
     return ""
 
+
+def _extract_score_from_verdict(verdict_text: str) -> float:
+    """Extract numeric score from evaluator verdict text.
+    
+    Looks for patterns like:
+    - FINAL SCORE: 8.5
+    - COMBINED_SCORE: 7.2/10
+    - Score: 9
+    
+    Returns 0.0 if no score found.
+    """
+    import re
+    
+    # Try to find FINAL SCORE: X or COMBINED_SCORE: X
+    patterns = [
+        r"FINAL\s+SCORE[:\s]+(\d+(?:\.\d+)?)",
+        r"COMBINED_SCORE[:\s]+(\d+(?:\.\d+)?)",
+        r"Score[:\s]+(\d+(?:\.\d+)?)",
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, verdict_text, re.IGNORECASE)
+        if matches:
+            try:
+                return float(matches[-1])
+            except (ValueError, TypeError):
+                continue
+    
+    # Try to extract from individual dimension scores and average them
+    dimension_scores = []
+    dimension_pattern = r"(\d+)\.\s+\w+:\s+SCORE:\s+(\d+)"
+    matches = re.findall(dimension_pattern, verdict_text, re.IGNORECASE)
+    for _, score_str in matches:
+        try:
+            dimension_scores.append(float(score_str))
+        except (ValueError, TypeError):
+            continue
+    
+    if dimension_scores:
+        return sum(dimension_scores) / len(dimension_scores)
+    
+    return 0.0
+
