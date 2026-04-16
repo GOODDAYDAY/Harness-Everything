@@ -12,7 +12,7 @@
     "// max_tokens": "Max output tokens per LLM call. Range: 1–64000. Higher = longer responses but more cost. Default 8096 is enough for most tasks. Use 16384+ for complex implementation phases.",
     "max_tokens": 8096,
 
-    "// base_url": "LLM API endpoint. Empty = use ANTHROPIC_BASE_URL env var or Anthropic default. Set explicitly to avoid inheriting Claude Code's local proxy (127.0.0.1:9099). Examples: 'https://api.anthropic.com', 'https://api.deepseek.com/v1'.",
+    "// base_url": "LLM API endpoint. Empty = use ANTHROPIC_BASE_URL env var or Anthropic default. Set explicitly to avoid inheriting Claude Code's local proxy (127.0.0.1:9099). Examples: 'https://api.anthropic.com', 'https://api.deepseek.com/anthropic' (note: NOT /v1, that's the OpenAI-compat endpoint).",
     "base_url": "https://api.anthropic.com",
 
     "// api_key": "API key / auth token. Empty = use ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY env var. Omitted here — set via env var to avoid committing secrets.",

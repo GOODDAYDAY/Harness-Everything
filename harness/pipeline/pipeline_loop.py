@@ -534,6 +534,12 @@ class PipelineLoop:
             # --- Auto-push ---
             await self._maybe_auto_push(outer)
 
+            # --- Auto-tag (per-round) ---
+            if self.config.auto_tag_interval > 0 and (outer + 1) % self.config.auto_tag_interval == 0:
+                # Use max(running best, this round) so patience=0 still tags correctly
+                tag_score = max(best_round_score, round_score)
+                await self._maybe_auto_tag(tag_score, outer + 1, source="per_round")
+
             # Early stopping — always update best_round_score, but only count
             # non-improvement from round 2 onwards.  Round 1 (outer == 0)
             # establishes the baseline; penalising it as a "no improvement"
@@ -845,51 +851,76 @@ class PipelineLoop:
         except Exception as exc:
             log.warning("_write_run_summary: failed to write summary.json: %s", exc)
 
-    async def _maybe_auto_tag(self, best_score: float, rounds_completed: int) -> None:
-        """Create an annotated git tag when best_score > 7.0 (Priority 5).
+    async def _maybe_auto_tag(
+        self,
+        best_score: float,
+        rounds_completed: int,
+        *,
+        source: str = "end_of_run",
+    ) -> None:
+        """Create (and optionally push) an annotated git tag.
 
-        Tag format: ``v-auto-score{score:.1f}-r{rounds}``
-        Example:    ``v-auto-score8.3-r5``
+        ``source='end_of_run'`` is the legacy call from ``run()``'s tail; it
+        becomes a no-op when ``auto_tag_interval > 0`` (per-round tagging
+        takes over).  ``source='per_round'`` is the new path called from the
+        outer loop alongside auto-push.
 
-        Only tags when:
-        - best_score > 7.0
-        - the workspace is inside a git repository
-        - the tag does not already exist (avoids duplicate-tag errors)
+        Tag name: ``{auto_tag_prefix}-{rounds}-{shortsha}`` (legacy prefix
+        ``v-auto`` retained as default).  Including the short SHA avoids
+        collisions when a fresh process restart re-tags at the same round
+        number on a different commit.
 
-        Failures are logged as warnings and never propagate — tagging is a
-        best-effort observability feature and must not abort the pipeline.
+        Only tags when ``best_score >= auto_tag_min_score``.  Pushes the tag
+        when ``auto_tag_push`` is true (uses ``auto_push_remote``).
+
+        Failures are logged as warnings — tagging is best-effort and must
+        never abort the pipeline.
         """
-        _AUTO_TAG_THRESHOLD = 7.0
-        if best_score <= _AUTO_TAG_THRESHOLD:
+        if source == "end_of_run" and self.config.auto_tag_interval > 0:
+            return
+
+        threshold = self.config.auto_tag_min_score
+        if best_score < threshold:
             log.info(
-                "auto_tag: skipped (best_score=%.1f ≤ %.1f threshold)",
-                best_score, _AUTO_TAG_THRESHOLD,
+                "auto_tag: skipped (best_score=%.1f < %.1f threshold)",
+                best_score, threshold,
             )
             return
 
-        tag_name = f"v-auto-score{best_score:.1f}-r{rounds_completed}"
+        rc_sha, sha_out = await self._run_git(["rev-parse", "--short=7", "HEAD"])
+        short_sha = sha_out.strip() if rc_sha == 0 and sha_out.strip() else "nosha"
+        tag_name = f"{self.config.auto_tag_prefix}-{rounds_completed}-{short_sha}"
         tag_msg = (
-            f"Auto-tag: pipeline run completed with best_score={best_score:.1f} "
-            f"in {rounds_completed} round(s)"
+            f"Auto-tag: best_score={best_score:.1f} rounds={rounds_completed} "
+            f"sha={short_sha}"
         )
 
-        # Check if tag already exists to avoid duplicate-tag errors
         rc, out = await self._run_git(["tag", "-l", tag_name])
         if rc == 0 and out.strip() == tag_name:
             log.info("auto_tag: tag %r already exists — skipping", tag_name)
             return
 
-        # Create annotated tag
         rc, out = await self._run_git(["tag", "-a", tag_name, "-m", tag_msg])
-        if rc == 0:
-            log.info(
-                "auto_tag: created tag %r (best_score=%.1f rounds=%d)",
-                tag_name, best_score, rounds_completed,
-            )
-        else:
+        if rc != 0:
             log.warning(
                 "auto_tag: failed to create tag %r — rc=%d output=%r",
                 tag_name, rc, out,
             )
+            return
+        log.info(
+            "auto_tag: created tag %r (best_score=%.1f rounds=%d)",
+            tag_name, best_score, rounds_completed,
+        )
+
+        if self.config.auto_tag_push:
+            remote = self.config.auto_push_remote
+            rc, out = await self._run_git(["push", remote, tag_name])
+            if rc == 0:
+                log.info("auto_tag: pushed tag %r to %s", tag_name, remote)
+            else:
+                log.warning(
+                    "auto_tag: push failed for tag %r — rc=%d output=%r",
+                    tag_name, rc, out,
+                )
 
 
