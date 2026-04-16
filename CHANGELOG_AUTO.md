@@ -429,3 +429,159 @@ mc.flush_detail("/tmp/detail.jsonl")
 - Net: 0 (pure reorganization; no new logic)
 
 ---
+
+## Round 6 · 2025 — HTTP Client Tool & JSON Transform Tool
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/http_client.py` | **NEW** |
+| `harness/tools/json_transform.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — 2 imports + 2 registrations + docstring count fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/http_client.py` (new, ~230 lines)
+
+New `HttpRequestTool` (`name = "http_request"`) — generic HTTP client tool.
+
+**Usage examples:**
+```
+http_request(url="https://api.example.com/data")
+http_request(url="https://api.example.com/items", method="POST", body={"key": "value"}, headers={"Authorization": "Bearer token"})
+http_request(url="https://api.example.com/resource/1", method="DELETE", timeout=10)
+http_request(url="https://api.example.com/large", max_chars=4000)
+```
+
+**Supported methods:** GET, POST, PUT, DELETE, PATCH, HEAD.
+
+**Key implementation details:**
+- **Zero extra dependencies** — pure stdlib `urllib` for all HTTP operations.
+- **Async-safe** — network I/O runs in `asyncio.run_in_executor` (thread pool)
+  so the event loop is never blocked.
+- **Auto JSON body** — when `body` is a dict, it is serialized to JSON and
+  `Content-Type: application/json` is set automatically.
+- **Response truncation** — body text is truncated to `max_chars` (default
+  16 000 chars) and `truncated: true` is set in the JSON output.
+- **HTTP error handling** — `HTTPError` (4xx/5xx) captures the error body and
+  returns it in the output alongside `is_error=True`, so the LLM can read the
+  error response.
+- **Input validation** — URL must start with `http://` or `https://`; method
+  must be one of the six allowed values; both validated before any network call.
+
+**Output structure (JSON):**
+```json
+{
+  "status": 200,
+  "reason": "OK",
+  "url": "https://api.example.com/data",
+  "headers": {"Content-Type": "application/json"},
+  "body": "...",
+  "truncated": false
+}
+```
+
+**Parameters:**
+- `url` (required) — full URL, must start with `http://` or `https://`.
+- `method` (optional, default: `"GET"`) — HTTP verb.
+- `headers` (optional, default: `{}`) — extra request headers dict.
+- `body` (optional, default: `null`) — string or JSON object body.
+- `timeout` (optional, default: `30`, range: 1–120) — request timeout seconds.
+- `max_chars` (optional, default: `16000`, range: 1–100000) — response body cap.
+
+#### `harness/tools/json_transform.py` (new, ~390 lines)
+
+New `JsonTransformTool` (`name = "json_transform"`) — JSON parse/query/validate/merge/diff.
+
+**Usage examples:**
+```
+json_transform(op="parse", data='{"name":"Alice","age":30}')
+json_transform(op="query", data='{"results":[{"id":1},{"id":2}]}', path="results[0].id")
+json_transform(op="validate", data='{"name":"x"}', schema='{"type":"object","required":["name"],"properties":{"name":{"type":"string","minLength":2}}}')
+json_transform(op="merge", data='{"a":1,"b":{"x":10}}', other='{"b":{"y":20},"c":3}')
+json_transform(op="diff", data='{"version":"1.0"}', other='{"version":"2.0","new_field":true}')
+```
+
+**Five operations:**
+
+1. **`parse`** — Parse a JSON string and pretty-print it with type/size header.
+   Reports syntax errors with position. Accepts both string input and
+   already-parsed Python values (re-serializes them).
+
+2. **`query`** — Extract a nested value using a dot/bracket path notation.
+   Path syntax: `"foo.bar[2].name"` — supports arbitrary nesting of dict keys
+   and array indices. Returns the extracted value as JSON. Reports friendly
+   error with available keys on missing key.
+
+3. **`validate`** — Validate a JSON value against a basic inline JSON Schema.
+   Supported keywords: `type`, `required`, `properties`, `items`, `enum`,
+   `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`.
+   Returns `{"valid": bool, "error_count": N, "errors": [...]}`.
+
+4. **`merge`** — Deep-merge two JSON objects. Right-hand (`other`) values win
+   on scalar conflicts; nested dicts are merged recursively. List fields are
+   replaced (not merged). Neither input is mutated (deep copy used).
+
+5. **`diff`** — Structural diff between two JSON values. Returns a flat list
+   of `{path, op, left, right}` entries where `op` is one of `added`,
+   `removed`, `changed`, `type_changed`. Recursively descends into dicts and
+   arrays. Path uses `$.key[idx]` notation.
+
+**Key implementation details:**
+- **Zero external dependencies** — no `jsonpath-ng`, `jsonschema`, etc.
+- **Both string and object input** accepted for `data`/`other`/`schema` —
+  a string is parsed as JSON; a dict/list is used as-is.
+- **Output cap** — all outputs capped at 24 000 chars with `[truncated]` note.
+
+**Parameters:**
+- `data` (required) — primary input (JSON string or parsed value).
+- `op` (optional, default: `"parse"`) — operation to perform.
+- `path` (optional) — dot/bracket path for `query` op.
+- `schema` (optional) — JSON Schema object or string for `validate` op.
+- `other` (optional) — secondary input for `merge` and `diff` ops.
+- `indent` (optional, default: `2`, range: 0–8) — pretty-print indentation.
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.http_client import HttpRequestTool` import.
+- Added `from harness.tools.json_transform import JsonTransformTool` import.
+- Appended `HttpRequestTool()` and `JsonTransformTool()` to `DEFAULT_TOOLS` list.
+- Updated docstring count from `"28 of 28"` to `"30 of 30"`.
+
+---
+
+### Tool ABC compliance
+
+**`http_request`:**
+- Inherits `Tool` ABC ✓
+- `name = "http_request"` property ✓
+- `input_schema()` returns valid JSON Schema with `required: ["url"]` ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` (no filesystem access) ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+**`json_transform`:**
+- Inherits `Tool` ABC ✓
+- `name = "json_transform"` property ✓
+- `input_schema()` returns valid JSON Schema with `required: ["data"]` ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` (no filesystem access) ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+### Git tags
+
+- `v-tool-http_request-auto`
+- `v-tool-json_transform-auto`
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~230 (`http_client.py`) + ~390 (`json_transform.py`) + 4 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +624
+
+---
