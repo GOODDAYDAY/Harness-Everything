@@ -932,3 +932,243 @@ tool back to `DEFAULT_TOOLS` immediately visible at import time.
 - `harness/tools/generate_manifest.py`: −27 lines (deleted)
 - `harness/tools/registry_manifest.json`: −41 lines (deleted)
 - Net: **−67 lines** (security hardening + dead code removal)
+
+---
+
+## Round 9 · 2025 — Git Search Tool
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/git_search.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — import + registration + docstring count fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/git_search.py` (new, ~442 lines)
+
+New `GitSearchTool` (`name = "git_search"`) — unified git history, blame, and
+grep search tool.
+
+**Usage examples:**
+```
+git_search(pattern="add retry logic")
+git_search(mode="blame", path="harness/loop.py", pattern="max_iterations")
+git_search(mode="grep", pattern="def execute", path="harness/tools")
+git_search(mode="show", commit="a1b2c3d")
+git_search(mode="log_file", path="harness/tools/bash.py")
+git_search(mode="log", pattern="security", limit=20)
+```
+
+**Five search modes:**
+
+1. **`log`** (default) — Search commit *messages* with a regex via
+   `git log --grep=<pattern>`. Returns matching commits as `hash message`
+   one-liners. Supports `--follow`-style scope restriction via `path`.
+
+2. **`blame`** — Find which commit last changed each line in a file that
+   matches a regex. Parses `git blame --porcelain` output to extract the
+   commit hash, author name, final line number, and source text for every
+   matching line. Output is a compact table.
+
+3. **`grep`** — Fast `git grep --line-number` across all *tracked* files in
+   the working tree. Optionally scoped to a subdirectory. Returns
+   `file:line:text` entries. Exit code 1 (no matches) is handled gracefully.
+
+4. **`show`** — Show the `--stat` diff for a specific commit hash via
+   `git show --stat <commit>`. Input is validated against a safe-chars
+   allowlist (`[0-9a-fA-F~^@{}./:-_]`) to prevent argument injection.
+
+5. **`log_file`** — Full commit history for a specific file path via
+   `git log --follow -- <path>`. Follows file renames (`--follow`).
+
+**Key implementation details:**
+
+- **Zero extra dependencies** — pure stdlib `asyncio` subprocess, identical
+  pattern to `GitStatusTool` / `GitLogTool` in `git.py`.
+- **Async subprocess** — all git commands use `asyncio.create_subprocess_exec`
+  with a 30-second timeout; processes are killed and reaped on timeout.
+- **Commit ref sanitization** — `mode='show'` validates the commit parameter
+  against a safe character set before passing it to git, preventing shell
+  injection via malformed refs.
+- **Output truncation** — all modes cap at `_MAX_OUTPUT_CHARS = 20_000` with
+  a `... [truncated]` trailer rather than producing silent cutoffs.
+- **Graceful no-match** — `git grep` exit code 1 (no matches) is treated as
+  a normal empty result, not an error.
+- **Blame porcelain parser** — hand-written state machine for
+  `git blame --porcelain` format; extracts commit hash, author, final line
+  number, and source text without shelling out to `awk`/`sed`.
+
+**Parameters:**
+- `mode` (optional, default: `"log"`) — `"log"` | `"blame"` | `"grep"` |
+  `"show"` | `"log_file"`.
+- `pattern` (optional) — Regex/text to search. Required for `log`, `blame`,
+  `grep`.
+- `path` (optional) — File or directory path. Required for `blame`,
+  `log_file`; optional scope for `grep` and `log`.
+- `commit` (optional) — Commit hash or ref for `show` mode.
+- `limit` (optional, default: 20, range: 1–200) — Max results.
+- `case_insensitive` (optional, default: `false`) — Case-insensitive matching.
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.git_search import GitSearchTool` import.
+- Appended `GitSearchTool()` to `DEFAULT_TOOLS` list.
+- Updated `_EXPECTED_DEFAULT_COUNT` from `30` to `31`.
+- Updated docstring count from `"30 of 30"` to `"31 of 31"`.
+
+---
+
+### Tool ABC compliance
+
+- Inherits `Tool` ABC ✓
+- `name = "git_search"` property ✓
+- `input_schema()` returns valid JSON Schema (no required params — all
+  have sensible defaults) ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` (operates on workspace root via git
+  subprocess; no arbitrary path dereference) ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+### Git tag
+
+`v-tool-git_search-auto`
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~442 (`git_search.py`) + 4 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +446
+
+---
+
+## Round 10 · 2025 — TODO Scanner Tool
+
+### Files Modified / Created
+
+| File | Status |
+|------|--------|
+| `harness/tools/todo_scan.py` | **NEW** |
+| `harness/tools/__init__.py` | Modified — import + registration + docstring count fix |
+
+---
+
+### What Was Changed / Added
+
+#### `harness/tools/todo_scan.py` (new, ~290 lines)
+
+New `TodoScanTool` (`name = "todo_scan"`) — scan source files for developer
+annotation comments (TODO, FIXME, HACK, NOTE, BUG, XXX) and return structured
+results grouped by file and tag.
+
+**Usage examples:**
+```
+todo_scan()
+todo_scan(tags=["FIXME", "BUG"])
+todo_scan(root="harness/tools", file_glob="**/*.py")
+todo_scan(tags=["TODO", "FIXME"], sort_by="tag", include_context=true)
+todo_scan(root="harness", max_results=500)
+```
+
+**Key capabilities:**
+
+1. **Tag filtering** — defaults to all six built-in tags (`TODO`, `FIXME`,
+   `HACK`, `NOTE`, `BUG`, `XXX`); caller can supply a subset list.  Tags are
+   matched case-insensitively so `# fixme:` and `# FIXME:` both resolve to
+   `"FIXME"` in output.
+
+2. **Flexible annotation syntax** — the tag regex matches all common
+   annotation styles:
+   - `# TODO: message` (colon)
+   - `# TODO(author): message` (parenthesised owner)
+   - `# TODO - message` (dash)
+   - `# BUG message` (space only)
+   - Inline-on-code-line: `x = 1  # BUG: off by one`
+
+3. **Sort modes** — `sort_by="file"` (default, groups by file then line),
+   `sort_by="tag"` (groups by tag type across files), `sort_by="line"`.
+
+4. **Context lines** — `include_context=true` adds `context_before` and
+   `context_after` fields with the adjacent source lines, making it easier
+   to understand the annotation without loading the full file.
+
+5. **by_tag summary** — output always includes a `by_tag` dict with counts
+   per tag, giving a quick overview of technical-debt distribution.
+
+**Output structure (JSON):**
+```json
+{
+  "root": "/path/to/workspace",
+  "files_scanned": 31,
+  "total_found": 12,
+  "by_tag": {"TODO": 8, "FIXME": 3, "BUG": 1},
+  "tags_searched": ["TODO", "FIXME", "HACK", "NOTE", "BUG", "XXX"],
+  "truncated": false,
+  "results": [
+    {
+      "file": "harness/loop.py",
+      "line": 42,
+      "tag": "TODO",
+      "text": "# TODO: add retry logic for transient failures"
+    },
+    ...
+  ]
+}
+```
+
+With `include_context=true` each result gains:
+```json
+{
+  "context_before": "    for attempt in range(max_retries):",
+  "context_after": "    raise MaxRetriesExceeded()"
+}
+```
+
+**Parameters:**
+- `root` (optional, default: `config.workspace`) — directory to search.
+- `file_glob` (optional, default: `"**/*.py"`) — glob pattern for files.
+- `tags` (optional, default: all six) — list of tags to find.
+- `sort_by` (optional, default: `"file"`) — `"file"` | `"tag"` | `"line"`.
+- `include_context` (optional, default: `false`) — add adjacent source lines.
+- `max_results` (optional, default: 200, max: 1000) — result cap.
+
+**Security:** Uses `_check_dir_root` + `_rglob_safe` — null-byte rejection,
+`PERMISSION ERROR` prefix, allowed-paths enforcement, symlink-safe traversal.
+
+**Output budget:** `_safe_json` with 32 KB cap (slightly larger than other
+tools since context lines increase payload size proportionally).
+
+#### `harness/tools/__init__.py`
+
+- Added `from harness.tools.todo_scan import TodoScanTool` import.
+- Appended `TodoScanTool()` to `DEFAULT_TOOLS` list.
+- Updated `_EXPECTED_DEFAULT_COUNT` from `31` to `32`.
+- Updated docstring count from `"31 of 31"` to `"32 of 32"`.
+
+---
+
+### Tool ABC compliance
+
+- Inherits `Tool` ABC ✓
+- `name = "todo_scan"` property ✓
+- `input_schema()` returns valid JSON Schema (no required params — all optional) ✓
+- `async execute(config, **params) -> ToolResult` ✓
+- `requires_path_check = False` + manual `_check_dir_root` enforcement ✓
+- Registered in `DEFAULT_TOOLS` and `_ALL_TOOLS_BY_NAME` ✓
+
+### Git tag
+
+`v-tool-todo_scan-auto`
+
+---
+
+### Lines Added vs Removed
+
+- Lines added: ~290 (`todo_scan.py`) + 4 (wiring in `__init__.py`)
+- Lines removed: 0
+- Net: +294
