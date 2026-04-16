@@ -68,12 +68,12 @@ _TURN_STALL_WARN_SECS: float = 90.0
 # Heuristic: 4 chars ≈ 1 token.  The threshold is set at 600 K chars (~150 K
 # tokens) — comfortably inside the 200 K-token context window while leaving
 # headroom for the system prompt, the final answer, and the tools schema.
-_CONV_PRUNE_THRESHOLD_CHARS: int = 600_000   # trigger pruning above this total
-_CONV_PRUNE_TARGET_CHARS: int = 400_000      # prune down to this target
+_CONV_PRUNE_THRESHOLD_CHARS: int = 150_000   # trigger pruning above this total
+_CONV_PRUNE_TARGET_CHARS: int = 100_000      # prune down to this target
 # Number of *trailing* message pairs (assistant + user) kept verbatim.
 # Keeping the most recent turns intact ensures the model still sees the fresh
 # tool output it just received; only older outputs are compressed.
-_CONV_PRUNE_KEEP_RECENT_PAIRS: int = 4
+_CONV_PRUNE_KEEP_RECENT_PAIRS: int = 3
 
 # Minimum character count for a non-tool-call LLM response to be considered
 # plausible.  Responses shorter than this with no tool calls almost always
@@ -257,6 +257,137 @@ def _prune_conversation_tool_outputs(
                 msgs_pruned += 1
 
     return conversation, msgs_pruned, chars_removed
+
+
+# ---------------------------------------------------------------------------
+# Per-loop file-read cache
+# ---------------------------------------------------------------------------
+# Tool loops commonly read the same file multiple times (e.g. the LLM reads a
+# file, edits it, then re-reads to verify — but it also re-reads unchanged
+# files just because they fell off its attention).  Caching read_file results
+# within a single tool loop avoids injecting duplicate multi-KB tool results
+# into the conversation, which directly reduces input-token growth per turn.
+
+_WRITE_TOOLS = frozenset({"write_file", "edit_file", "file_patch", "find_replace"})
+
+
+class _CachedToolRegistry:
+    """Thin wrapper around ToolRegistry that caches read_file results.
+
+    Cache lifetime = one call_with_tools() invocation.  Writes to the same
+    path invalidate the cache entry so the next read sees fresh content.
+    """
+
+    def __init__(self, inner: ToolRegistry) -> None:
+        self._inner = inner
+        self._cache: dict[tuple[str, int, int], ToolResult] = {}
+        self._dirty_paths: set[str] = set()
+
+    @property
+    def _tools(self) -> dict:          # forward for to_api_schema()
+        return self._inner._tools      # noqa: SLF001
+
+    def to_api_schema(self) -> list[dict[str, Any]]:
+        return self._inner.to_api_schema()
+
+    async def execute(
+        self,
+        name: str,
+        config: HarnessConfig,
+        params: dict[str, Any],
+    ) -> ToolResult:
+        # Invalidate cache on writes *before* execution so that a failed
+        # write still clears the stale entry.
+        if name in _WRITE_TOOLS:
+            path_str = str(params.get("path", ""))
+            self._dirty_paths.add(path_str)
+
+        if name == "read_file":
+            path_str = str(params.get("path", ""))
+            offset = int(params.get("offset", 1))
+            limit = int(params.get("limit", 2000))
+            key = (path_str, offset, limit)
+            if key in self._cache and path_str not in self._dirty_paths:
+                log.debug("file cache HIT: %s offset=%d limit=%d", path_str, offset, limit)
+                return self._cache[key]
+            result = await self._inner.execute(name, config, params)
+            if not result.is_error:
+                self._cache[key] = result
+                # If the path was dirty, a fresh read clears the dirty flag
+                self._dirty_paths.discard(path_str)
+            return result
+
+        return await self._inner.execute(name, config, params)
+
+
+# ---------------------------------------------------------------------------
+# Proactive tool-result compaction
+# ---------------------------------------------------------------------------
+# Instead of waiting until the conversation hits 600 K chars (the old
+# _prune_conversation_tool_outputs threshold), we proactively compact old
+# tool results after every turn once the conversation exceeds a modest
+# number of message pairs.  Old results are replaced with one-line summaries
+# that preserve *what* tool was called but drop the multi-KB output.
+
+_COMPACT_MIN_TURNS: int = 6       # keep first N turns fully intact
+_COMPACT_KEEP_RECENT: int = 3     # always keep last N assistant+user pairs
+_COMPACT_MIN_TEXT_LEN: int = 500  # only compact results above this size
+
+
+def _compact_old_tool_results(conversation: list[dict[str, Any]]) -> int:
+    """Replace old tool-result text with one-line summaries.
+
+    Returns the number of blocks compacted.
+    """
+    # Find tool_result message indices (same logic as _prune_conversation_tool_outputs)
+    tr_indices: list[int] = []
+    for i, msg in enumerate(conversation):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            tr_indices.append(i)
+
+    if len(tr_indices) <= _COMPACT_KEEP_RECENT:
+        return 0
+
+    protected = set(tr_indices[-_COMPACT_KEEP_RECENT:])
+    compacted = 0
+
+    for idx in tr_indices:
+        if idx in protected:
+            continue
+        content = conversation[idx]["content"]
+        # Find the preceding assistant message to extract tool names
+        tool_names: dict[str, str] = {}  # tool_use_id -> name
+        if idx > 0:
+            prev = conversation[idx - 1]
+            if prev.get("role") == "assistant" and isinstance(prev.get("content"), list):
+                for b in prev["content"]:
+                    if isinstance(b, dict) and b.get("type") == "tool_use":
+                        tool_names[b.get("id", "")] = b.get("name", "tool")
+
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            sub_content = block.get("content", [])
+            if not isinstance(sub_content, list):
+                continue
+            for sub in sub_content:
+                if not isinstance(sub, dict) or sub.get("type") != "text":
+                    continue
+                text = sub.get("text", "")
+                if len(text) < _COMPACT_MIN_TEXT_LEN:
+                    continue
+                # Build a compact summary
+                tool_id = block.get("tool_use_id", "")
+                tool_name = tool_names.get(tool_id, "tool")
+                sub["text"] = f"[{tool_name}: {len(text)} chars, compacted]"
+                compacted += 1
+
+    return compacted
 
 
 def _summarise_tool_input(tool_name: str, params: dict[str, Any]) -> str:
@@ -444,7 +575,8 @@ class LLM:
         Returns (final_text, execution_log) where execution_log is a list of
         {"tool": name, "input": {...}, "output": "..."} dicts.
         """
-        tools_schema = registry.to_api_schema()
+        cached_registry = _CachedToolRegistry(registry)
+        tools_schema = cached_registry.to_api_schema()
         conversation = list(messages)
         execution_log: list[dict[str, Any]] = []
         loop_start = time.monotonic()
@@ -546,7 +678,7 @@ class LLM:
             # Execute tools and build tool_result message
             tool_results: list[dict[str, Any]] = []
             for tc in resp.tool_calls:
-                result: ToolResult = await registry.execute(
+                result: ToolResult = await cached_registry.execute(
                     tc["name"], self.config, tc["input"]
                 )
                 # Log a concise one-liner per tool call with key path/command info
@@ -605,6 +737,19 @@ class LLM:
                     n_removed,
                     conv_chars - n_removed,
                 )
+
+            # Proactive compaction: replace old tool-result text with one-line
+            # summaries once the conversation has enough turns.  This runs
+            # *every* turn (after the initial warm-up) and is cheap — it only
+            # scans message metadata, not the full text.
+            if turn >= _COMPACT_MIN_TURNS:
+                n_compacted = _compact_old_tool_results(conversation)
+                if n_compacted:
+                    log.info(
+                        "tool_loop turn=%d: compacted %d old tool-result block(s)",
+                        turn + 1,
+                        n_compacted,
+                    )
 
         elapsed = time.monotonic() - loop_start
         log.warning(
