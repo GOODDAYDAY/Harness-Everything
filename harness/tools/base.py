@@ -72,7 +72,7 @@ class Tool(ABC):
     def _check_path(self, config: HarnessConfig, path: str) -> str | ToolResult:
         """Validate a file path against security rules.
         
-        Returns the validated path string if valid, otherwise returns a ToolResult error.
+        Returns: str on success, ToolResult on validation failure.
         
         Security validation order:
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
@@ -82,7 +82,7 @@ class Tool(ABC):
         try:
             # Use the consolidated validation method
             resolved, err = self._validate_root_path(config, path)
-            if err:
+            if err is not None:
                 return err
             return resolved
         except ValueError as e:
