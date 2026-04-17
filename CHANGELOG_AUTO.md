@@ -18,6 +18,7 @@
 | 7 | Tool auto-discovery | New `discovery.py` (dynamic tool loading); `ToolRegistry.discover()` | +350 |
 | 8 | Architecture fix | HttpRequestTool → OPTIONAL_TOOLS (reduce default schema cost) | −13 |
 | 9 | Git search | New `git_search` tool (log/blame/grep/show/log_file modes) | +446 |
+| 14 | Security validation test | Added test for consolidated _validate_root_path method verifying correct security validation order (null bytes → control chars → homoglyphs) | +60 |
 | 10 | TODO scanner | New `todo_scan` tool (6 tag types, context lines, sort modes) | +300 |
 | R3-fix | MetricsCollector fix | Fixed dataclass field ordering (mutable default after non-default) | +2 |
 | R3-trace | Registry hardening | Manifest generator, import-time assertions (later removed in Round 1) | +79 |
