@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/home/ubuntu/harness-everything
 EnvironmentFile=/home/ubuntu/.config/harness/env
-ExecStart=/home/ubuntu/harness-everything/.venv/bin/python main.py --pipeline /home/ubuntu/harness-everything/pipeline_server.json
+ExecStart=/home/ubuntu/harness-venv/bin/python main.py --pipeline /home/ubuntu/harness-everything/pipeline_server.json
 
 # Clean exit (code 0 after outer_rounds completes) → service stops, waits for CI to restart it.
 # Crash exits → 3 retries 60s apart; if all fail, systemd gives up to avoid bad-code restart loops.
