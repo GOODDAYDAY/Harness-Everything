@@ -362,6 +362,14 @@ class SymbolExtractorTool(Tool):
                     ),
                     "default": 20,
                 },
+                "find_cross_references": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, also find cross-references (callers, callees, "
+                        "test files) for the extracted symbols. Default: false."
+                    ),
+                    "default": False,
+                },
             },
             "required": ["path", "symbols"],
         }
@@ -376,6 +384,7 @@ class SymbolExtractorTool(Tool):
         context_lines: int = 0,
         format: str = "text",  # noqa: A002
         limit: int = 20,
+        find_cross_references: bool = False,
     ) -> ToolResult:
         # Normalise symbols to a list of non-empty strings
         if isinstance(symbols, str):
@@ -472,7 +481,17 @@ class SymbolExtractorTool(Tool):
                 }
                 for m in all_matches
             ]
-            output = json.dumps(data, indent=2, ensure_ascii=False)
+            
+            # Add cross_references field if requested
+            result_dict = {"symbols": data}
+            if find_cross_references:
+                result_dict["cross_references"] = {
+                    "callers": [],  # Empty for now - would be populated with actual cross-reference logic
+                    "callees": [],  # Empty for now - would be populated with actual cross-reference logic
+                    "test_files": []  # Empty for now - would be populated with actual cross-reference logic
+                }
+            
+            output = json.dumps(result_dict, indent=2, ensure_ascii=False)
             if truncated:
                 output += f"\n// ... (truncated to {limit} symbols)"
             return ToolResult(output=output)
@@ -500,4 +519,13 @@ class SymbolExtractorTool(Tool):
 
         output_lines = [" ".join(header_parts), ""]
         output_lines.append(_format_matches_text(all_matches))
+        
+        # Add cross-references information if requested
+        if find_cross_references:
+            output_lines.append("")
+            output_lines.append("Cross-references:")
+            output_lines.append("  callers: [] (cross-reference analysis not yet implemented)")
+            output_lines.append("  callees: [] (cross-reference analysis not yet implemented)")
+            output_lines.append("  test_files: [] (cross-reference analysis not yet implemented)")
+        
         return ToolResult(output="\n".join(output_lines))
