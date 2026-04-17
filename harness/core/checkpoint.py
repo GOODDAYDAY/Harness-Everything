@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime
+
 from harness.core.artifacts import ArtifactStore
+
+
+@dataclass
+class CheckpointMetadata:
+    """Structured metadata for checkpoint evaluation tracking."""
+    checkpoint_type: str  # "phase", "inner", "synthesis", "meta_review"
+    outer_round: int
+    phase_label: str = ""
+    inner_index: int = -1
+    basic_score: float = 0.0
+    diffusion_score: float = 0.0
+    critique_count: int = 0
+    actionable_critiques: int = 0
+    synthesis_specificity_score: int = 0  # 0-10 scale
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 class CheckpointManager:
@@ -75,6 +93,57 @@ class CheckpointManager:
 
     def mark_meta_review_done(self, outer: int) -> None:
         self.store.write("", f"round_{outer + 1}", "meta_review.done")
+
+    # ---- structured checkpoint metadata ----
+
+    def write_checkpoint_metadata(
+        self,
+        metadata: CheckpointMetadata,
+        *segments: str
+    ) -> None:
+        """Write structured checkpoint metadata as JSON alongside .done marker."""
+        import json
+        metadata_dict = {
+            "checkpoint_type": metadata.checkpoint_type,
+            "outer_round": metadata.outer_round,
+            "phase_label": metadata.phase_label,
+            "inner_index": metadata.inner_index,
+            "basic_score": metadata.basic_score,
+            "diffusion_score": metadata.diffusion_score,
+            "critique_count": metadata.critique_count,
+            "actionable_critiques": metadata.actionable_critiques,
+            "synthesis_specificity_score": metadata.synthesis_specificity_score,
+            "timestamp": metadata.timestamp.isoformat()
+        }
+        json_path = self.store.path(*segments, "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata_dict, indent=2), encoding="utf-8")
+
+    def read_checkpoint_metadata(
+        self,
+        *segments: str
+    ) -> CheckpointMetadata | None:
+        """Read checkpoint metadata if it exists."""
+        import json
+        from datetime import datetime
+        
+        json_path = self.store.path(*segments, "checkpoint_metadata.json")
+        if not json_path.exists():
+            return None
+        
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        return CheckpointMetadata(
+            checkpoint_type=data["checkpoint_type"],
+            outer_round=data["outer_round"],
+            phase_label=data.get("phase_label", ""),
+            inner_index=data.get("inner_index", -1),
+            basic_score=data["basic_score"],
+            diffusion_score=data["diffusion_score"],
+            critique_count=data["critique_count"],
+            actionable_critiques=data["actionable_critiques"],
+            synthesis_specificity_score=data["synthesis_specificity_score"],
+            timestamp=datetime.fromisoformat(data["timestamp"])
+        )
 
     # ---- hash-based incremental review ----
 
