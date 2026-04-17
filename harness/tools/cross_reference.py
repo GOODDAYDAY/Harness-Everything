@@ -32,7 +32,7 @@ class CrossReferenceTool(Tool):
         "callers list, callees list, and test files. Uses AST parsing — no "
         "regex, no false positives from comments."
     )
-    requires_path_check = False  # manual allowed_paths enforcement in execute()
+    requires_path_check = True  # use base class security validation
     tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
