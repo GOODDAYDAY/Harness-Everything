@@ -175,13 +175,21 @@ def _extract_before_snapshots(execution_log: list[dict]) -> dict[str, str]:
 
 
 @dataclass
+@dataclass
 class Verdict:
-    """Evaluation outcome."""
-
+    """Evaluation outcome with structured scoring."""
+    
     passed: bool
     reason: str
     feedback: str  # actionable feedback for the next iteration
-    static_report: StaticReport | None = None  # attached for downstream use
+    static_report: StaticReport | None = None
+    
+    # Structured scoring fields
+    score: float = 0.0  # 0-10 scale
+    score_breakdown: dict[str, float] = field(default_factory=dict)  # dimension → score
+    top_defect: str = ""  # Most critical issue
+    actionable_items: list[str] = field(default_factory=list)  # Specific action items
+    evaluation_mode: str = "implementation"  # "implementation" or "phase"  # attached for downstream use
 
 
 class Evaluator:
