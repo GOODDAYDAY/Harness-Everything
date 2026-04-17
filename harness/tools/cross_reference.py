@@ -67,9 +67,16 @@ class CrossReferenceTool(Tool):
         root: str = "",
         include_tests: bool = True,
     ) -> ToolResult:
-        search_root, allowed, err = self._check_dir_root(config, root)
-        if err:
-            return err
+        if root:
+            resolved_root, err = self._resolve_and_check(config, root)
+            if err:
+                return err
+            search_root = Path(resolved_root)
+        else:
+            search_root = Path(config.workspace)
+        
+        # Get allowed paths for _rglob_safe from config
+        allowed = [Path(p).resolve() for p in config.allowed_paths]
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None

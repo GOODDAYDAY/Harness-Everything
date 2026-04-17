@@ -1,7 +1,9 @@
 """Tests for the cross_reference tool."""
 
+import asyncio
 import re
 from harness.tools.cross_reference import CrossReferenceTool
+from harness.core.config import HarnessConfig
 
 
 def test_cross_reference_test_file_detection():
@@ -51,3 +53,21 @@ def test_cross_reference_tool_initialization():
     assert "symbol" in schema["properties"]
     assert "root" in schema["properties"]
     assert "include_tests" in schema["properties"]
+
+
+def test_cross_reference_rejects_homoglyph_root(tmp_path):
+    """CrossReferenceTool must reject root paths containing homoglyphs."""
+    tool = CrossReferenceTool()
+    # Use a real temporary directory that exists
+    workspace_path = tmp_path / "safe"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    workspace = str(workspace_path)
+    config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+    # Cyrillic 'a' (U+0430) which visually spoofs ASCII 'a'
+    malicious_root = "/s\u0430fe/path"
+    
+    result = asyncio.run(tool.execute(config, "some_func", root=malicious_root))
+    
+    assert result.is_error is True
+    # Error message should indicate a security/permission violation
+    assert "permission" in result.error.lower() or "security" in result.error.lower() or "not allowed" in result.error.lower()
