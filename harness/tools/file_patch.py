@@ -392,7 +392,7 @@ class FilePatchTool(Tool):
         dry_run: bool,
     ) -> ToolResult:
         """Parse and apply all hunks from *patch_text* to the file at *path*."""
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
 

@@ -28,7 +28,7 @@ class WriteFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, content: str
     ) -> ToolResult:
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
 

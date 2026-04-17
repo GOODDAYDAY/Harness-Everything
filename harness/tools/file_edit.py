@@ -43,7 +43,7 @@ class EditFileTool(Tool):
         new_str: str,
         replace_all: bool = False,
     ) -> ToolResult:
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
 

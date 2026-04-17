@@ -131,7 +131,6 @@ class Tool(ABC):
         
         return resolved, None
 
-
     def _resolve_and_check(
         self, config: HarnessConfig, path: str
     ) -> tuple[str, ToolResult | None]:
