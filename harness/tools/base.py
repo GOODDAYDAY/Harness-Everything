@@ -118,20 +118,26 @@ class Tool(ABC):
         This method consolidates the logic previously duplicated in
         _resolve_and_check and _check_dir_root.
         """
-        # First, use the comprehensive security validation from _check_path
-        if err := self._check_path(config, root):
-            return "", err
+        # Handle empty root (use workspace)
+        path_to_check = root if root else config.workspace
         
-        # Resolve the path
-        try:
-            resolved = str(Path(os.path.realpath(root if root else config.workspace)))
-        except (ValueError, OSError) as exc:
+        # 1. Security validation on raw path
+        if error_msg := validate_path_security(path_to_check, config):
             return "", ToolResult(
-                error=f"PERMISSION ERROR: invalid path {root!r}: {exc}",
+                error=error_msg,
                 is_error=True,
             )
         
-        # Check if the resolved path is allowed
+        # 2. Resolve path to eliminate symlink TOCTOU
+        try:
+            resolved = os.path.realpath(path_to_check)
+        except (ValueError, OSError) as exc:
+            return "", ToolResult(
+                error=f"PERMISSION ERROR: invalid path {path_to_check!r}: {exc}",
+                is_error=True,
+            )
+        
+        # 3. Check if resolved path is allowed
         if not config.is_path_allowed(resolved):
             return "", ToolResult(
                 error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
