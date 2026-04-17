@@ -80,6 +80,9 @@ class CrossReferenceTool(Tool):
         callers: list[dict[str, Any]] = []
         callees: list[str] = []
         test_files: list[str] = []
+        
+        # Compile regex pattern once for efficiency
+        test_pattern = re.compile(rf'\b{re.escape(func_name)}\b') if include_tests else None
 
         for fpath in py_files:
             try:
@@ -107,7 +110,12 @@ class CrossReferenceTool(Tool):
                             "line": node.lineno,
                             "signature": function_signature(node, lines),
                         }
-                        callees = extract_callees(node)[:30]
+                        # Append new callees, respecting the global limit
+                        new_callees = extract_callees(node)
+                        for callee in new_callees:
+                            if len(callees) >= 30:
+                                break
+                            callees.append(callee)
                 elif class_name is None and isinstance(node, ast.ClassDef):
                     if node.name == func_name and definition is None:
                         definition = {
@@ -151,9 +159,8 @@ class CrossReferenceTool(Tool):
                     filename.endswith("_test.py") or
                     filename.endswith("_spec.py")
                 )
-                # Check if func_name appears as a whole word in source
-                pattern = re.compile(rf'\b{re.escape(func_name)}\b')
-                if is_test_file and pattern.search(source):
+                # Use pre-compiled pattern for efficiency
+                if is_test_file and test_pattern and test_pattern.search(source):
                     test_files.append(rel)
 
         result: dict[str, Any] = {
