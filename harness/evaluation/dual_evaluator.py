@@ -347,6 +347,8 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             # Debate proposals with concrete file/function references should score higher
             if score > 7.0 and file_count == 0:
                 warnings.append(f"Score {score} for debate mode with no specific file references - check specificity")
+                # Log a warning for debate mode scores without file references
+                log.warning(f"Debate mode score {score} lacks file reference in {evaluator_type} evaluator")
                 
         elif mode == "implement":
             # Implement mode: evaluating executed code
@@ -385,6 +387,72 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         warnings.append(f"Round number score {score} - check if proper calibration anchors were used")
     
     return warnings
+
+
+def _score_is_in_code_block(text: str, score_line_start: int) -> bool:
+    """Check if a SCORE: line starting at score_line_start is inside a markdown code block.
+    
+    Uses a state machine to track:
+    - in_code_block: whether we're currently inside a code block
+    - backtick_count: consecutive backticks seen on current line
+    - block_start_char: the character that started the current code block (for nested blocks)
+    - same_line_backticks: whether backticks are on the same line as the score
+    
+    Args:
+        text: The full text to analyze
+        score_line_start: The character index where the SCORE: line starts
+        
+    Returns:
+        True if the SCORE: line is inside a code block, False otherwise
+    """
+    # State machine variables
+    in_code_block = False
+    backtick_count = 0
+    block_start_char = None  # '`' for inline code, None for no block
+    i = 0
+    
+    while i < score_line_start and i < len(text):
+        char = text[i]
+        
+        # Count consecutive backticks
+        if char == '`':
+            backtick_count += 1
+        else:
+            # Not a backtick - process any pending backtick sequence
+            if backtick_count > 0:
+                if backtick_count >= 3:
+                    # Triple+ backticks toggle code block state
+                    in_code_block = not in_code_block
+                    if in_code_block:
+                        block_start_char = '`'
+                    else:
+                        block_start_char = None
+                elif backtick_count == 1 and not in_code_block:
+                    # Single backtick starts inline code
+                    block_start_char = '`'
+                elif backtick_count == 1 and in_code_block and block_start_char == '`':
+                    # Single backtick inside a code block - ignore (part of content)
+                    pass
+                # Reset backtick count
+                backtick_count = 0
+            else:
+                # Check for end of inline code
+                if block_start_char == '`' and char == '`':
+                    # Found closing backtick for inline code
+                    block_start_char = None
+                    # Skip the closing backtick
+                    i += 1
+                    continue
+        
+        i += 1
+    
+    # Process any trailing backticks at the boundary
+    if backtick_count > 0:
+        if backtick_count >= 3:
+            # If we have triple backticks at the boundary, toggle state
+            in_code_block = not in_code_block
+    
+    return in_code_block
 
 
 def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: str | None = None) -> tuple[bool, list[str]]:
@@ -426,18 +494,19 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         if section not in text:
             issues.append(f"Missing required section: {section}")
     
-    # SECURITY GUARD: Check if SCORE: line is inside a markdown code block
-    in_code_block = False
-    for line_num, line in enumerate(text.split('\n'), 1):
-        stripped = line.strip()
-        # Toggle code block state on triple backticks
-        if stripped.startswith('```'):
-            in_code_block = not in_code_block
-            continue
-        # Check if this line contains SCORE: while inside a code block
-        if in_code_block and 'SCORE:' in line.upper():
-            issues.append(f"SCORE: found inside markdown code block at line {line_num}")
-            # Don't break - continue checking all lines to report all violations
+    # SECURITY GUARD: Check if SCORE: line is inside a markdown code block using state machine
+    lines = text.split('\n')
+    for line_num, line in enumerate(lines, 1):
+        if 'SCORE:' in line.upper():
+            # Find the character index where this line starts
+            line_start = 0
+            for i in range(line_num - 1):
+                line_start += len(lines[i]) + 1  # +1 for newline
+            
+            # Check if this SCORE: line is inside a code block
+            if _score_is_in_code_block(text, line_start):
+                issues.append(f"SCORE: found inside markdown code block at line {line_num}")
+                # Don't break - continue checking all lines to report all violations
     
     # Check for SCORE format - must be on its own line
     score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
