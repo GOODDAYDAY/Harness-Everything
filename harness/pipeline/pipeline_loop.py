@@ -16,6 +16,7 @@ from harness.core.artifacts import ArtifactStore
 from harness.core.checkpoint import CheckpointManager
 from harness.core.config import PipelineConfig
 from harness.core.llm import LLM
+from harness.pipeline.health import HealthMonitor
 from harness.pipeline.memory import MemoryStore
 from harness.pipeline.metrics import MetricsCollector
 from harness.pipeline.phase import PhaseConfig, PhaseResult
@@ -88,6 +89,9 @@ class PipelineLoop:
         self._metrics_collector = MetricsCollector(
             output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
         )
+        
+        # Health monitoring for production quality
+        self.health_monitor = HealthMonitor(config)
 
         # Graceful shutdown
         self._shutdown_requested: bool = False
