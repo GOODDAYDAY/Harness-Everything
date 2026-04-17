@@ -319,10 +319,10 @@ Turn 20: send [above + 19 rounds]                               ≈ 60K tokens  
 ```mermaid
 graph LR
     subgraph Each turn resends everything
-        T1["Turn 1<br/>20K tokens<br/>$"] --> T5["Turn 5<br/>30K tokens<br/>$$"]
-        T5 --> T10["Turn 10<br/>40K tokens<br/>$$$"]
-        T10 --> T15["Turn 15<br/>45K tokens<br/>$$$$"]
-        T15 --> T20["Turn 20<br/>60K tokens<br/>$$$$$$"]
+        T1["Turn 1<br/>20K tokens<br/>cheap"] --> T5["Turn 5<br/>30K tokens<br/>moderate"]
+        T5 --> T10["Turn 10<br/>40K tokens<br/>expensive"]
+        T10 --> T15["Turn 15<br/>45K tokens<br/>very expensive"]
+        T15 --> T20["Turn 20<br/>60K tokens<br/>most expensive"]
     end
 
     T15 -.- CUT["Cut here<br/>saves 40%"]

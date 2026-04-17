@@ -354,10 +354,10 @@ Turn 20: 发送 [上面 + 19 轮]                            ≈ 60K tokens  ←
 ```mermaid
 graph LR
     subgraph 每轮重发全部对话
-        T1["Turn 1<br/>20K tokens<br/>$$$"] --> T5["Turn 5<br/>30K tokens<br/>$$$$"]
-        T5 --> T10["Turn 10<br/>40K tokens<br/>$$$$$"]
-        T10 --> T15["Turn 15<br/>45K tokens<br/>$$$$$$"]
-        T15 --> T20["Turn 20<br/>60K tokens<br/>$$$$$$$$"]
+        T1["Turn 1<br/>20K tokens<br/>便宜"] --> T5["Turn 5<br/>30K tokens<br/>还行"]
+        T5 --> T10["Turn 10<br/>40K tokens<br/>开始贵"]
+        T10 --> T15["Turn 15<br/>45K tokens<br/>很贵"]
+        T15 --> T20["Turn 20<br/>60K tokens<br/>最贵"]
     end
 
     T15 -.- CUT["✂️ 砍到这里<br/>省 40% 成本"]
