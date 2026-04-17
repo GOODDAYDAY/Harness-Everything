@@ -34,6 +34,10 @@ class CrossReferenceTool(Tool):
     )
     requires_path_check = True  # use base class security validation
     tags = frozenset({"analysis"})
+    
+    # Valid symbol pattern: standard Python identifier, optionally dot-qualified
+    # e.g., "my_function", "ClassName.method_name"
+    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$')
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -73,6 +77,10 @@ class CrossReferenceTool(Tool):
         search_root, allowed, err_result = self._check_dir_root(config, root)
         if err_result:
             return err_result
+        
+        # Validate symbol format to prevent injection of malicious characters
+        if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol.strip()):
+            return ToolResult(error=f"Invalid symbol format: '{symbol}'", is_error=True)
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
