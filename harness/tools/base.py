@@ -70,19 +70,27 @@ class Tool(ABC):
     # ---- helpers ----
 
     def _check_path(self, config: HarnessConfig, path: str) -> str | ToolResult:
-        """Check if a path is within allowed workspace.
+        """Validate a file path against security rules.
         
-        Returns the resolved path string if valid, otherwise returns a ToolResult error.
+        Returns: str on success, ToolResult on validation failure.
         
         Security validation order:
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
         2. Resolve path with os.path.realpath to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
         """
-        
-        # Use the consolidated validation method
-        resolved, err = self._validate_root_path(config, path)
-        return err if err else resolved
+        try:
+            # Use the consolidated validation method
+            resolved, err = self._validate_root_path(config, path)
+            if err is not None:
+                return err
+            return resolved
+        except ValueError as e:
+            # CRITICAL: Must return ToolResult, not None or raise exception
+            return ToolResult(error=f"Path validation failed: {e}", is_error=True)
+        except Exception as e:
+            # Catch-all to ensure no unexpected exception returns None or raises
+            return ToolResult(error=f"Unexpected validation error: {e}", is_error=True)
 
 
 

@@ -462,13 +462,14 @@ class FilePatchTool(Tool):
         files_written: list[str] = []
 
         for rel_path, patch_text in file_patches.items():
-            # Resolve relative to workspace; _resolve_and_check handles null-byte
+            # Resolve relative to workspace; _check_path handles null-byte
             # rejection and realpath-based symlink resolution.
             raw = str(Path(config.workspace) / rel_path)
-            resolved, chk_err = self._resolve_and_check(config, raw)
-            if chk_err:
-                errors.append(f"{rel_path}: {chk_err.error}")
+            check_result = self._check_path(config, raw)
+            if isinstance(check_result, ToolResult):
+                errors.append(f"{rel_path}: {check_result.error}")
                 continue
+            resolved = check_result
 
             p = Path(resolved)
             original = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
