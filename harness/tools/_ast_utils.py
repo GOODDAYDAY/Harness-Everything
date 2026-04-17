@@ -12,18 +12,25 @@ import ast
 from pathlib import Path
 
 
-def parse_module(path: Path | str) -> ast.Module | None:
-    """Read *path* and return a parsed ``ast.Module``, or ``None`` on failure.
+def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
+    """Read *path* and return a parsed ``ast.Module`` with error message.
 
-    Handles both ``SyntaxError`` (invalid Python) and ``OSError`` (file not
-    readable) so callers can iterate a file list and simply skip ``None``
-    returns instead of repeating try/except in each tool.
+    Returns (ast.Module, None) on success, (None, error_message) on failure.
+    Handles ``SyntaxError`` (invalid Python), ``OSError`` (file not readable),
+    ``MemoryError``, and ``RecursionError`` so callers can iterate a file list
+    and log diagnostic information instead of silently skipping.
     """
     try:
         source = Path(path).read_text(encoding="utf-8", errors="replace")
-        return ast.parse(source, filename=str(path))
-    except (SyntaxError, OSError):
-        return None
+        return ast.parse(source, filename=str(path)), None
+    except SyntaxError as exc:
+        return None, f"SyntaxError in {path}: {exc}"
+    except OSError as exc:
+        return None, f"OSError reading {path}: {exc}"
+    except MemoryError:
+        return None, f"MemoryError parsing {path}: file too large or complex"
+    except RecursionError:
+        return None, f"RecursionError parsing {path}: AST too deeply nested"
 
 
 def build_parent_map(tree: ast.AST) -> dict[int, ast.AST]:

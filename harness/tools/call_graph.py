@@ -67,8 +67,10 @@ def _build_index(
     defs_by_bare: dict[str, list[dict[str, Any]]] = {}
 
     for fpath in py_files:
-        tree = parse_module(fpath)
+        tree, parse_error = parse_module(fpath)
         if tree is None:
+            if parse_error:
+                log.debug("call_graph: %s", parse_error)
             continue
 
         try:
@@ -102,8 +104,10 @@ def _build_index(
 
     # Second pass: register qualified names (ClassName.method)
     for fpath in py_files:
-        tree = parse_module(fpath)
+        tree, parse_error = parse_module(fpath)
         if tree is None:
+            if parse_error:
+                log.debug("call_graph: %s", parse_error)
             continue
 
         try:
