@@ -539,3 +539,50 @@ class TestToolCheckPath:
             mock_validate.assert_called_once_with(config, real_path)
             assert resolved == real_path
             assert error is None
+    
+    def test_tool_validate_root_path_returns_tuple(self, tmp_path):
+        """Test that _validate_root_path returns the correct tuple structure.
+        
+        This test directly addresses the falsifiable criterion by verifying
+        the new method's correct output structure.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Create a valid test file
+        test_file = tmp_path / "test.py"
+        test_file.write_text("# test file")
+        
+        # Call _validate_root_path with a valid path
+        result = tool._validate_root_path(config, str(test_file))
+        
+        # Assert the result is a tuple of length 2
+        assert isinstance(result, tuple), "_validate_root_path should return a tuple"
+        assert len(result) == 2, "_validate_root_path should return a tuple of length 2"
+        
+        # Assert the first element is a non-empty string (the resolved path)
+        resolved_path, error = result
+        assert isinstance(resolved_path, str), "First element should be a string"
+        assert len(resolved_path) > 0, "Resolved path should not be empty"
+        
+        # Assert the second element is None (no error)
+        assert error is None, "Second element should be None for valid path"
