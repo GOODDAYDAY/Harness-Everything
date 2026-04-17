@@ -40,23 +40,7 @@ def build_parent_map(tree: ast.AST) -> dict[int, ast.AST]:
     return parent_map
 
 
-def walk_functions(
-    tree: ast.AST,
-) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """Return every ``FunctionDef`` / ``AsyncFunctionDef`` node in *tree*.
 
-    A thin wrapper around ``ast.walk`` so tools can write::
-
-        for fn in walk_functions(tree):
-            ...
-
-    instead of repeating the ``isinstance`` guard everywhere.
-    """
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
 
 
 def dotted_name(node: ast.expr) -> str:
