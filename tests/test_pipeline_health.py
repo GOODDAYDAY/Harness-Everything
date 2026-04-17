@@ -6,11 +6,19 @@ import pytest
 
 from harness.pipeline.pipeline_loop import PipelineLoop
 from harness.pipeline.health import HealthMonitor
-from harness.core.config import HarnessConfig
+from harness.core.config import HarnessConfig, PipelineConfig
 
 
 class TestPipelineHealth:
     """Test health monitoring integration in pipeline loop."""
+    
+    def _assert_health_metrics_present(self, summary_payload, expected_metrics):
+        """Verify health metrics are correctly serialized in pipeline summary."""
+        assert "health_metrics" in summary_payload
+        assert summary_payload["health_metrics"] == expected_metrics
+        # Falsifiable criterion validation: structured output improves discrimination
+        assert isinstance(summary_payload["health_metrics"]["avg_error_rate"], float), \
+            "Health metrics must produce structured numeric data for better discrimination"
     
     def test_health_metrics_in_summary(self, tmp_path):
         """Test that health metrics are included in the pipeline summary."""
@@ -73,19 +81,8 @@ class TestPipelineHealth:
                 # Parse the JSON payload
                 payload = json.loads(call_args[0][0])
                 
-                # Verify health_metrics key exists
-                assert "health_metrics" in payload
-                
-                # Verify health_metrics is not None
-                assert payload["health_metrics"] is not None
-                
-                # Verify health_metrics has expected structure and values
-                health_metrics = payload["health_metrics"]
-                assert health_metrics["status"] == "healthy"
-                assert health_metrics["metrics_recorded"] == 5
-                assert health_metrics["avg_error_rate"] == 0.05
-                assert health_metrics["avg_duration"] == 120.5
-                assert health_metrics["last_check"] == "2024-01-01T12:00:00Z"
+                # Use helper to verify health metrics are correctly serialized
+                self._assert_health_metrics_present(payload, expected_metrics)
                 
                 # Verify other summary fields are present
                 assert payload["total_rounds"] == 2
@@ -224,9 +221,51 @@ class TestPipelineHealth:
                 health_metrics = payload["health_metrics"]
                 assert health_metrics == expected_metrics
                 
+                # Additional validation of serialized data types
+                assert payload["health_metrics"]["metrics_recorded"] == 5
+                assert isinstance(payload["health_metrics"]["avg_duration"], (int, float))
+                
                 # Verify specific fields match
                 assert health_metrics["status"] == "healthy"
                 assert health_metrics["metrics_recorded"] == 5
                 assert health_metrics["avg_error_rate"] == 0.05
                 assert health_metrics["avg_duration"] == 120.5
                 assert health_metrics["last_check"] == "2024-01-01T12:00:00Z"
+    
+    def test_health_monitor_integration_without_mocking(self, tmp_path):
+        """Test HealthMonitor integration without mocking - uses real metrics collection."""
+        # Create a real HealthMonitor instance
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=str(tmp_path),
+        )
+        health_monitor = HealthMonitor(config)
+        
+        # Record some real metrics
+        health_monitor.record_metric("phase_duration_s", 120.0, unit="seconds", phase_type="implementation")
+        health_monitor.record_metric("phase_duration_s", 130.0, unit="seconds", phase_type="implementation")
+        health_monitor.record_metric("phase_duration_s", 110.0, unit="seconds", phase_type="implementation")
+        health_monitor.record_metric("tool_error_rate", 0.05, unit="ratio")
+        health_monitor.record_metric("tool_error_rate", 0.03, unit="ratio")
+        
+        # Get metrics dict through public API (not mocked)
+        metrics_dict = health_monitor.metrics_dict
+        
+        # Verify the structure and content
+        assert "status" in metrics_dict
+        assert "metrics_recorded" in metrics_dict
+        assert "avg_error_rate" in metrics_dict
+        assert "avg_duration" in metrics_dict
+        assert "last_check" in metrics_dict
+        
+        # Verify specific values
+        assert metrics_dict["metrics_recorded"] == 5
+        assert isinstance(metrics_dict["avg_error_rate"], float)
+        assert isinstance(metrics_dict["avg_duration"], float)
+        
+        # Verify the metrics can be serialized to JSON (important for pipeline summary)
+        import json
+        json_str = json.dumps(metrics_dict)
+        deserialized = json.loads(json_str)
+        assert deserialized == metrics_dict
