@@ -42,8 +42,12 @@ jobs:
             # service's auto_push later sees a real branch to push from.
             git checkout main
             git reset --hard ${{ github.ref_name }}
+            # Sync server config from the tracked template (pipeline_server.json
+            # is gitignored so git reset doesn't touch it; this ensures config
+            # changes committed to the example template propagate automatically).
+            cp pipeline_example_self_improve_server.json pipeline_server.json
             .venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
-            .venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineLoop; from harness.core.config import PipelineConfig; print('imports ok')"
+            .venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineConfig; c=PipelineConfig.from_dict(__import__('json').load(open('pipeline_server.json'))); print('config ok: auto_tag_at_end=%s' % c.auto_tag_at_end)"
           EOF
 
       - name: On smoke pass — advance harness-last-good tag
