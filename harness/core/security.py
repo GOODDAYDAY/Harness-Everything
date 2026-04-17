@@ -45,3 +45,65 @@ def validate_path_no_homoglyphs(path: str, config: HarnessConfig | None = None) 
             return f"PERMISSION ERROR: Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
     
     return None
+
+
+def validate_path_no_null_bytes(path: str) -> str | None:
+    """Check if path contains null bytes which can truncate paths at OS level.
+    
+    Null bytes in path strings cause undefined behavior on some OSes and can be
+    used to truncate the path at the OS level, bypassing prefix checks.
+    
+    Args:
+        path: The path string to validate
+        
+    Returns:
+        Error message if null byte found, None if path is clean
+    """
+    if "\x00" in path:
+        return f"PERMISSION ERROR: path contains null byte: {path!r}"
+    return None
+
+
+def validate_path_no_control_chars(path: str) -> str | None:
+    """Check if path contains control characters (except whitespace).
+    
+    Control characters \x01 through \x1f (except \t, \n, \r) can cause
+    unexpected behavior in file systems and path resolution.
+    
+    Args:
+        path: The path string to validate
+        
+    Returns:
+        Error message if control character found, None if path is clean
+    """
+    for i in range(1, 0x20):
+        if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
+            continue
+        if chr(i) in path:
+            return f"PERMISSION ERROR: path contains control character U+{i:04X}"
+    return None
+
+
+def validate_path_security(path: str, config: HarnessConfig | None = None) -> str | None:
+    """Comprehensive path security validation.
+    
+    Runs all security checks on a path in the correct order:
+    1. Unicode homoglyph validation
+    2. Null byte validation
+    3. Control character validation
+    
+    Args:
+        path: The path string to validate
+        config: Optional HarnessConfig instance for homoglyph blocklist
+        
+    Returns:
+        First error message found, or None if all checks pass
+    """
+    # Check in security-critical order
+    if error := validate_path_no_homoglyphs(path, config):
+        return error
+    if error := validate_path_no_null_bytes(path):
+        return error
+    if error := validate_path_no_control_chars(path):
+        return error
+    return None
