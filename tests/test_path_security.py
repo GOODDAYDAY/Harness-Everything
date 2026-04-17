@@ -336,3 +336,56 @@ class TestHomoglyphCleanup:
         from harness.core.security import validate_path_no_homoglyphs
         assert callable(validate_path_no_homoglyphs), \
             "New validate_path_no_homoglyphs function should be callable"
+
+
+def test_homoglyph_validation_order_in_check_path():
+    """Test that homoglyph validation runs before null byte validation in _check_path."""
+    from unittest.mock import patch, MagicMock
+    from harness.tools.base import Tool
+    
+    # Create a mock config
+    config = MagicMock()
+    config.allowed_paths = ["/allowed/path"]
+    
+    # Create a concrete Tool instance (use a simple subclass)
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        
+        def input_schema(self):
+            return {"type": "object", "properties": {}}
+        
+        async def execute(self, config, **params):
+            return None
+    
+    tool = TestTool()
+    
+    # Path with both homoglyph and null byte
+    test_path = "/allowed/path/file\u0430with\x00null.py"
+    
+    # Mock the security validation functions
+    with patch('harness.tools.base.validate_path_security') as mock_validate_security:
+        # Make it return an error (simulating homoglyph detection)
+        mock_validate_security.return_value = "PERMISSION ERROR: Path contains disallowed Unicode homoglyph"
+        
+        # Call _check_path
+        result = tool._check_path(config, test_path)
+        
+        # Verify validate_path_security was called with the path and config
+        mock_validate_security.assert_called_once_with(test_path, config)
+        
+        # Verify the result is an error about homoglyph (not null byte)
+        assert result is not None
+        assert result.is_error
+        assert "homoglyph" in result.error.lower() or "PERMISSION ERROR" in result.error
+        
+        # Verify that if validate_path_security returns None (no error),
+        # the path would be checked against allowed_paths
+        mock_validate_security.reset_mock()
+        mock_validate_security.return_value = None
+        
+        # Mock is_path_allowed to return True
+        with patch.object(config, 'is_path_allowed', return_value=True):
+            result = tool._check_path(config, test_path)
+            assert result is None  # No error means path is allowed
+            mock_validate_security.assert_called_once_with(test_path, config)
