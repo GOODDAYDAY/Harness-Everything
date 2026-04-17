@@ -69,12 +69,10 @@ class Tool(ABC):
 
     # ---- helpers ----
 
-    def _check_path(self, config: HarnessConfig, path: str) -> ToolResult | None:
-        """Return a ToolResult error if *path* is outside allowed dirs, else None.
-
-        Rejects null bytes before any Path operation — a null byte in a path
-        string causes undefined behaviour on some OSes and can be used to
-        truncate the path at the OS level, bypassing prefix checks.
+    def _check_path(self, config: HarnessConfig, path: str) -> str | ToolResult:
+        """Check if a path is within allowed workspace.
+        
+        Returns the resolved path string if valid, otherwise returns a ToolResult error.
         
         Security validation order:
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
@@ -83,13 +81,8 @@ class Tool(ABC):
         """
         
         # Use the consolidated validation method
-        resolved_path, err = self._validate_root_path(config, path)
-        if err:
-            return err
-        
-        # The path has already been validated and resolved by _validate_root_path
-        # No additional checks needed
-        return None
+        resolved, err = self._validate_root_path(config, path)
+        return err if err else resolved
 
 
 
@@ -105,6 +98,10 @@ class Tool(ABC):
         """
         # Handle empty root (use workspace)
         path_to_check = root if root else config.workspace
+        
+        # If path is relative, join it with workspace
+        if not os.path.isabs(path_to_check):
+            path_to_check = os.path.join(config.workspace, path_to_check)
         
         # 1. Security validation on raw path
         if error_msg := validate_path_security(path_to_check, config):
@@ -136,6 +133,9 @@ class Tool(ABC):
     ) -> tuple[str, ToolResult | None]:
         """Validate and resolve a file path.
         
+        DEPRECATED: Use _check_path instead, which returns the resolved path
+        directly or a ToolResult error.
+        
         Uses the consolidated _validate_root_path method for security validation,
         path resolution, and allowed paths checking.
         
@@ -143,6 +143,12 @@ class Tool(ABC):
             (resolved_path, None) on success.
             ("", error_ToolResult) on any failure.
         """
+        import warnings
+        warnings.warn(
+            "_resolve_and_check is deprecated, use _check_path instead",
+            DeprecationWarning,
+            stacklevel=2
+        )
         return self._validate_root_path(config, path)
 
     def _check_dir_root(

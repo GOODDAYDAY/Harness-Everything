@@ -595,10 +595,15 @@ class PipelineLoop:
                     "Graceful shutdown after round %d/%d",
                     outer + 1, self.config.outer_rounds,
                 )
+                self.shutdown_reason = "signal"
                 self._write_shutdown_state(outer, best_round_score, score_history)
                 break
 
         self._uninstall_signal_handlers()
+
+        # Set shutdown reason if not already set by signal handler
+        if self.shutdown_reason == "completed" and len(all_round_results) >= self.config.outer_rounds:
+            self.shutdown_reason = "max_rounds"
 
         total_elapsed = time.monotonic() - pipeline_start
 

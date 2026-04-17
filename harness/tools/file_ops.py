@@ -26,9 +26,12 @@ class DeleteFileTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        resolved, err = self._validate_root_path(config, path)
-        if err:
-            return err
+        # FIX: Use _check_path instead of _validate_root_path directly
+        path_result = self._check_path(config, path)
+        if isinstance(path_result, ToolResult):
+            return path_result  # This is a security or validation error
+        resolved = path_result  # This is the validated path string
+        
         p = Path(resolved)
         if not p.exists():
             return ToolResult(error=f"Not found: {resolved}", is_error=True)
@@ -55,12 +58,17 @@ class MoveFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        src, err = self._validate_root_path(config, source)
-        if err:
-            return err
-        dst, err = self._validate_root_path(config, destination)
-        if err:
-            return err
+        # FIX: Use _check_path instead of _validate_root_path directly
+        src_result = self._check_path(config, source)
+        if isinstance(src_result, ToolResult):
+            return src_result  # This is a security or validation error
+        src = src_result  # This is the validated path string
+        
+        dst_result = self._check_path(config, destination)
+        if isinstance(dst_result, ToolResult):
+            return dst_result  # This is a security or validation error
+        dst = dst_result  # This is the validated path string
+        
         if not Path(src).exists():
             return ToolResult(error=f"Source not found: {src}", is_error=True)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
@@ -87,12 +95,17 @@ class CopyFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        src, err = self._validate_root_path(config, source)
-        if err:
-            return err
-        dst, err = self._validate_root_path(config, destination)
-        if err:
-            return err
+        # FIX: Use _check_path instead of _validate_root_path directly
+        src_result = self._check_path(config, source)
+        if isinstance(src_result, ToolResult):
+            return src_result  # This is a security or validation error
+        src = src_result  # This is the validated path string
+        
+        dst_result = self._check_path(config, destination)
+        if isinstance(dst_result, ToolResult):
+            return dst_result  # This is a security or validation error
+        dst = dst_result  # This is the validated path string
+        
         if not Path(src).is_file():
             return ToolResult(error=f"Source not found: {src}", is_error=True)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)

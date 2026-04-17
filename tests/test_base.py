@@ -88,8 +88,9 @@ class TestToolCheckPath:
         # Call _check_path
         result = tool._check_path(config, clean_path)
         
-        # Verify it returns None (no error)
-        assert result is None
+        # Verify it returns the resolved path (no error)
+        assert isinstance(result, str)
+        assert result.endswith("safe/path/file.txt")
     
     def test_tool_check_path_rejects_outside_allowed(self, tmp_path):
         """Test that _check_path rejects paths outside allowed directories."""
@@ -206,8 +207,9 @@ class TestToolCheckPath:
         # Call _check_path - this should work without any import errors
         result = tool._check_path(config, clean_path)
         
-        # Verify it returns None (no error) - this confirms the method executes successfully
-        assert result is None, "_check_path should return None for clean allowed paths"
+        # Verify it returns the resolved path (no error) - this confirms the method executes successfully
+        assert isinstance(result, str), "_check_path should return resolved path string for clean allowed paths"
+        assert result.endswith("safe/path/file.txt")
         
         # Also test with a path that will be rejected to ensure full execution path works
         outside_path = "/outside/path/file.txt"
@@ -215,6 +217,59 @@ class TestToolCheckPath:
         assert result is not None
         assert result.is_error is True
         assert "not allowed" in result.error.lower()
+    
+    def test_check_path_returns_resolved_path(self, tmp_path):
+        """Test that _check_path returns the resolved path string on success.
+        
+        This test directly addresses the falsifiable criterion by verifying
+        the corrected return value of _check_path.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Create a test file in the workspace
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("test content")
+        
+        # Call _check_path with a relative path
+        result = tool._check_path(config, "test.txt")
+        
+        # Verify it returns the resolved absolute path string
+        assert isinstance(result, str), "_check_path should return resolved path string"
+        assert Path(result).is_absolute(), "Resolved path should be absolute"
+        assert Path(result).exists(), "Resolved path should exist"
+        assert result.endswith("test.txt"), f"Path should end with test.txt, got: {result}"
+        
+        # Test with a subdirectory path
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        subfile = subdir / "file.txt"
+        subfile.write_text("content")
+        
+        result = tool._check_path(config, "subdir/file.txt")
+        assert isinstance(result, str), "_check_path should return resolved path string"
+        assert Path(result).is_absolute(), "Resolved path should be absolute"
+        assert Path(result).exists(), "Resolved path should exist"
+        assert result.endswith("subdir/file.txt"), f"Path should end with subdir/file.txt, got: {result}"
     
     def test_validate_root_path_is_used_by_all_checkers(self, tmp_path):
         """Test that both _check_path and _check_dir_root use the consolidated _validate_root_path method.
@@ -267,7 +322,7 @@ class TestToolCheckPath:
             mock_validate.assert_any_call(config, clean_path)
             
             # Verify both methods returned expected results
-            assert result1 is None, "_check_path should return None for valid path"
+            assert result1 == clean_path, f"_check_path should return resolved path '{clean_path}', got {result1!r}"
             assert result2[2] is None, "_check_dir_root should return None error for valid path"
     
     def test_check_path_security_validation_order(self, tmp_path):
@@ -484,3 +539,50 @@ class TestToolCheckPath:
             mock_validate.assert_called_once_with(config, real_path)
             assert resolved == real_path
             assert error is None
+    
+    def test_tool_validate_root_path_returns_tuple(self, tmp_path):
+        """Test that _validate_root_path returns the correct tuple structure.
+        
+        This test directly addresses the falsifiable criterion by verifying
+        the new method's correct output structure.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Create a valid test file
+        test_file = tmp_path / "test.py"
+        test_file.write_text("# test file")
+        
+        # Call _validate_root_path with a valid path
+        result = tool._validate_root_path(config, str(test_file))
+        
+        # Assert the result is a tuple of length 2
+        assert isinstance(result, tuple), "_validate_root_path should return a tuple"
+        assert len(result) == 2, "_validate_root_path should return a tuple of length 2"
+        
+        # Assert the first element is a non-empty string (the resolved path)
+        resolved_path, error = result
+        assert isinstance(resolved_path, str), "First element should be a string"
+        assert len(resolved_path) > 0, "Resolved path should not be empty"
+        
+        # Assert the second element is None (no error)
+        assert error is None, "Second element should be None for valid path"

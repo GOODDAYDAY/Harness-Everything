@@ -182,9 +182,10 @@ class DiffFilesTool(Tool):
         # ------------------------------------------------------------------ #
         # 1. Validate and read path_a
         # ------------------------------------------------------------------ #
-        resolved_a, err = self._resolve_and_check(config, path_a)
-        if err:
-            return err
+        path_result_a = self._check_path(config, path_a)
+        if isinstance(path_result_a, ToolResult):
+            return path_result_a  # This is a security or validation error
+        resolved_a = path_result_a  # This is the validated path string
 
         p_a = Path(resolved_a)
         if not p_a.exists():
