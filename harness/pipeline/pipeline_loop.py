@@ -882,6 +882,32 @@ class PipelineLoop:
         except Exception as exc:
             log.warning("_write_round_metrics_json: failed to write metrics: %s", exc)
 
+    def _load_persisted_score_history(self) -> list[dict]:
+        """Load score history from persisted metrics.json files.
+        
+        This makes score trend detection checkpoint-resilient by reading
+        the complete history from disk, not just the in-memory list.
+        """
+        score_history = []
+        round_num = 1
+        
+        while True:
+            metrics_path = self.artifacts.path(f"round_{round_num}", "metrics.json")
+            if not metrics_path.exists():
+                break
+            try:
+                content = metrics_path.read_text(encoding="utf-8")
+                data = json.loads(content)
+                score_history.append({
+                    "round": round_num,
+                    "score": data.get("score", 0.0)
+                })
+            except (OSError, json.JSONDecodeError, KeyError) as exc:
+                log.warning("Failed to load metrics.json for round %d: %s", round_num, exc)
+            round_num += 1
+        
+        return score_history
+
     def _write_run_summary(
         self,
         rounds_completed: int,
