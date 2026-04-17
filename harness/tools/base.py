@@ -90,22 +90,7 @@ class Tool(ABC):
             )
         return None
 
-    def _validate_root_path_security(self, root_path: str, config: HarnessConfig | None = None) -> ToolResult | None:
-        """Validate root path security by checking for homoglyphs and other threats.
-        
-        Args:
-            root_path: The path string to validate
-            config: Optional HarnessConfig instance for homoglyph blocklist
-            
-        Returns:
-            ToolResult error if security validation fails, None if path is clean
-        """
-        if error_msg := validate_path_security(root_path, config):
-            return ToolResult(
-                error=error_msg,
-                is_error=True,
-            )
-        return None
+
 
     def _validate_root_path(self, config: HarnessConfig, root: str) -> tuple[str, ToolResult | None]:
         """Validate a root path for directory operations.
@@ -170,28 +155,13 @@ class Tool(ABC):
 
         Uses comprehensive security validation including homoglyph detection.
         """
-        # Use the new security validation method
-        if err := self._validate_root_path_security(root, config):
+        # Use the consolidated validation method
+        resolved_path, err = self._validate_root_path(config, root)
+        if err:
             return Path("."), [], err
         
-        # Resolve the path
-        try:
-            resolved = os.path.realpath(root)
-        except Exception as exc:
-            return Path("."), [], ToolResult(
-                error=f"Failed to resolve path '{root}': {exc}",
-                is_error=True,
-            )
-        
-        # Check if the resolved path is within allowed directories
-        if not config.is_path_allowed(resolved):
-            return Path("."), [], ToolResult(
-                error=f"Path '{root}' is not within allowed directories",
-                is_error=True,
-            )
-        
         # Convert to Path and compute allowed list
-        search_root = Path(resolved)
+        search_root = Path(resolved_path)
         allowed = [Path(os.path.realpath(p)) for p in config.allowed_paths]
         return search_root, allowed, None
 

@@ -124,7 +124,7 @@ def _analyse_source(source: str, filename: str) -> dict[str, Any]:
                         "complexity": complexity,
                         "calls": calls,
                     })
-            base_names = [_dotted_name(b) for b in node.bases]
+            base_names = [dotted_name(b) for b in node.bases]
             symbols.append({
                 "kind": "class",
                 "name": node.name,
