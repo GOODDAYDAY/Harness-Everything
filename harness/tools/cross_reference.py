@@ -60,6 +60,17 @@ class CrossReferenceTool(Tool):
             "required": ["symbol"],
         }
 
+    def _get_allowed_paths(self, config: HarnessConfig, resolved_root: str) -> list[Path]:
+        """Get allowed paths for _rglob_safe.
+        
+        Returns the list of allowed Path objects that the search root must be within.
+        This mimics the logic from Tool._check_dir_root but only returns the allowed list.
+        """
+        import os
+        # Use os.path.realpath for consistency with HarnessConfig.is_path_allowed()
+        allowed = [Path(os.path.realpath(p)) for p in config.allowed_paths]
+        return allowed
+
     async def execute(
         self,
         config: HarnessConfig,
@@ -67,16 +78,14 @@ class CrossReferenceTool(Tool):
         root: str = "",
         include_tests: bool = True,
     ) -> ToolResult:
-        if root:
-            resolved_root, err = self._resolve_and_check(config, root)
-            if err:
-                return err
-            search_root = Path(resolved_root)
-        else:
-            search_root = Path(config.workspace)
+        # Always use _resolve_and_check to validate the path, even for default workspace
+        resolved_root, err_result = self._resolve_and_check(config, root)
+        if err_result:
+            return err_result
+        search_root = Path(resolved_root)
         
         # Get allowed paths for _rglob_safe from config
-        allowed = [Path(p).resolve() for p in config.allowed_paths]
+        allowed = self._get_allowed_paths(config, resolved_root)
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None

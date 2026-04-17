@@ -108,26 +108,9 @@ class Tool(ABC):
             (resolved_path, None) on success.
             ("", error_ToolResult) on any failure.
         """
-        if "\x00" in path:
-            return "", ToolResult(
-                error=f"PERMISSION ERROR: path contains null byte: {path!r}",
-                is_error=True,
-            )
-        
-        # Check for control characters \x01 through \x1f (except \t, \n, \r)
-        for i in range(1, 0x20):
-            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
-                continue
-            if chr(i) in path:
-                return "", ToolResult(
-                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
-                    is_error=True,
-                )
-        
-        # Check for Unicode homoglyphs that could bypass security
-        if self.requires_path_check:
-            if error_msg := validate_path_no_homoglyphs(path, config):
-                return "", ToolResult(error=error_msg, is_error=True)
+        # Use comprehensive security validation for all paths
+        if error_msg := validate_path_security(path, config):
+            return "", ToolResult(error=error_msg, is_error=True)
         
         try:
             resolved = str(Path(os.path.realpath(path)))
