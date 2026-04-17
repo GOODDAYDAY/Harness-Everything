@@ -153,9 +153,13 @@ class TestCheckpointManager:
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(metadata), encoding="utf-8")
         
-        # Should return None, not raise
-        result = self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
-        assert result is None
+        # Should raise ValueError, not return None
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
+        
+        error_msg = str(exc_info.value)
+        assert "must be an integer between 0 and 10" in error_msg
+        assert "15" in error_msg
     
     def test_read_checkpoint_metadata_validates_score_type(self):
         """Test that read_checkpoint_metadata validates synthesis_specificity_score is integer."""
@@ -177,9 +181,13 @@ class TestCheckpointManager:
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(metadata), encoding="utf-8")
         
-        # Should return None, not raise
-        result = self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
-        assert result is None
+        # Should raise ValueError, not return None
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
+        
+        error_msg = str(exc_info.value)
+        assert "must be an integer between 0 and 10" in error_msg
+        assert "5.5" in error_msg or "float" in error_msg.lower()
     
     def test_validate_path_segments_blocks_directory_traversal(self):
         """Test that _validate_path_segments blocks directory traversal attempts."""
@@ -245,3 +253,107 @@ class TestCheckpointManager:
         """Test that read_checkpoint_metadata returns None when file doesn't exist."""
         result = self.checkpoint.read_checkpoint_metadata("round_99", "nonexistent")
         assert result is None
+    
+    def test_read_checkpoint_metadata_validates_score_type_and_range(self):
+        """Test that read_checkpoint_metadata validates synthesis_specificity_score type and range."""
+        import json
+        from datetime import datetime
+        
+        # Test 1: Float score should raise ValueError
+        metadata_float = {
+            "checkpoint_type": "phase",
+            "outer_round": 1,
+            "phase_label": "test_phase",
+            "inner_index": 0,
+            "basic_score": 0.8,
+            "diffusion_score": 0.7,
+            "critique_count": 3,
+            "actionable_critiques": 2,
+            "synthesis_specificity_score": 5.5,  # Invalid: float instead of int
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        json_path = self.store.path("round_1", "phase_test_float", "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata_float), encoding="utf-8")
+        
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.read_checkpoint_metadata("round_1", "phase_test_float")
+        
+        error_msg = str(exc_info.value)
+        assert "must be an integer between 0 and 10" in error_msg
+        assert "5.5" in error_msg or "float" in error_msg.lower()
+        
+        # Test 2: Out-of-range integer should raise ValueError
+        metadata_out_of_range = {
+            "checkpoint_type": "phase",
+            "outer_round": 1,
+            "phase_label": "test_phase",
+            "inner_index": 0,
+            "basic_score": 0.8,
+            "diffusion_score": 0.7,
+            "critique_count": 3,
+            "actionable_critiques": 2,
+            "synthesis_specificity_score": -1,  # Invalid: below 0
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        json_path = self.store.path("round_1", "phase_test_range_low", "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata_out_of_range), encoding="utf-8")
+        
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.read_checkpoint_metadata("round_1", "phase_test_range_low")
+        
+        error_msg = str(exc_info.value)
+        assert "must be an integer between 0 and 10" in error_msg
+        assert "-1" in error_msg
+        
+        # Test 3: Integer above range should raise ValueError
+        metadata_above_range = {
+            "checkpoint_type": "phase",
+            "outer_round": 1,
+            "phase_label": "test_phase",
+            "inner_index": 0,
+            "basic_score": 0.8,
+            "diffusion_score": 0.7,
+            "critique_count": 3,
+            "actionable_critiques": 2,
+            "synthesis_specificity_score": 11,  # Invalid: above 10
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        json_path = self.store.path("round_1", "phase_test_range_high", "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata_above_range), encoding="utf-8")
+        
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.read_checkpoint_metadata("round_1", "phase_test_range_high")
+        
+        error_msg = str(exc_info.value)
+        assert "must be an integer between 0 and 10" in error_msg
+        assert "11" in error_msg
+        
+        # Test 4: Missing score should raise ValueError
+        metadata_missing = {
+            "checkpoint_type": "phase",
+            "outer_round": 1,
+            "phase_label": "test_phase",
+            "inner_index": 0,
+            "basic_score": 0.8,
+            "diffusion_score": 0.7,
+            "critique_count": 3,
+            "actionable_critiques": 2,
+            # Missing synthesis_specificity_score
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        json_path = self.store.path("round_1", "phase_test_missing", "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata_missing), encoding="utf-8")
+        
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.read_checkpoint_metadata("round_1", "phase_test_missing")
+        
+        error_msg = str(exc_info.value)
+        assert "Missing synthesis_specificity_score" in error_msg
