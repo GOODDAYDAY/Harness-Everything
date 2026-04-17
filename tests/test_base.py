@@ -51,6 +51,12 @@ class TestToolCheckPath:
         # Error message should indicate homoglyph or security violation
         error_lower = result.error.lower()
         assert "homoglyph" in error_lower or "security" in error_lower or "permission" in error_lower
+        
+        # Test the consolidated method directly
+        search_root, allowed, dir_result = tool._check_dir_root(config, malicious_path)
+        assert dir_result is not None
+        assert dir_result.is_error is True
+        assert "homoglyph" in dir_result.error.lower()
     
     def test_tool_check_path_allows_clean_path(self, tmp_path):
         """Test that _check_path allows clean, allowed paths."""
