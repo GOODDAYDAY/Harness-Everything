@@ -219,6 +219,27 @@ class TestUnicodePathSecurity:
         # Falsifiable criterion: test covers extracted validation helper
         # This test directly validates the extracted security helper that was
         # previously embedded in base.py::_validate_path_contains_no_homoglyphs
+    
+    def test_homoglyph_falsifiable_criterion(self):
+        """Test the falsifiable criterion for homoglyph validation.
+        
+        Specifically tests that validate_path_no_homoglyphs detects the
+        fraction slash homoglyph (U+2044) which looks like ASCII '/'.
+        """
+        from harness.core.security import validate_path_no_homoglyphs
+        
+        # Test with fraction slash homoglyph (U+2044) that looks like ASCII '/'
+        test_path = "/fake/path\u2044file.txt"
+        result = validate_path_no_homoglyphs(test_path)
+        
+        # Should detect the homoglyph and return error
+        assert result is not None, "Fraction slash homoglyph should be detected"
+        assert "PERMISSION ERROR" in result, f"Error should contain 'PERMISSION ERROR', got: {result}"
+        assert "homoglyph" in result.lower(), f"Error should mention 'homoglyph', got: {result}"
+        assert "Fraction slash" in result, f"Error should mention 'Fraction slash', got: {result}"
+        
+        # Verify the specific character code is mentioned
+        assert "U+2044" in result, f"Error should mention character code U+2044, got: {result}"
 
 
 class TestPathCanonicalization:

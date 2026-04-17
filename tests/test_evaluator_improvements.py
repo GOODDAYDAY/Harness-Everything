@@ -278,17 +278,25 @@ SCORE: 7.0"""
     
     # Test case 4: Specific case from implementation plan - score inside python code block
     markdown_output = """DELTA VS PRIOR BEST: Test
-ANALYSIS: Good.
+ANALYSIS: A. Correctness: 9.0 — Good.
+TOP DEFECT: test.py::function — missing error handling
+ACTIONABLE FEEDBACK:
+1. Add try/except in test.py::function
+WHAT WOULD MAKE THIS 10/10: Add unit tests
 ```python
 SCORE: 999.0  # This fake score inside a code block should be ignored
 ```
-FINAL SCORE: 8.1
+SCORE: 8.1
 """
     assert parse_score(markdown_output) == 8.1
     
     # Test case 5: SCORE line containing backtick characters
     output_with_backtick_in_score = """DELTA VS PRIOR BEST: Test
-ANALYSIS: Good.
+ANALYSIS: A. Correctness: 9.0 — Good.
+TOP DEFECT: test.py::function — missing error handling
+ACTIONABLE FEEDBACK:
+1. Add try/except in test.py::function
+WHAT WOULD MAKE THIS 10/10: Add unit tests
 SCORE: 7.5 `inline code` more text
 """
     is_valid, issues = validate_evaluator_output(output_with_backtick_in_score, "basic")
