@@ -77,7 +77,7 @@ class Tool(ABC):
         truncate the path at the OS level, bypassing prefix checks.
         
         Security validation order:
-        1. validate_path_security on raw path (homoglyphs, null bytes, control chars)
+        1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
         2. Resolve path with os.path.realpath to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
         """

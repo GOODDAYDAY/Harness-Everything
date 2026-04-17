@@ -338,8 +338,12 @@ class TestHomoglyphCleanup:
             "New validate_path_no_homoglyphs function should be callable"
 
 
-def test_homoglyph_validation_order_in_check_path():
-    """Test that homoglyph validation runs before null byte validation in _check_path."""
+def test_null_byte_validation_order_in_check_path():
+    """Test that null byte validation runs before homoglyph validation in _check_path.
+    
+    This is critical for security: null bytes can truncate paths at the OS level
+    and must be detected before homoglyph checks.
+    """
     from unittest.mock import patch, MagicMock
     from harness.tools.base import Tool, ToolResult
     
@@ -360,14 +364,14 @@ def test_homoglyph_validation_order_in_check_path():
     
     tool = TestTool()
     
-    # Path with both homoglyph and null byte
-    test_path = "/allowed/path/file\u0430with\x00null.py"
+    # Path with both null byte and homoglyph
+    test_path = "/allowed/path/file\x00with\u0430homoglyph.py"
     
     # Mock the _validate_root_path method since _check_path now uses it
     with patch.object(tool, '_validate_root_path') as mock_validate_root:
-        # Make it return an error (simulating homoglyph detection)
+        # Make it return an error (simulating null byte detection)
         mock_validate_root.return_value = (None, ToolResult(
-            error="PERMISSION ERROR: Path contains disallowed Unicode homoglyph",
+            error="PERMISSION ERROR: path contains null byte",
             is_error=True
         ))
         
@@ -377,10 +381,12 @@ def test_homoglyph_validation_order_in_check_path():
         # Verify _validate_root_path was called with the path and config
         mock_validate_root.assert_called_once_with(config, test_path)
         
-        # Verify the result is an error about homoglyph (not null byte)
+        # Verify the result is an error about null byte (not homoglyph)
         assert result is not None
         assert result.is_error
-        assert "homoglyph" in result.error.lower() or "PERMISSION ERROR" in result.error
+        assert "null byte" in result.error.lower()
+        # Should NOT be about homoglyph since null byte should be detected first
+        assert "homoglyph" not in result.error.lower()
         
         # Verify that if _validate_root_path returns no error,
         # the path would be allowed
