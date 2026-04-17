@@ -6,6 +6,7 @@ import ast
 
 from harness.tools.code_analysis import CodeAnalysisTool, _analyse_source
 from harness.tools._ast_utils import dotted_name
+from harness.tools.base import ToolResult
 
 
 class TestCodeAnalysisTool:
@@ -219,3 +220,87 @@ class TestClass:
         assert schema["type"] == "object"
         assert "path" in schema["properties"]
         assert schema["properties"]["path"]["type"] == "string"
+    
+    def test_analyse_source_handles_syntax_error(self):
+        """Test that _analyse_source correctly handles syntax errors."""
+        # Create source string with invalid Python syntax
+        source = "class Broken: def"
+        
+        # Call _analyse_source on the invalid source
+        result = _analyse_source(source, "broken.py")
+        
+        # Assert result contains error information
+        assert "error" in result, "Result should contain 'error' field for syntax errors"
+        assert isinstance(result["error"], str), "Error field should be a string"
+        assert "SyntaxError" in result["error"], "Error message should mention SyntaxError"
+        assert "broken.py" in result["error"], "Error message should include filename"
+        
+        # Assert symbols list is empty for syntax errors
+        assert "symbols" not in result or result.get("symbols") == [], \
+            "Symbols list should be empty or missing for syntax errors"
+    
+    def test_code_analysis_tool_execute_nonexistent_file(self):
+        """Test that CodeAnalysisTool handles non-existent file paths."""
+        tool = CodeAnalysisTool()
+        
+        # We need a mock config for execution
+        from harness.core.config import HarnessConfig
+        from unittest.mock import AsyncMock, patch
+        
+        # Create a mock config with a workspace
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace="/tmp/test_workspace",
+            allowed_paths=["/tmp/test_workspace"],
+        )
+        
+        # Mock the _check_path method to return a ToolResult error
+        with patch.object(tool, '_check_path') as mock_check_path:
+            # Simulate a security/permission error for non-existent file
+            mock_check_path.return_value = ToolResult(
+                error="File not found: nonexistent.py",
+                is_error=True
+            )
+            
+            # Execute the tool with a non-existent file path
+            # Note: We need to handle async execution in test
+            import asyncio
+            result = asyncio.run(tool.execute(config, path="nonexistent.py", format="text"))
+            
+            # Assert result contains error field
+            assert result.is_error is True, "Result should be an error for non-existent file"
+            assert "File not found" in result.error, "Error message should indicate file not found"
+    
+    def test_code_analysis_tool_execute_security_validation(self):
+        """Test that CodeAnalysisTool validates path security."""
+        tool = CodeAnalysisTool()
+        
+        # We need a mock config for execution
+        from harness.core.config import HarnessConfig
+        from unittest.mock import patch
+        
+        # Create a mock config with a workspace
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace="/tmp/test_workspace",
+            allowed_paths=["/tmp/test_workspace"],
+        )
+        
+        # Mock the _check_path method to return a security error
+        with patch.object(tool, '_check_path') as mock_check_path:
+            # Simulate a security error for path traversal attempt
+            mock_check_path.return_value = ToolResult(
+                error="PERMISSION ERROR: Path contains '..' which is not allowed",
+                is_error=True
+            )
+            
+            # Execute the tool with a path traversal attempt
+            import asyncio
+            result = asyncio.run(tool.execute(config, path="../outside.py", format="text"))
+            
+            # Assert result contains security error
+            assert result.is_error is True, "Result should be an error for security violation"
+            assert "PERMISSION ERROR" in result.error, "Error message should indicate permission error"
+            assert ".." in result.error, "Error message should mention path traversal attempt"
