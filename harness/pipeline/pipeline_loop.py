@@ -292,6 +292,21 @@ class PipelineLoop:
             branch = out.strip()
 
         remote = self.config.auto_push_remote
+
+        rc_pull, out_pull = await self._run_git(
+            ["pull", "--rebase", remote, branch]
+        )
+        if rc_pull != 0:
+            if "CONFLICT" in out_pull or "could not apply" in out_pull:
+                await self._run_git(["rebase", "--abort"])
+                log.warning(
+                    "auto_push: pull --rebase conflicted — aborted, skipping push. "
+                    "output=%r", out_pull[:300],
+                )
+                return
+            log.warning("auto_push: pull --rebase failed (rc=%d) — trying push anyway. output=%r",
+                        rc_pull, out_pull[:300])
+
         rc, out = await self._run_git(["push", remote, branch])
         if rc == 0:
             log.info("auto_push: pushed to %s/%s", remote, branch)
@@ -968,9 +983,21 @@ class PipelineLoop:
                 rc_b, out_b = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"])
                 branch = out_b.strip() if rc_b == 0 else ""
             if branch and branch != "HEAD":
-                rc, out = await self._run_git(
-                    ["push", self.config.auto_push_remote, branch]
+                remote = self.config.auto_push_remote
+                rc_pull, out_pull = await self._run_git(
+                    ["pull", "--rebase", remote, branch]
                 )
+                if rc_pull != 0:
+                    if "CONFLICT" in out_pull or "could not apply" in out_pull:
+                        await self._run_git(["rebase", "--abort"])
+                        log.warning(
+                            "auto_tag(end): pull --rebase conflicted — aborted. output=%r",
+                            out_pull[:300],
+                        )
+                    else:
+                        log.warning("auto_tag(end): pull --rebase failed (rc=%d)", rc_pull)
+
+                rc, out = await self._run_git(["push", remote, branch])
                 if rc == 0:
                     log.info("auto_tag(end): pushed branch %s before tagging", branch)
                 else:

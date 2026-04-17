@@ -46,8 +46,8 @@ jobs:
             # is gitignored so git reset doesn't touch it; this ensures config
             # changes committed to the example template propagate automatically).
             cp pipeline_example_self_improve_server.json pipeline_server.json
-            .venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
-            .venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineConfig; c=PipelineConfig.from_dict(__import__('json').load(open('pipeline_server.json'))); print('config ok: auto_tag_at_end=%s' % c.auto_tag_at_end)"
+            /home/ubuntu/harness-venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
+            /home/ubuntu/harness-venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineConfig; c=PipelineConfig.from_dict(__import__('json').load(open('pipeline_server.json'))); print('config ok: auto_tag_at_end=%s' % c.auto_tag_at_end)"
           EOF
 
       - name: On smoke pass — advance harness-last-good tag
@@ -74,9 +74,18 @@ jobs:
             echo "ROLLED BACK to harness-last-good"
           EOF
 
-      - name: Restart harness service
+      - name: Restart harness service (unless stop marker exists)
         run: |
-          ssh ubuntu@43.128.100.101 'systemctl --user restart harness.service'
+          ssh ubuntu@43.128.100.101 'bash -se' <<'EOF'
+            STOP_MARKER="$HOME/.config/harness/STOP_AFTER_CHUNK"
+            if [ -f "$STOP_MARKER" ]; then
+              rm "$STOP_MARKER"
+              echo "STOP_AFTER_CHUNK marker found — service NOT restarted. Loop paused."
+            else
+              systemctl --user restart harness.service
+              echo "Service restarted."
+            fi
+          EOF
 
       - name: Fail the workflow if smoke failed
         if: steps.smoke.outcome == 'failure'

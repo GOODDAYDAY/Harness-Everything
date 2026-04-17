@@ -15,7 +15,7 @@
     "allowed_tools": [],
     "extra_tools": [],
     "bash_command_denylist": ["rm", "shutdown", "reboot", "poweroff", "mkfs", "dd"],
-    "max_tool_turns": 30,
+    "max_tool_turns": 20,
     "log_level": "INFO"
   },
 
@@ -27,15 +27,15 @@
   "evaluation_mode": "dual_isolated",
   "output_dir": "/home/ubuntu/harness-everything/harness_output",
   "min_synthesis_chars": 150,
-  "max_file_context_chars": 50000,
+  "max_file_context_chars": 30000,
 
   "// meta_review_interval": "0 = disabled in server mode. Each chunk is short (10 rounds) and meta-review adds latency. Re-enable per-server if needed.",
   "meta_review_interval": 0,
   "meta_review_system": "",
   "meta_review_inject": false,
 
-  "// auto_push_interval": "Push branch every 10 rounds (= once per chunk, at the end).",
-  "auto_push_interval": 10,
+  "// auto_push_interval": "Push every round for real-time progress visibility.",
+  "auto_push_interval": 1,
   "auto_push_remote": "origin",
   "auto_push_branch": "main",
 
