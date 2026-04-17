@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -282,7 +283,7 @@ allowed_tools=all log_level=INFO
             return False
         resolved = os.path.realpath(path_str)
         return any(
-            resolved == ap or resolved.startswith(ap + "/")
+            resolved == ap or resolved.startswith(ap + os.sep)
             for ap in self.allowed_paths
         )
 

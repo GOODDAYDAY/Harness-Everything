@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from harness.core.config import HarnessConfig, PipelineConfig
-from harness.loop import HarnessLoop
+from harness.pipeline.simple_loop import HarnessLoop
 from harness.pipeline.pipeline_loop import PipelineLoop
 
 

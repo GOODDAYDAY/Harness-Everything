@@ -11,12 +11,12 @@ import time
 from pathlib import Path
 from string import Template
 
-from harness.artifacts import ArtifactStore
-from harness.checkpoint import CheckpointManager
+from harness.core.artifacts import ArtifactStore
+from harness.core.checkpoint import CheckpointManager
 from harness.core.config import PipelineConfig
 from harness.evaluation.dual_evaluator import DualEvaluator
-from harness.executor import executor_system_with_workspace
-from harness.hooks import build_hooks
+from harness.pipeline.executor import executor_system_with_workspace
+from harness.pipeline.hooks import build_hooks
 from harness.core.llm import LLM
 from harness.pipeline.phase import DualScore, InnerResult, PhaseConfig, PhaseResult, ScoreItem
 from harness.prompts import synthesis as synth_prompts
@@ -676,7 +676,7 @@ class PhaseRunner:
         # Syntax check (inline, not hook — needed for carry-forward)
         syntax_errors = ""
         if phase.syntax_check_patterns:
-            from harness.hooks import SyntaxCheckHook
+            from harness.pipeline.hooks import SyntaxCheckHook
             hook = SyntaxCheckHook(phase.syntax_check_patterns)
             hook_result = await hook.run(self.harness, {})
             syntax_errors = hook_result.errors

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from harness.artifacts import ArtifactStore
+from harness.core.artifacts import ArtifactStore
 
 
 class CheckpointManager:

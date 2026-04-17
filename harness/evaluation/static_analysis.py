@@ -43,7 +43,7 @@ prompts already contain instructions for the conservative reviewer to treat
 
 Usage::
 
-    from harness.static_analysis import run_static_checks
+    from harness.evaluation.static_analysis import run_static_checks
 
     report = run_static_checks(result.files_changed, config.workspace)
     print(report.summary)          # "2 errors, 1 warning, 3 ok"
