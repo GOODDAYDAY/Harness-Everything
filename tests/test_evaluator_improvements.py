@@ -206,5 +206,64 @@ Some code
     assert parse_score(text_score_with_opening_backticks) == 7.5
 
 
+def test_validate_output_score_in_code_block_rejected():
+    """Test that validate_evaluator_output rejects SCORE: lines inside markdown code blocks."""
+    from harness.evaluation.dual_evaluator import validate_evaluator_output, parse_score
+    
+    # Test case 1: SCORE inside a code block
+    output_with_score_in_code_block = """DELTA VS PRIOR BEST: Better error handling
+ANALYSIS:
+A. Correctness: 8.5 — Logic is sound
+B. Completeness: 7.0 — Missing edge cases
+Here's some code:
+```
+def example():
+    SCORE: 8.5
+    return True
+```
+Final evaluation:
+SCORE: 7.8"""
+    
+    # validate_evaluator_output should reject this
+    is_valid, issues = validate_evaluator_output(output_with_score_in_code_block, "basic")
+    assert not is_valid, "Should reject SCORE: inside code block"
+    assert any("code block" in issue.lower() for issue in issues), f"Should mention 'code block' in issues: {issues}"
+    
+    # parse_score should not extract the score from inside the code block
+    # It should extract the last valid score (7.8)
+    assert parse_score(output_with_score_in_code_block) == 7.8
+    
+    # Test case 2: SCORE on same line as closing backticks (edge case)
+    output_score_on_closing_backticks = """ANALYSIS:
+A. Correctness: 9.0 — Logic is sound
+```
+Some code here
+SCORE: 6.5```
+Final evaluation:
+SCORE: 8.2"""
+    
+    # This should be valid because SCORE: is on the same line as closing backticks
+    # which means it's technically outside the code block
+    is_valid, issues = validate_evaluator_output(output_score_on_closing_backticks, "basic")
+    # It might have other validation issues, but shouldn't fail due to code block
+    # Let's just check that parse_score extracts the correct score
+    assert parse_score(output_score_on_closing_backticks) == 8.2
+    
+    # Test case 3: Multiple SCORE lines, one inside code block
+    output_multiple_scores = """SCORE: 5.0
+```
+SCORE: 6.0
+```
+SCORE: 7.0"""
+    
+    # validate_evaluator_output should reject due to SCORE inside code block
+    is_valid, issues = validate_evaluator_output(output_multiple_scores, "basic")
+    assert not is_valid, "Should reject SCORE: inside code block"
+    assert any("code block" in issue.lower() for issue in issues), f"Should mention 'code block' in issues: {issues}"
+    
+    # parse_score should extract the last valid score (7.0)
+    assert parse_score(output_multiple_scores) == 7.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -217,6 +217,19 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         if section not in text:
             issues.append(f"Missing required section: {section}")
     
+    # SECURITY GUARD: Check if SCORE: line is inside a markdown code block
+    in_code_block = False
+    for line_num, line in enumerate(text.split('\n'), 1):
+        stripped = line.strip()
+        # Toggle code block state on triple backticks
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+            continue
+        # Check if this line contains SCORE: while inside a code block
+        if in_code_block and 'SCORE:' in line.upper():
+            issues.append(f"SCORE: found inside markdown code block at line {line_num}")
+            # Don't break - continue checking all lines to report all violations
+    
     # Check for SCORE format - must be on its own line
     score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
     if score_lines:
@@ -348,31 +361,15 @@ def parse_score(
             
             # Check if this line contains backticks that might toggle code block state
             if "```" in stripped:
-                # Check if this line starts and ends with backticks (single-line code block)
-                if stripped.startswith("```") and stripped.endswith("```") and len(stripped) > 3:
-                    # Single-line code block with content
-                    # Check if SCORE: is in this line
-                    if "SCORE:" in line.upper():
-                        # Keep this line for score parsing
-                        cleaned_lines.append(line)
-                    # Don't toggle code block state
-                    continue
-                else:
-                    # Check for opening or closing backticks
-                    # Count backticks to handle edge cases
-                    backtick_count = stripped.count("```")
-                    # If line starts with backticks, it's opening a code block
-                    if stripped.startswith("```"):
-                        in_code_block = True
-                        continue
-                    # If line ends with backticks and we're in a code block, it might be closing
-                    elif stripped.endswith("```") and in_code_block:
-                        # Check if SCORE: is in this line
-                        if "SCORE:" in line.upper():
-                            # Keep this line for score parsing
-                            cleaned_lines.append(line)
-                        in_code_block = False
-                        continue
+                # Toggle code block state when we see triple backticks
+                # This handles both opening and closing
+                in_code_block = not in_code_block
+                
+                # Check if SCORE: is on the same line as backticks
+                if "SCORE:" in line.upper():
+                    # Keep this line for score parsing even if it's in/on a code block boundary
+                    cleaned_lines.append(line)
+                continue
             
             # Only add lines that are not inside code blocks
             if not in_code_block:
