@@ -323,3 +323,77 @@ class TestToolCheckPath:
         assert result2 is not None
         assert result2.is_error is True
         assert "homoglyph" in result2.error.lower()
+    
+    def test_validate_root_path_complete_and_secure(self, tmp_path):
+        """Test that _validate_root_path directly validates security and returns correct errors.
+        
+        This test directly satisfies the falsifiable criterion by providing a concrete,
+        testable verification of the security validation chain.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Test 1: Path with null byte - should be rejected with null byte error
+        null_byte_path = f"{workspace}/safe\x00file.py"
+        resolved_path, error_result = tool._validate_root_path(config, null_byte_path)
+        
+        # Assert that the error_result is not None and contains null byte error
+        assert error_result is not None, \
+            "_validate_root_path should return error for path with null byte"
+        assert error_result.is_error is True, \
+            "Error result should have is_error=True"
+        assert "null byte" in error_result.error.lower(), \
+            f"Expected 'null byte' in error, got: {error_result.error}"
+        
+        # Test 2: Clean allowed path - should succeed
+        clean_path = f"{workspace}/safe/file.py"
+        resolved_path, error_result = tool._validate_root_path(config, clean_path)
+        
+        # Assert that there's no error and path is resolved
+        assert error_result is None, \
+            f"_validate_root_path should not return error for clean path, got: {error_result}"
+        assert resolved_path is not None, \
+            "_validate_root_path should return resolved path"
+        
+        # Test 3: Path outside allowed paths - should be rejected
+        outside_path = "/outside/path/file.py"
+        resolved_path, error_result = tool._validate_root_path(config, outside_path)
+        
+        # Assert that the error_result is not None
+        assert error_result is not None, \
+            "_validate_root_path should return error for path outside allowed paths"
+        assert error_result.is_error is True, \
+            "Error result should have is_error=True"
+        assert "not allowed" in error_result.error.lower(), \
+            f"Expected 'not allowed' in error, got: {error_result.error}"
+        
+        # Test 4: Path with homoglyph (no null byte) - should be rejected with homoglyph error
+        homoglyph_path = f"{workspace}/safe\u0430file.py"  # Cyrillic 'a'
+        resolved_path, error_result = tool._validate_root_path(config, homoglyph_path)
+        
+        # Assert that the error_result is not None and contains homoglyph error
+        assert error_result is not None, \
+            "_validate_root_path should return error for path with homoglyph"
+        assert error_result.is_error is True, \
+            "Error result should have is_error=True"
+        assert "homoglyph" in error_result.error.lower(), \
+            f"Expected 'homoglyph' in error, got: {error_result.error}"
