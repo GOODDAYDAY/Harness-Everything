@@ -1,186 +1,308 @@
 # Harness-Everything
 
-Configurable AI coding harness with three-way planner-executor-evaluator architecture. Runs autonomous code improvement loops with any LLM that supports the Anthropic API format (Claude, DeepSeek, Gemini via gateway, etc.).
+Provider-agnostic AI coding harness that autonomously improves codebases through iterative, multi-phase LLM loops.
 
-## Two Modes
-
-**Simple mode** — single task, iterative plan-execute-evaluate until pass:
-
-```bash
-python main.py "Fix the login bug in auth.py" config.json
-```
-
-**Pipeline mode** — multi-phase, multi-round self-improvement loops:
-
-```bash
-python main.py --pipeline pipeline_config.json
-```
+Works with any LLM supporting the Anthropic API format (Claude, DeepSeek, Gemini via gateway, etc.).
 
 ## Quick Start
 
 ```bash
-# Python 3.11+
-pip install -e .
-
-# Set your API key (or configure base_url + api_key in pipeline JSON)
+pip install anthropic>=0.40.0
 export HARNESS_API_KEY=your-api-key
 
-# Simple mode: one-shot task
-python main.py "Add input validation to the signup endpoint"
+# Simple mode
+python main.py "Fix the login bug" config.json
 
-# Pipeline mode: iterative self-improvement
-python main.py --pipeline pipeline_example_self_improve.json
+# Pipeline mode
+python main.py --pipeline config/pipeline_example_self_improve.json
 ```
 
 ## Architecture
 
 ```
-Simple Mode:
-  Planner (three-way) → Executor (tool-use loop) → Evaluator (three-way)
-       ↑                                                    │
-       └──────────── feedback on FAIL ──────────────────────┘
-
 Pipeline Mode:
   Outer Round 1..N
-    └─ Phase 1..M (debate or implement)
-         └─ Inner Round 1..K
-              ├─ Executor: generate proposal / edit files
-              └─ DualEvaluator: Basic (defects) + Diffusion (ripple effects)
-         └─ Synthesis: merge best proposals
-         └─ Hooks: syntax check, pytest
-    └─ Memory: persist cross-round learnings
-    └─ Early stop: patience-based
+    +-- Phase 1..M (debate or implement)
+    |     +-- Inner Round 1..K
+    |     |     +-- Executor (tool-use loop: read, edit, grep, bash...)
+    |     |     +-- DualEvaluator (basic + diffusion, parallel)
+    |     +-- Synthesis (merge best proposals)
+    |     +-- Hooks (syntax check, pytest, git commit)
+    +-- Auto-push (git push every N rounds)
+    +-- Auto-tag (git tag + push, triggers CI/CD)
+    +-- Early stop (patience-based)
 ```
 
-### Core Components
-
-| Module | Role |
-|---|---|
-| `llm.py` | Async Anthropic client with retry, streaming, conversation pruning |
-| `three_way.py` | Conservative/aggressive/merge resolution pattern |
-| `planner.py` | Three-way plan generation |
-| `executor.py` | Tool-use agentic loop (reads/writes/edits files) |
-| `evaluator.py` | Three-way verdict (PASS/FAIL + feedback) |
-| `dual_evaluator.py` | Two isolated parallel evaluators (basic + diffusion) |
-| `phase_runner.py` | Orchestrates one phase: inner rounds + synthesis + hooks |
-| `pipeline.py` | Orchestrates outer rounds across phases |
-| `memory.py` | Cross-round learning persistence (JSONL) |
-| `artifacts.py` | Hierarchical output: run/round/phase/inner |
-| `checkpoint.py` | `.done` markers for resume-safe execution |
-| `metrics.py` | Per-phase structured metrics (JSON) |
-| `hooks.py` | Verification: syntax check, pytest |
-| `static_analysis.py` | Deterministic code quality checks (no LLM) |
-
-### Tool System (24 built-in)
-
-**File ops**: `read_file`, `write_file`, `edit_file`, `delete_file`, `move_file`, `copy_file`, `file_patch`
-**Directory**: `list_directory`, `create_directory`, `tree`
-**Search**: `glob_search`, `grep_search`, `cross_reference`
-**Git**: `git_status`, `git_diff`, `git_log`
-**Execution**: `bash`, `python_eval`, `test_runner`
-**Analysis**: `code_analysis`, `symbol_extractor`, `find_replace`, `diff_files`
-**Optional**: `web_search` (opt-in via `extra_tools`)
-
-All tools follow the `Tool` ABC pattern. Path-accessing tools enforce workspace boundaries via `_check_path()`.
-
-## Configuration
-
-### Simple Mode
-
-```json
-{
-  "model": "claude-sonnet-4-6",
-  "max_tokens": 8096,
-  "base_url": "https://api.anthropic.com",
-  "workspace": "/path/to/project",
-  "allowed_paths": ["/path/to/project"],
-  "max_iterations": 5,
-  "max_tool_turns": 30
-}
-```
-
-### Pipeline Mode
-
-See [`pipeline_example_self_improve.json`](pipeline_example_self_improve.json) for a single-repo setup and [`pipeline_example_multi_repo.json`](pipeline_example_multi_repo.json) for multi-repo.
-
-Key pipeline fields:
-
-| Field | Default | Description |
-|---|---|---|
-| `outer_rounds` | 5 | Total improvement iterations |
-| `inner_rounds` | 3 | Proposals per phase per outer round |
-| `patience` | 3 | Stop after N rounds without score improvement |
-| `evaluation_mode` | `dual_isolated` | `three_way` or `dual_isolated` |
-| `max_file_context_chars` | 60000 | Budget for source code injection per phase |
-
-### Phase Configuration
-
-Each phase has:
-
-| Field | Description |
-|---|---|
-| `name` | Phase identifier |
-| `mode` | `debate` (text proposals) or `implement` (tool-use, edits files) |
-| `system_prompt` | Executor prompt with `$file_context`, `$prior_best`, `$syntax_errors`, `$falsifiable_criterion` |
-| `glob_patterns` | Files to inject as context |
-| `skip_after_round` | Skip in outer rounds > N |
-| `skip_cycle` | Run every N-th outer round (e.g., 3 = rounds 0, 3, 6...) |
-| `commit_on_success` | Auto-commit after passing hooks |
-| `syntax_check_patterns` | Glob patterns for syntax validation |
-| `run_tests` | Run pytest after implementation |
-
-### LLM Provider
-
-Works with any LLM that supports the Anthropic API format. Configure via JSON or env vars:
-
-```json
-{
-  "model": "claude-sonnet-4-6",
-  "base_url": "https://api.anthropic.com",
-  "api_key": "sk-..."
-}
-```
-
-Switch to DeepSeek, a custom gateway, or any other provider by changing `base_url` and `model`:
+## LLM Provider
 
 ```json
 {
   "model": "deepseek-chat",
   "base_url": "https://api.deepseek.com/anthropic",
-  "api_key": "your-deepseek-key"
+  "api_key": "your-key"
 }
 ```
 
-Env var fallback: `HARNESS_BASE_URL`, `HARNESS_API_KEY`, `ANTHROPIC_API_KEY`.
+> DeepSeek's Anthropic-compatible endpoint is `/anthropic`, NOT `/v1`.
 
-## Output
-
-Pipeline runs produce:
-
-```
-output_dir/
-├── run_20260414T120000/
-│   ├── memory.jsonl              # Cross-round learnings
-│   ├── round_1/
-│   │   ├── phase_1_security/
-│   │   │   ├── inner_1/
-│   │   │   │   ├── proposal.txt
-│   │   │   │   ├── basic_eval.txt
-│   │   │   │   └── diffusion_eval.txt
-│   │   │   └── synthesis.txt
-│   │   └── summary.md
-│   └── ...
-│   └── final_summary.md
-└── .harness_metrics.json         # Structured execution metrics
+Verify before running a pipeline:
+```bash
+HARNESS_API_KEY=your-key python tests/smoke_test_deepseek.py
 ```
 
-## Security
+Env var fallback: `HARNESS_BASE_URL`, `HARNESS_API_KEY`.
 
-- **Path boundaries**: All file access checked against `allowed_paths`
-- **Bash denylist**: Configurable command blocklist
-- **Tool allowlist**: Only `allowed_tools` are available to the executor
-- **Conversation pruning**: Auto-truncate at 600K chars to prevent context explosion
-- **Tool budget**: `max_tool_turns` caps runaway loops
+## Pipeline Configuration
+
+Templates in [`config/`](config/):
+- [`pipeline_example_self_improve.json`](config/pipeline_example_self_improve.json) — local self-improvement
+- [`pipeline_example_self_improve_server.json`](config/pipeline_example_self_improve_server.json) — unattended server (DeepSeek, 10-round chunks)
+- [`pipeline_example_multi_repo.json`](config/pipeline_example_multi_repo.json) — multi-repo
+
+### Key Fields
+
+| Field | Default | Description |
+|---|---|---|
+| `outer_rounds` | 5 | Rounds per chunk |
+| `inner_rounds` | 3 | Proposals per phase |
+| `patience` | 3 | Early stop after N non-improving rounds |
+| `max_tool_turns` | 30 | Tool calls per executor loop |
+| `max_file_context_chars` | 60000 | Source code injection budget |
+| `auto_push_interval` | 0 | Push every N rounds (0 = disabled) |
+| `auto_tag_at_end` | false | Force tag on every pipeline exit (required for loops) |
+| `auto_tag_push` | false | Push tag to remote (triggers CI) |
+
+---
+
+## Server Deployment (Self-Improvement Loop)
+
+### How the Loop Works
+
+```
+Server runs N rounds --> commits --> push main --> tag --> push tag
+                                                           |
+GitHub Actions sees tag --> SSH to server --> smoke test --> deploy --> restart
+                                                                        |
+                                                   Server runs N more rounds...
+```
+
+Python imports are loaded once at startup. When the harness modifies its own code, a process restart is the only way to apply the changes. The push-tag-deploy-restart cycle makes self-improvement actually take effect.
+
+### Server Setup (One-Time)
+
+```bash
+# 1. Clone
+git clone https://github.com/GOODDAYDAY/Harness-Everything.git ~/harness-everything
+cd ~/harness-everything
+
+# 2. Venv OUTSIDE workspace (security: harness tools can't access it)
+python3.11 -m venv ~/harness-venv
+~/harness-venv/bin/pip install 'anthropic>=0.40.0' pytest
+
+# 3. Git identity
+git config user.name 'GOODDAYDAY'
+git config user.email '865700600@qq.com'
+
+# 4. Server config (auto-synced by CI from config/pipeline_example_self_improve_server.json)
+cp config/pipeline_example_self_improve_server.json pipeline_server.json
+
+# 5. API key
+mkdir -p ~/.config/harness
+echo "HARNESS_API_KEY=your-deepseek-key" > ~/.config/harness/env
+chmod 600 ~/.config/harness/env
+
+# 6. Systemd service
+mkdir -p ~/.config/systemd/user logs
+cp deploy/harness.service ~/.config/systemd/user/
+loginctl enable-linger $(whoami)
+systemctl --user daemon-reload
+systemctl --user enable harness.service
+
+# 7. Cron jobs (heartbeat + cleanup)
+(crontab -l 2>/dev/null; \
+ echo "*/30 * * * * $HOME/harness-everything/deploy/heartbeat.sh"; \
+ echo "0 4 * * * $HOME/harness-everything/deploy/cleanup_runs.sh") | crontab -
+
+# 8. SSH keys for GitHub
+# Push key (server -> GitHub):
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/github_push -C 'harness-push'
+cat >> ~/.ssh/config <<'EOF'
+Host github.com-harness
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/github_push
+    IdentitiesOnly yes
+EOF
+git remote set-url origin git@github.com-harness:GOODDAYDAY/Harness-Everything.git
+# Add public key to GitHub repo -> Settings -> Deploy Keys (with write access)
+
+# Deploy key (GitHub Actions -> server):
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/harness_deploy -C 'harness-deploy'
+cat ~/.ssh/harness_deploy.pub >> ~/.ssh/authorized_keys
+# Add PRIVATE key to GitHub repo -> Settings -> Secrets -> DEPLOY_SSH_KEY
+```
+
+### Trigger the First Chunk
+
+```bash
+git tag harness-r-0 -m "bootstrap"
+git push origin harness-r-0
+```
+
+GitHub Actions deploys and starts the service. After 10 rounds, harness pushes a new tag. CI redeploys. Loop begins.
+
+---
+
+## Operations Playbook
+
+### Monitor
+
+```bash
+# Live logs
+ssh server "tail -f ~/harness-everything/logs/harness.log"
+
+# Recent commits (pushed every round)
+git log --oneline -20
+
+# GitHub Actions runs
+gh run list -L 10
+
+# Heartbeat/cleanup cron logs
+ssh server "journalctl -t harness-heartbeat -t harness-cleanup --since '1 day ago'"
+```
+
+### Push a Fix While Loop is Running
+
+Just push to main. The harness does `git pull --rebase` before every push, so your commits are integrated automatically.
+
+```bash
+git commit -am "fix: something" && git push origin main
+```
+
+- No file conflicts: harness rebases its commits on top of yours, pushes cleanly.
+- Conflicting files: rebase aborts, harness skips push this round, retries next round.
+- Code changes take full effect at next chunk restart.
+
+### Change Pipeline Config
+
+Edit the tracked template in `config/`, push. CI auto-copies it to `pipeline_server.json` on every deploy.
+
+```bash
+vim config/pipeline_example_self_improve_server.json
+git commit -am "config: adjust patience" && git push
+# Takes effect at next chunk restart
+```
+
+> Never edit `pipeline_server.json` on the server directly — CI overwrites it.
+
+### Stop After Current Chunk (Graceful)
+
+```bash
+ssh server "touch ~/.config/harness/STOP_AFTER_CHUNK"
+```
+
+Current chunk finishes normally. CI sees the marker, does NOT restart. Marker auto-deleted.
+
+### Resume the Loop
+
+```bash
+# Direct start
+ssh server "systemctl --user start harness.service"
+
+# Or via CI
+git tag harness-r-resume -m "resume" && git push origin harness-r-resume
+```
+
+### Emergency Stop
+
+```bash
+ssh server "systemctl --user stop harness.service"
+```
+
+Commits from completed rounds are already pushed. Only in-progress round work is lost.
+
+### Full Shutdown (Prevent All Restarts)
+
+```bash
+ssh server "
+  systemctl --user stop harness.service
+  systemctl --user disable harness.service
+  crontab -l | grep -v harness-everything | crontab -
+"
+```
+
+### Rewrite Git History
+
+```bash
+# Stop service first (running harness can't push to rewritten history)
+ssh server "systemctl --user stop harness.service"
+
+# Example: fix author
+echo "NewName <new@email> OldName <old@email>" > /tmp/mailmap.txt
+git-filter-repo --refs main --mailmap /tmp/mailmap.txt --force
+git push --force origin main
+
+# Reset server
+ssh server "cd ~/harness-everything && git fetch --all --prune --force && git reset --hard origin/main"
+```
+
+---
+
+## Safety Nets
+
+| Threat | Protection |
+|---|---|
+| Patience early stop / low score -> no tag -> loop dies | `auto_tag_at_end: true` forces tag at every exit |
+| Harness modifies deploy infrastructure | Phase prompts include `SELF-IMPROVEMENT LOOP PROTECTION` blocklist |
+| Service crashes 3x in 10min -> systemd gives up | Heartbeat cron resets-failed and restarts every 30min |
+| Disk fills with old runs | Cleanup cron deletes `run_*` dirs older than 7 days |
+| User pushes to main mid-chunk -> non-fast-forward | `git pull --rebase` before every push |
+| Bad code deployed | CI smoke test (py_compile + import check); rollback to `harness-last-good` on failure |
+
+## Project Structure
+
+```
+main.py                                    # CLI entry point
+config/
+  pipeline_example_self_improve.json       # Local template
+  pipeline_example_self_improve_server.json  # Server template (auto-synced by CI)
+  pipeline_example_multi_repo.json         # Multi-repo template
+harness/
+  __init__.py
+  core/
+    config.py          # HarnessConfig, PipelineConfig
+    llm.py             # Async LLM client (retry, pruning, file-read cache)
+    security.py        # Path security: homoglyphs, null bytes, control chars
+    artifacts.py       # Hierarchical run/round/phase/inner storage
+    checkpoint.py      # Resume-safe .done markers
+    project_context.py # Project metadata injection
+  pipeline/
+    pipeline_loop.py   # Outer rounds: auto-push, auto-tag, meta-review, shutdown
+    phase_runner.py    # Inner rounds, synthesis, parallel debate
+    phase.py           # PhaseConfig, InnerResult, PhaseResult (data only)
+    simple_loop.py     # Simple mode orchestrator
+    executor.py        # Tool-use agentic loop
+    planner.py         # Three-way plan generation
+    hooks.py           # SyntaxCheck, Pytest, GitCommitHook
+    memory.py          # Cross-round JSONL learning
+    metrics.py         # Structured per-phase metrics
+    three_way.py       # Conservative/aggressive/merge resolver
+  evaluation/
+    dual_evaluator.py  # Basic + Diffusion parallel evaluation
+    evaluator.py       # Three-way evaluator
+    static_analysis.py # Deterministic code checks
+  tools/               # 30+ tools (file ops, search, git, bash, AST analysis)
+  prompts/             # System prompts for planner, evaluator, synthesis
+deploy/
+  harness.service      # systemd user unit
+  heartbeat.sh         # Cron: restart after 3-strike failure
+  cleanup_runs.sh      # Cron: delete old run_* dirs
+.github/workflows/
+  deploy.yml           # Tag-triggered: smoke test + deploy + rollback
+tests/
+  smoke_test_deepseek.py  # DeepSeek tool-loop verifier
+  test_*.py               # Unit tests
+```
 
 ## Requirements
 
