@@ -108,21 +108,24 @@ class TestCheckpointManager:
         result = self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
         assert result is None
     
-    def test_validate_and_sanitize_path_blocks_directory_traversal(self):
-        """Test that _validate_and_sanitize_path blocks directory traversal attempts."""
+    def test_validate_path_segments_blocks_directory_traversal(self):
+        """Test that _validate_path_segments blocks directory traversal attempts."""
         # Test with ".." segment
         with pytest.raises(ValueError) as exc_info:
-            self.checkpoint._validate_and_sanitize_path("round_1", "..", "phase_test")
+            self.checkpoint._validate_path_segments("round_1", "..", "phase_test")
         
         assert "Path segment '..' not allowed" in str(exc_info.value)
     
-    def test_validate_and_sanitize_path_blocks_escape_attempts(self):
-        """Test that _validate_and_sanitize_path blocks attempts to escape artifact store."""
-        # Test with absolute path or path that would escape run_dir
-        # Since we can't easily test actual escape without mocking,
-        # we'll test the validation is called by checking it raises for ".."
-        # The actual path escaping check is tested through the relative_to call
-        pass
+    def test_validate_path_segments_blocks_escape_attempts(self):
+        """Test that _validate_path_segments blocks attempts to escape artifact store."""
+        # Test with null byte in path segment which should be caught by security validation
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint._validate_path_segments("round_1", "phase\x00test", "inner_1")
+        
+        # Check that the error message indicates a security violation
+        error_msg = str(exc_info.value)
+        assert "Invalid path segment" in error_msg
+        assert "control character" in error_msg or "null byte" in error_msg.lower()
     
     def test_write_and_read_checkpoint_metadata_roundtrip(self):
         """Test that checkpoint metadata can be written and read correctly."""

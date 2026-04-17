@@ -45,12 +45,18 @@ class CheckpointManager:
         Raises:
             ValueError: If segments contain '..', empty strings, or security issues.
         """
-        # Check for directory traversal attempts
+        # Check for directory traversal attempts and empty segments
         for segment in segments:
             if segment == "..":
                 raise ValueError(f"Path segment '..' not allowed: {segments}")
             if segment == "":
                 raise ValueError(f"Empty path segment not allowed: {segments}")
+        
+        # Validate each segment for security issues
+        from harness.core.security import validate_path_security
+        for segment in segments:
+            if error := validate_path_security(segment):
+                raise ValueError(f"Invalid path segment '{segment}': {error}")
         
         # Build the full path and ensure it's within the run directory
         full_path = self.store.path(*segments)
@@ -60,8 +66,7 @@ class CheckpointManager:
         except ValueError:
             raise ValueError(f"Path attempts to escape artifact store: {segments}")
         
-        # Use comprehensive security validation
-        from harness.core.security import validate_path_security
+        # Also validate the full path for comprehensive security
         path_str = str(full_path)
         if error := validate_path_security(path_str):
             raise ValueError(error)
