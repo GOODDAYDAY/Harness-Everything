@@ -462,6 +462,7 @@ class PipelineLoop:
         score_history: list[dict] = []
         # Consecutive-decline tracking for trend detection (Priority 4)
         _decline_streak: int = 0
+        _flatline_streak: int = 0
         _prev_score: float | None = None
         # Run-level tool call counters for summary.json tool_error_rate
         _total_tool_calls: int = 0
