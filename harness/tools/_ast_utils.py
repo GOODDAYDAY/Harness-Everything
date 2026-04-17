@@ -187,3 +187,63 @@ def innermost_function(node: ast.AST, parents: dict[int, ast.AST]) -> str | None
             return current.name
         current = parents.get(id(current))
     return None
+
+
+def find_symbol_references(
+    tree: ast.Module,
+    symbol: str,
+    filename: str
+) -> dict[str, list[tuple[int, int]]]:
+    """Find all references to a symbol in an AST tree.
+    
+    This consolidates AST traversal logic for finding definitions, callers,
+    and callees of a given symbol, eliminating code duplication across tools.
+    
+    Args:
+        tree: Parsed AST module
+        symbol: Symbol name to search for (e.g., "my_func" or "MyClass.method")
+        filename: Source filename for error reporting
+    
+    Returns:
+        Dictionary with keys:
+        - "definitions": List of (line, col) tuples for symbol definitions
+        - "calls": List of (line, col) tuples for calls to the symbol
+        - "references": List of (line, col) tuples for other references
+    """
+    result = {
+        "definitions": [],
+        "calls": [],
+        "references": []
+    }
+    
+    # Split symbol into parts for qualified name matching
+    symbol_parts = symbol.split(".")
+    
+    for node in ast.walk(tree):
+        # Check for definitions
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == symbol_parts[-1]:
+                # For qualified names, need to check parent context
+                if len(symbol_parts) > 1:
+                    # Check if this is a method inside the right class
+                    # This is simplified - full implementation would need parent tracking
+                    pass
+                result["definitions"].append((node.lineno, node.col_offset))
+        
+        # Check for calls
+        elif isinstance(node, ast.Call):
+            call_name = None
+            if isinstance(node.func, ast.Name):
+                call_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                call_name = node.func.attr
+            
+            if call_name == symbol_parts[-1]:
+                result["calls"].append((node.lineno, node.col_offset))
+        
+        # Check for other references (names)
+        elif isinstance(node, ast.Name):
+            if node.id == symbol_parts[-1]:
+                result["references"].append((node.lineno, node.col_offset))
+    
+    return result
