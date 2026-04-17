@@ -331,7 +331,8 @@ class FindReplaceTool(Tool):
 
         for fpath in candidate_paths:
             # Per-file path check (catches symlinks pointing outside workspace)
-            if self._check_path(config, str(fpath)) is not None:
+            resolved, err = self._resolve_and_check(config, str(fpath))
+            if err:
                 continue
 
             try:
