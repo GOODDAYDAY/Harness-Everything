@@ -69,10 +69,10 @@ class Tool(ABC):
 
     # ---- helpers ----
 
-    def _check_path(self, config: HarnessConfig, path: str) -> str | ToolResult:
-        """Check if a path is within allowed workspace and return the resolved path.
+    def _check_path(self, config: HarnessConfig, path: str) -> ToolResult | None:
+        """Check if a path is within allowed workspace.
         
-        Returns the resolved path string if valid, otherwise returns a ToolResult error.
+        Returns None if the path is valid, otherwise returns a ToolResult error.
         
         Security validation order:
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
@@ -81,12 +81,8 @@ class Tool(ABC):
         """
         
         # Use the consolidated validation method
-        resolved_path, err = self._validate_root_path(config, path)
-        if err:
-            return err
-        
-        # Return the validated and resolved path
-        return resolved_path
+        _, err = self._validate_root_path(config, path)
+        return err
 
 
 
