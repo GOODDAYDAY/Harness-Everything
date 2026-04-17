@@ -352,7 +352,8 @@ class TestRunnerTool(Tool):
     ) -> ToolResult:
         # ---- path validation ----
         abs_test_path = str((Path(config.workspace) / test_path).resolve())
-        if err := self._check_path(config, abs_test_path):
+        resolved, err = self._resolve_and_check(config, abs_test_path)
+        if err:
             return err
 
         # ---- build command ----
