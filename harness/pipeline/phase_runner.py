@@ -448,22 +448,45 @@ class PhaseRunner:
         # 3. Run verification hooks (implement mode only)
         if phase.mode == "implement":
             hooks = build_hooks(phase, pipeline_config=self.config)
-            # Build changes summary from tool call logs of the best inner round.
+            # Build rich context for hooks (especially GitCommitHook).
             changes_summary = ""
-            if best_result and best_result.tool_call_log:
-                file_tools = {"write_file", "edit_file", "file_patch", "find_replace"}
-                changed = [
-                    e["tool"] for e in best_result.tool_call_log
-                    if e["tool"] in file_tools and e.get("success", True)
-                ]
-                if changed:
-                    changes_summary = f"{len(changed)} file edit(s)"
+            files_changed: list[str] = []
+            basic_critique = ""
+            diffusion_critique = ""
+            tool_summary = ""
+            if best_result:
+                if best_result.tool_call_log:
+                    file_tools = {"write_file", "edit_file", "file_patch", "find_replace"}
+                    # Extract unique file paths that were written/edited
+                    seen: set[str] = set()
+                    for e in best_result.tool_call_log:
+                        if e["tool"] in file_tools and e.get("success", True):
+                            path = e.get("input", {}).get("path", "")
+                            if path and path not in seen:
+                                seen.add(path)
+                                files_changed.append(path)
+                    if files_changed:
+                        changes_summary = f"{len(files_changed)} file(s) modified"
+                    # Tool usage stats
+                    from collections import Counter
+                    tc = Counter(e["tool"] for e in best_result.tool_call_log)
+                    tool_summary = ", ".join(f"{t}={n}" for t, n in tc.most_common(5))
+                if best_result.dual_score:
+                    ds = best_result.dual_score
+                    basic_critique = ds.basic.critique[:500] if ds.basic.critique else ""
+                    diffusion_critique = ds.diffusion.critique[:500] if ds.diffusion.critique else ""
             for hook in hooks:
                 ctx = {
                     "outer": outer,
                     "phase_name": phase.name,
                     "best_score": best_result.combined_score if best_result else 0.0,
                     "changes_summary": changes_summary,
+                    "files_changed": files_changed,
+                    "basic_critique": basic_critique,
+                    "diffusion_critique": diffusion_critique,
+                    "tool_summary": tool_summary,
+                    "inner_rounds_run": len(all_results),
+                    "all_scores": [r.combined_score for r in all_results],
                 }
                 hook_result = await hook.run(self.harness, ctx)
                 log.info("Hook %s: passed=%s", hook.name, hook_result.passed)

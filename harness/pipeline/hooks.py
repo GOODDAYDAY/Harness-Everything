@@ -122,11 +122,34 @@ class GitCommitHook(VerificationHook):
         if self.rich_metadata:
             score = context.get("best_score", 0.0)
             changes = context.get("changes_summary", "")
-            commit_msg = (
-                f"harness: R{outer + 1} {phase_name} [score={score:.1f}]"
-            )
+            files = context.get("files_changed", [])
+            basic = context.get("basic_critique", "")
+            diffusion = context.get("diffusion_critique", "")
+            tools = context.get("tool_summary", "")
+            n_inner = context.get("inner_rounds_run", 0)
+            all_scores = context.get("all_scores", [])
+
+            commit_msg = f"harness: R{outer + 1} {phase_name} [score={score:.1f}]"
+            body_parts: list[str] = []
             if changes:
-                commit_msg += f"\n\nChanges: {changes}"
+                body_parts.append(f"Summary: {changes}")
+            if files:
+                body_parts.append("Files modified:")
+                for f in files[:10]:
+                    body_parts.append(f"  - {f}")
+                if len(files) > 10:
+                    body_parts.append(f"  ... and {len(files) - 10} more")
+            if n_inner > 0:
+                scores_str = ", ".join(f"{s:.1f}" for s in all_scores)
+                body_parts.append(f"Inner rounds: {n_inner} (scores: {scores_str})")
+            if tools:
+                body_parts.append(f"Tool usage: {tools}")
+            if basic:
+                body_parts.append(f"Basic evaluator: {basic[:300]}")
+            if diffusion:
+                body_parts.append(f"Diffusion evaluator: {diffusion[:300]}")
+            if body_parts:
+                commit_msg += "\n\n" + "\n".join(body_parts)
         else:
             commit_msg = f"harness: R{outer + 1} {phase_name}"
 
