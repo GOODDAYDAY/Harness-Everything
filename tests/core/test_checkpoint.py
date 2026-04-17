@@ -86,6 +86,31 @@ class TestCheckpointManager:
             if json_path.exists():
                 json_path.unlink()
     
+    def test_path_validation_occurs_before_score_validation(self):
+        """Test that path validation occurs before score validation to prevent security bypass."""
+        # Create metadata with invalid score (11) and malicious path segment ("..")
+        metadata = CheckpointMetadata(
+            checkpoint_type="phase",
+            outer_round=1,
+            phase_label="test_phase",
+            inner_index=0,
+            basic_score=0.8,
+            diffusion_score=0.7,
+            critique_count=3,
+            actionable_critiques=2,
+            synthesis_specificity_score=11,  # Invalid score
+            timestamp=datetime.now()
+        )
+        
+        # Try to write with directory traversal attempt
+        with pytest.raises(ValueError) as exc_info:
+            self.checkpoint.write_checkpoint_metadata(metadata, "round_1", "..", "phase_test")
+        
+        # Should raise path validation error, not score validation error
+        error_msg = str(exc_info.value)
+        assert "Path segment '..' not allowed" in error_msg
+        assert "synthesis_specificity_score must be between 0 and 10" not in error_msg
+    
     def test_read_checkpoint_metadata_handles_corrupted_json(self):
         """Test that read_checkpoint_metadata returns None when JSON is corrupted."""
         # Write corrupted JSON

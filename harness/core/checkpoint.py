@@ -142,9 +142,8 @@ class CheckpointManager:
     ) -> None:
         """Write structured checkpoint metadata as JSON alongside .done marker."""
         import json
-        # Validate path segments
+        # Security: validate paths BEFORE content to prevent bypass
         self._validate_path_segments(*segments)
-        validated_segments = segments
         
         # Validate synthesis_specificity_score range
         if not (0 <= metadata.synthesis_specificity_score <= 10):
@@ -164,7 +163,7 @@ class CheckpointManager:
             "synthesis_specificity_score": metadata.synthesis_specificity_score,
             "timestamp": metadata.timestamp.isoformat()
         }
-        json_path = self.store.path(*validated_segments, "checkpoint_metadata.json")
+        json_path = self.store.path(*segments, "checkpoint_metadata.json")
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(metadata_dict, indent=2), encoding="utf-8")
 
@@ -181,9 +180,8 @@ class CheckpointManager:
         
         # Validate path segments
         self._validate_path_segments(*segments)
-        validated_segments = segments
         
-        json_path = self.store.path(*validated_segments, "checkpoint_metadata.json")
+        json_path = self.store.path(*segments, "checkpoint_metadata.json")
         if not json_path.exists():
             return None
         
