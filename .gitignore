@@ -28,3 +28,15 @@ CHANGELOG_AUTO.md
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtual environment (must live outside workspace for security)
+.venv/
+
+# Runtime logs
+logs/
+
+# Backup files created by LLM
+*.backup
+
+# Test artifacts
+test_*.py.bak
