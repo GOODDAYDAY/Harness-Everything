@@ -300,3 +300,39 @@ class TestPathCanonicalization:
             assert "test content" in result.output
         finally:
             os.chdir(old_cwd)
+
+
+class TestHomoglyphCleanup:
+    """Tests to ensure old homoglyph validation function is properly removed."""
+    
+    def test_old_homoglyph_function_removed(self):
+        """Test that the old _validate_path_contains_no_homoglyphs function is removed.
+        
+        This ensures the dead code removal is complete and prevents regression.
+        """
+        # Try to import the old function - should raise ImportError or AttributeError
+        try:
+            # First try direct import
+            from harness.tools.base import _validate_path_contains_no_homoglyphs
+            # If we get here, the function still exists - this is a failure
+            assert False, "Old function _validate_path_contains_no_homoglyphs still exists in base.py"
+        except ImportError:
+            # Expected - function doesn't exist
+            pass
+        except AttributeError:
+            # Also expected - function not in module
+            pass
+        
+        # Also verify unicodedata import is not in base.py
+        import harness.tools.base as base_module
+        base_source = base_module.__file__
+        if base_source:
+            with open(base_source, 'r', encoding='utf-8') as f:
+                source_content = f.read()
+                assert 'import unicodedata' not in source_content, \
+                    "Unused unicodedata import still exists in base.py"
+        
+        # Verify the new function is properly imported and used
+        from harness.core.security import validate_path_no_homoglyphs
+        assert callable(validate_path_no_homoglyphs), \
+            "New validate_path_no_homoglyphs function should be callable"
