@@ -117,16 +117,28 @@ class CrossReferenceTool(Tool):
                 # Caller detection
                 if isinstance(node, ast.Call) and len(callers) < 50:
                     cname = call_name(node)
-                    if cname and func_name in cname:
-                        lineno = getattr(node, "lineno", 0)
-                        snippet = (
-                            lines[lineno - 1].strip()
-                            if lines and lineno > 0
-                            else ""
-                        )
-                        callers.append(
-                            {"file": rel, "line": lineno, "snippet": snippet}
-                        )
+                    if cname:
+                        # For class methods: check if cname matches "ClassName.method_name"
+                        # For standalone functions: check if cname matches "func_name"
+                        if class_name:
+                            # Looking for ClassName.method_name
+                            expected = f"{class_name}.{func_name}"
+                            match = cname == expected
+                        else:
+                            # Looking for standalone function
+                            # Use exact match to avoid false positives like "test" matching "test_function"
+                            match = cname == func_name
+                        
+                        if match:
+                            lineno = getattr(node, "lineno", 0)
+                            snippet = (
+                                lines[lineno - 1].strip()
+                                if lines and lineno > 0
+                                else ""
+                            )
+                            callers.append(
+                                {"file": rel, "line": lineno, "snippet": snippet}
+                            )
 
             # Test file detection
             if include_tests and len(test_files) < 20:
