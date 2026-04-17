@@ -127,8 +127,19 @@ class MyClass(some_module.BaseClass):
     pass
 '''
         
-        result = _analyse_source(source, "test_dotted_inheritance.py")
+        # Use unittest.mock.patch to spy on calls to the imported dotted_name function
+        with patch('harness.tools.code_analysis.dotted_name') as mock_dotted_name:
+            # Make the mock return a simple string for any argument
+            mock_dotted_name.side_effect = lambda node: "some_module.BaseClass" if isinstance(node, ast.Attribute) else str(node)
+            
+            result = _analyse_source(source, "test_dotted_inheritance.py")
+            
+            # Assert that dotted_name was called with an ast.Attribute node
+            assert mock_dotted_name.called, "dotted_name should have been called for inheritance analysis"
+            assert any(isinstance(args[0], ast.Attribute) for args, _ in mock_dotted_name.call_args_list), \
+                "dotted_name should have been called with an ast.Attribute node for dotted inheritance"
         
+        # Also verify the analysis result contains the expected inheritance information
         assert 'symbols' in result
         symbols = result['symbols']
         
