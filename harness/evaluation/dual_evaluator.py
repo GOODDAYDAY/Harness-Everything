@@ -94,9 +94,17 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dic
     
     # Validate the output first
     is_valid, issues = validate_evaluator_output(text, evaluator_type)
-    if not is_valid:
-        result["error"] = "Invalid evaluator output: " + "; ".join(issues)
+    
+    # Separate warnings from errors
+    errors = [issue for issue in issues if not issue.startswith("WARNING:")]
+    warnings = [issue.replace("WARNING: ", "") for issue in issues if issue.startswith("WARNING:")]
+    
+    if errors:
+        result["error"] = "Invalid evaluator output: " + "; ".join(errors)
         return result
+    
+    if warnings:
+        result["warnings"] = warnings
     
     # Extract delta text
     if "DELTA VS PRIOR BEST:" in text:
@@ -145,6 +153,29 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dic
             result["improvement_suggestion"] = improvement
     
     return result
+
+
+def validate_score_calibration(score: float, evaluator_type: str = "basic") -> list[str]:
+    """Validate that a score is properly calibrated for the evaluator type.
+    
+    Returns a list of warnings if the score seems miscalibrated.
+    """
+    warnings = []
+    
+    if evaluator_type == "basic":
+        # Basic evaluator scores should typically be in 5-9 range for meaningful evaluations
+        if score < 3.0:
+            warnings.append(f"Score {score} seems too low for basic evaluator - check if task was fundamentally broken")
+        elif score > 9.5:
+            warnings.append(f"Score {score} seems too high for basic evaluator - check for score inflation")
+    else:  # diffusion
+        # Diffusion evaluator scores might be lower due to risk assessment
+        if score < 2.0:
+            warnings.append(f"Score {score} seems too low for diffusion evaluator")
+        elif score > 9.8:
+            warnings.append(f"Score {score} seems too high for diffusion evaluator - risk assessment may be too optimistic")
+    
+    return warnings
 
 
 def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: str | None = None) -> tuple[bool, list[str]]:
@@ -198,6 +229,17 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         # Check that score is the last thing in the output (most reliable)
         if not text.strip().endswith(score_line):
             issues.append("SCORE should be the last line of the output for reliable parsing")
+        
+        # Extract and validate score calibration
+        try:
+            score_match = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)', score_line)
+            if score_match:
+                score = float(score_match.group(1))
+                calibration_warnings = validate_score_calibration(score, evaluator_type)
+                for warning in calibration_warnings:
+                    issues.append(f"WARNING: {warning}")
+        except (ValueError, AttributeError):
+            pass  # Already caught by format check above
     else:
         issues.append("No SCORE line found")
     
@@ -212,7 +254,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             elif line.startswith(('A.', 'B.', 'C.', 'D.')):
                 issues.append(f"Analysis line doesn't match required format '^[A-D]\\. .+: [0-9.]+ — .+': {line}")
         
-        # Check for dimension scores
+        # Check for dimension scores - warn if missing but don't fail validation
         if evaluator_type == "basic":
             dimensions = ["A. Correctness", "B. Completeness", "C. Specificity", "D. Architecture fit"]
         else:
@@ -220,7 +262,8 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         
         for dim in dimensions:
             if dim not in analysis_section:
-                issues.append(f"ANALYSIS missing dimension: {dim}")
+                # Only warn about missing dimensions, don't fail validation
+                issues.append(f"WARNING: ANALYSIS missing dimension: {dim}")
     
     # Check defect/risk section has concrete reference with path sanitization
     if defect_section in text:
