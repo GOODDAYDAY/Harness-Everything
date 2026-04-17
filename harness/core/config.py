@@ -274,8 +274,11 @@ allowed_tools=all log_level=INFO
         to a target outside it.
         """
         import os
+        from harness.core.security import validate_path_security
+        
         path_str = str(path)
-        if "\x00" in path_str:
+        # Use comprehensive security validation
+        if validate_path_security(path_str, self):
             return False
         resolved = os.path.realpath(path_str)
         return any(
