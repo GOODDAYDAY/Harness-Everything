@@ -313,9 +313,10 @@ class CodeAnalysisTool(Tool):
         format: str = "text",  # noqa: A002
         limit: int = 50,
     ) -> ToolResult:
-        resolved, err = self._resolve_and_check(config, path)
-        if err:
-            return err
+        path_result = self._check_path(config, path)
+        if isinstance(path_result, ToolResult):
+            return path_result  # This is a security or validation error
+        resolved = path_result  # This is the validated path string
 
         p = Path(resolved)
 
