@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import logging
-import os
+import os  # Import for path operations; do not re-import in _check_path.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path

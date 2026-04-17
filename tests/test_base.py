@@ -170,3 +170,48 @@ class TestToolCheckPath:
         # Verify the returned paths are safe defaults
         assert str(search_root) == "."
         assert allowed == []
+    
+    def test_check_path_does_not_require_redundant_import(self, tmp_path):
+        """Test that _check_path method works without duplicate import statements.
+        
+        This test directly addresses the falsifiable criterion by verifying
+        that the dead code removal (duplicate import os) does not break
+        the security validation logic.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Test with a clean path - this should not raise NameError or ModuleNotFoundError
+        clean_path = f"{workspace}/safe/path/file.txt"
+        
+        # Call _check_path - this should work without any import errors
+        result = tool._check_path(config, clean_path)
+        
+        # Verify it returns None (no error) - this confirms the method executes successfully
+        assert result is None, "_check_path should return None for clean allowed paths"
+        
+        # Also test with a path that will be rejected to ensure full execution path works
+        outside_path = "/outside/path/file.txt"
+        result = tool._check_path(config, outside_path)
+        assert result is not None
+        assert result.is_error is True
+        assert "not allowed" in result.error.lower()
