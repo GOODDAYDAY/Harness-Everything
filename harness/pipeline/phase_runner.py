@@ -475,7 +475,20 @@ class PhaseRunner:
                     ds = best_result.dual_score
                     basic_critique = ds.basic.critique[:500] if ds.basic.critique else ""
                     diffusion_critique = ds.diffusion.critique[:500] if ds.diffusion.critique else ""
+            # If any gating hook (e.g. SyntaxCheckHook, ImportSmokeHook) fails,
+            # skip the GitCommitHook so broken code does not land on main.
+            # Non-gating hooks (e.g. PytestHook) can fail without blocking the
+            # commit — failing tests are allowed during test-writing phases.
+            from harness.pipeline.hooks import GitCommitHook
+            gate_failed = False
+            gate_failures: list[str] = []
             for hook in hooks:
+                if isinstance(hook, GitCommitHook) and gate_failed:
+                    log.warning(
+                        "Hook %s: skipped (gating hooks failed: %s)",
+                        hook.name, ", ".join(gate_failures),
+                    )
+                    continue
                 ctx = {
                     "outer": outer,
                     "phase_name": phase.name,
@@ -490,6 +503,14 @@ class PhaseRunner:
                 }
                 hook_result = await hook.run(self.harness, ctx)
                 log.info("Hook %s: passed=%s", hook.name, hook_result.passed)
+                if not hook_result.passed and getattr(hook, "gates_commit", False):
+                    gate_failed = True
+                    gate_failures.append(hook.name)
+                    if hook_result.errors:
+                        log.warning(
+                            "Hook %s errors (first 500 chars): %s",
+                            hook.name, hook_result.errors[:500],
+                        )
 
         # 4. Synthesis
         synthesis = await self._run_synthesis(

@@ -721,6 +721,9 @@ class PipelineLoop:
         """Execute all phases for one outer round."""
         results: list[PhaseResult] = []
         phase_scores: list[float] = []
+        # Best-score tracking within this round so a weak phase cannot
+        # poison the prior_best baseline handed to subsequent phases.
+        best_synth_score: float = float("-inf")
 
         for phase in phases:
             # Graceful shutdown: skip remaining phases
@@ -742,13 +745,23 @@ class PipelineLoop:
             if self.checkpoint.is_phase_done(outer, phase.label):
                 log.info("  phase=%s  status=resumed (already done)", phase.label)
                 segs = self.artifacts.phase_dir(outer, phase.label)
-                prior_best = self.artifacts.read(*segs, "synthesis.txt") or prior_best
+                resumed_synth = self.artifacts.read(*segs, "synthesis.txt")
                 # Recover the persisted best_score so that resumed rounds are not
                 # misreported as scoring 0.0 — which would cause the patience
                 # counter to fire falsely and abort remaining outer rounds.
                 resumed_score = _read_best_score_from_summary(
                     self.artifacts.read(*segs, "phase_summary.txt")
                 )
+                # Apply the same best-score gate as live phases: only promote
+                # the resumed synthesis to prior_best when it beats the best
+                # score we've seen so far in this round.
+                if resumed_synth and (
+                    resumed_score is None
+                    or resumed_score >= best_synth_score
+                ):
+                    if resumed_score is not None:
+                        best_synth_score = resumed_score
+                    prior_best = resumed_synth
                 if resumed_score is not None:
                     phase_scores.append(resumed_score)
                     log.info("    ↳ recovered score=%.1f", resumed_score)
@@ -789,7 +802,16 @@ class PipelineLoop:
                 phase_result = await self.runner.run_phase(outer, phase, phase_prior)
                 results.append(phase_result)
                 phase_scores.append(phase_result.best_score)
-                prior_best = phase_result.synthesis or prior_best
+                # Only replace prior_best when this phase scored at least as
+                # well as the best phase we've seen in this round. Prevents a
+                # regressing phase (e.g. score 7.5 after 15.5) from handing
+                # degraded context to downstream phases in the same round.
+                if (
+                    phase_result.synthesis
+                    and phase_result.best_score >= best_synth_score
+                ):
+                    best_synth_score = phase_result.best_score
+                    prior_best = phase_result.synthesis
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
                 self._metrics_collector.record_phase(phase.name, phase_result)
