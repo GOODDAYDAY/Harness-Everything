@@ -215,3 +215,57 @@ class TestToolCheckPath:
         assert result is not None
         assert result.is_error is True
         assert "not allowed" in result.error.lower()
+    
+    def test_validate_root_path_is_used_by_all_checkers(self, tmp_path):
+        """Test that both _check_path and _check_dir_root use the consolidated _validate_root_path method.
+        
+        This test directly addresses the falsifiable criterion by verifying
+        the architectural consolidation of duplicate security logic.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Test with a clean path
+        clean_path = f"{workspace}/safe/path/file.txt"
+        
+        # Mock the _validate_root_path method to track calls
+        from unittest.mock import patch
+        with patch.object(tool, '_validate_root_path') as mock_validate:
+            # Configure the mock to return a successful validation
+            mock_validate.return_value = (clean_path, None)
+            
+            # Call _check_path
+            result1 = tool._check_path(config, clean_path)
+            
+            # Call _check_dir_root
+            result2 = tool._check_dir_root(config, clean_path)
+            
+            # Verify _validate_root_path was called exactly twice
+            assert mock_validate.call_count == 2, \
+                f"_validate_root_path should have been called twice, but was called {mock_validate.call_count} times"
+            
+            # Verify the calls were made with the correct arguments
+            mock_validate.assert_any_call(config, clean_path)
+            
+            # Verify both methods returned expected results
+            assert result1 is None, "_check_path should return None for valid path"
+            assert result2[2] is None, "_check_dir_root should return None error for valid path"

@@ -82,28 +82,13 @@ class Tool(ABC):
         3. Check if resolved path is allowed
         """
         
-        # 1. Security validation on raw path
-        if error_msg := validate_path_security(path, config):
-            return ToolResult(
-                error=error_msg,
-                is_error=True,
-            )
+        # Use the consolidated validation method
+        resolved_path, err = self._validate_root_path(config, path)
+        if err:
+            return err
         
-        # 2. Resolve path to eliminate symlink TOCTOU
-        try:
-            resolved = os.path.realpath(path)
-        except (ValueError, OSError) as exc:
-            return ToolResult(
-                error=f"PERMISSION ERROR: invalid path {path!r}: {exc}",
-                is_error=True,
-            )
-        
-        # 3. Check if resolved path is allowed
-        if not config.is_path_allowed(resolved):
-            return ToolResult(
-                error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
-                is_error=True,
-            )
+        # The path has already been validated and resolved by _validate_root_path
+        # No additional checks needed
         return None
 
 
