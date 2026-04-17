@@ -507,10 +507,19 @@ class PipelineLoop:
                 if round_score < _prev_score:
                     _decline_streak += 1
                     if _decline_streak >= _DECLINE_WARN_STREAK:
+                        # Get all scores in the decline streak (including the starting score)
+                        # For a streak of length N, we need the last N+1 scores
+                        streak_scores = []
+                        for i in range(_decline_streak + 1):
+                            # score_history[-1] is current round, score_history[-2] is previous, etc.
+                            idx = -1 - i
+                            streak_scores.append(score_history[idx]["score"])
+                        # Reverse to show in chronological order
+                        streak_scores.reverse()
+                        
                         warning_msg = (
                             f"TREND WARNING: score has declined for {_decline_streak} consecutive "
-                            f"round(s) ({score_history[-_decline_streak]['score']} → "
-                            f"{score_history[-1]['score']} → … → {round_score}). "
+                            f"round(s) ({' → '.join(f'{s:.2f}' for s in streak_scores)}). "
                             f"Consider adjusting the prompt or stopping early."
                         )
                         log.warning(warning_msg)
@@ -519,7 +528,7 @@ class PipelineLoop:
                             "round": outer + 1,
                             "decline_streak": _decline_streak,
                             "message": warning_msg,
-                            "scores": [score_history[-_decline_streak]["score"], score_history[-1]["score"], round_score]
+                            "scores": streak_scores
                         })
                 else:
                     _decline_streak = 0
