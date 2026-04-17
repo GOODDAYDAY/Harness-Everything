@@ -1,6 +1,5 @@
 """Test evaluator improvements: structured output, mode adaptation, critique structure."""
 
-import re
 import pytest
 from harness.evaluation.dual_evaluator import parse_score
 
@@ -160,6 +159,51 @@ def test_parse_score_unanchored_fallback():
     # Test with multiple scores (should take last)
     text = "SCORE: 5.0 Some text SCORE: 8.1 more text"
     assert parse_score(text) == 8.1
+
+
+def test_validate_output_without_delta():
+    """Test that evaluator output without DELTA VS PRIOR BEST is still valid."""
+    from harness.evaluation.dual_evaluator import validate_evaluator_output
+    
+    # Valid evaluator output without DELTA VS PRIOR BEST section
+    output_without_delta = """ANALYSIS:
+A. Correctness: 9.0 — Logic is sound
+B. Completeness: 8.5 — All requirements addressed
+C. Specificity: 8.0 — Names concrete functions
+D. Architecture fit: 8.0 — Fits existing patterns
+TOP DEFECT: test.py::function — missing error handling
+ACTIONABLE FEEDBACK:
+1. Add try/except in test.py::function
+WHAT WOULD MAKE THIS 10/10: Add unit tests
+SCORE: 8.8"""
+    
+    is_valid, issues = validate_evaluator_output(output_without_delta, "basic")
+    assert is_valid, f"Output without DELTA should be valid, issues: {issues}"
+    # It might have warnings about missing dimensions, but should still be valid
+    # Check that there are no errors (only warnings)
+    error_issues = [issue for issue in issues if not issue.startswith("WARNING:")]
+    assert len(error_issues) == 0, f"Should have no error issues, got: {error_issues}"
+
+
+def test_parse_score_markdown_edge_case():
+    """Test score parsing when SCORE appears on same line as closing backticks."""
+    from harness.evaluation.dual_evaluator import parse_score
+    
+    # Test case where SCORE: appears on same line as closing backticks
+    text_with_score_on_same_line = """```python
+Some code here
+SCORE: 5.0
+More code
+SCORE: 9.5```"""
+    
+    assert parse_score(text_with_score_on_same_line) == 9.5
+    
+    # Another edge case: SCORE: in same line as opening backticks
+    text_score_with_opening_backticks = """```SCORE: 7.5
+Some code
+```"""
+    
+    assert parse_score(text_score_with_opening_backticks) == 7.5
 
 
 if __name__ == "__main__":
