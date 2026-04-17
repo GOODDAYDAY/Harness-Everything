@@ -76,6 +76,16 @@ class Tool(ABC):
         string causes undefined behaviour on some OSes and can be used to
         truncate the path at the OS level, bypassing prefix checks.
         """
+        # Import here to avoid circular imports
+        from harness.core.security import validate_path_no_homoglyphs
+        
+        # Check for Unicode homoglyphs FIRST (security ordering fix)
+        if error_msg := validate_path_no_homoglyphs(path):
+            return ToolResult(
+                error=f"PERMISSION ERROR: {error_msg}",
+                is_error=True,
+            )
+        
         if "\x00" in path:
             return ToolResult(
                 error=f"PERMISSION ERROR: path contains null byte: {path!r}",
@@ -92,13 +102,6 @@ class Tool(ABC):
                     is_error=True,
                 )
         
-        # Check for Unicode homoglyphs that could bypass security
-        if error_msg := self._validate_path_contains_no_homoglyphs(path):
-            return ToolResult(
-                error=f"PERMISSION ERROR: {error_msg}",
-                is_error=True,
-            )
-        
         if not config.is_path_allowed(path):
             return ToolResult(
                 error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
@@ -106,42 +109,7 @@ class Tool(ABC):
             )
         return None
 
-    def _validate_path_contains_no_homoglyphs(self, path: str) -> str | None:
-        """Check if path contains Unicode homoglyphs that could bypass security.
-        
-        Homoglyphs are characters that look like ASCII but are different code points.
-        For example, CYRILLIC SMALL LETTER A (U+0430) looks like ASCII 'a' (U+0061).
-        
-        Args:
-            path: The path string to validate
-            
-        Returns:
-            Error message if homoglyph found, None if path is clean
-        """
-        # Start with a minimal, high-risk character set
-        # These are visual spoofs of ASCII path delimiters or common letters
-        homoglyphs = {
-            '\u0430': 'Cyrillic small a (looks like ASCII a)',
-            '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
-            '\u0500': 'Cyrillic capital komi s (looks like ASCII O)',
-            '\u01C3': 'Latin letter retroflex click (looks like ASCII !)',
-            '\u0391': 'Greek capital alpha (looks like ASCII A)',
-            '\u03B1': 'Greek small alpha (looks like ASCII a)',
-            '\u041E': 'Cyrillic capital O (looks like ASCII O)',
-            '\u043E': 'Cyrillic small o (looks like ASCII o)',
-            '\u0555': 'Armenian comma (looks like ASCII comma)',
-            '\u058A': 'Armenian hyphen (looks like ASCII hyphen)',
-            '\u2044': 'Fraction slash (looks like ASCII /)',
-            '\uFF0F': 'Full-width solidus (looks like ASCII /)',
-        }
-        
-        for char, description in homoglyphs.items():
-            if char in path:
-                return f"PERMISSION ERROR: Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
-        
-        # TODO: Expand this to use a configurable blocklist from harness/core/config.py
-        # to allow customization based on deployment environment and threat model.
-        return None
+
 
     def _resolve_and_check(
         self, config: HarnessConfig, path: str
@@ -177,7 +145,9 @@ class Tool(ABC):
         
         # Check for Unicode homoglyphs that could bypass security
         if self.requires_path_check:
-            if error_msg := self._validate_path_contains_no_homoglyphs(path):
+            # Import here to avoid circular imports
+            from harness.core.security import validate_path_no_homoglyphs
+            if error_msg := validate_path_no_homoglyphs(path):
                 return "", ToolResult(error=error_msg, is_error=True)
         
         # Check for Unicode homoglyphs and non-standard characters

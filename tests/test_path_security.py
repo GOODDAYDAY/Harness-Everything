@@ -187,6 +187,38 @@ class TestUnicodePathSecurity:
         assert result.is_error
         # Accept any error - could be "file not found" or "path not allowed"
         assert isinstance(result.error, str) and result.error
+    
+    def test_homoglyph_validation_extracted(self):
+        """Test the extracted homoglyph validation helper directly.
+        
+        This test validates that the extracted security helper correctly
+        identifies Unicode homoglyphs that could bypass path security.
+        """
+        # Import the extracted helper directly
+        from harness.core.security import validate_path_no_homoglyphs
+        
+        # Test 1: Clean path should return None
+        clean_path = "/tmp/test.txt"
+        result = validate_path_no_homoglyphs(clean_path)
+        assert result is None, f"Clean path should return None, got: {result}"
+        
+        # Test 2: Path with Cyrillic 'a' (U+0430) should return error
+        cyrillic_path = "/tmp/test\u0430.txt"  # Cyrillic small a
+        result = validate_path_no_homoglyphs(cyrillic_path)
+        assert result is not None, "Cyrillic homoglyph should be detected"
+        assert "homoglyph" in result.lower(), f"Error should mention 'homoglyph', got: {result}"
+        assert "Cyrillic" in result, f"Error should mention 'Cyrillic', got: {result}"
+        
+        # Test 3: Path with Greek alpha (U+03B1) should return error
+        greek_path = "/tmp/\u03B1lpha.txt"  # Greek small alpha
+        result = validate_path_no_homoglyphs(greek_path)
+        assert result is not None, "Greek homoglyph should be detected"
+        assert "homoglyph" in result.lower(), f"Error should mention 'homoglyph', got: {result}"
+        assert "Greek" in result, f"Error should mention 'Greek', got: {result}"
+        
+        # Falsifiable criterion: test covers extracted validation helper
+        # This test directly validates the extracted security helper that was
+        # previously embedded in base.py::_validate_path_contains_no_homoglyphs
 
 
 class TestPathCanonicalization:
