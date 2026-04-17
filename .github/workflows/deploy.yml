@@ -45,7 +45,7 @@ jobs:
             # Sync server config from the tracked template (pipeline_server.json
             # is gitignored so git reset doesn't touch it; this ensures config
             # changes committed to the example template propagate automatically).
-            cp pipeline_example_self_improve_server.json pipeline_server.json
+            cp config/pipeline_example_self_improve_server.json pipeline_server.json
             /home/ubuntu/harness-venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
             /home/ubuntu/harness-venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineConfig; c=PipelineConfig.from_dict(__import__('json').load(open('pipeline_server.json'))); print('config ok: auto_tag_at_end=%s' % c.auto_tag_at_end)"
           EOF

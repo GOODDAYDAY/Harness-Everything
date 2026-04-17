@@ -25,10 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from harness.core.config import HarnessConfig
-from harness.executor import ExecutionResult
+from harness.pipeline.executor import ExecutionResult
 from harness.core.llm import LLM
-from harness.static_analysis import StaticReport, run_static_checks
-from harness.three_way import ThreeWayResolver
+from harness.evaluation.static_analysis import StaticReport, run_static_checks
+from harness.pipeline.three_way import ThreeWayResolver
 from harness.prompts import evaluator as default_prompts
 
 log = logging.getLogger(__name__)

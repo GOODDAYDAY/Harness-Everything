@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from harness.artifacts import ArtifactStore
+    from harness.core.artifacts import ArtifactStore
     from harness.pipeline.phase import PhaseResult
 
 log = logging.getLogger(__name__)

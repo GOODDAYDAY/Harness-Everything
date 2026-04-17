@@ -413,7 +413,7 @@ class TestAutoUpdatePromptsGuard:
         loop.config = pipeline_cfg
         loop._meta_review_context = ""
         loop._shutdown_requested = False
-        from harness.artifacts import ArtifactStore
+        from harness.core.artifacts import ArtifactStore
         loop.artifacts = ArtifactStore(str(tmp_path / "output"))
         return loop
 
@@ -423,7 +423,7 @@ class TestAutoUpdatePromptsGuard:
         from harness.pipeline.phase import PhaseConfig
         from harness.pipeline.pipeline_loop import PipelineLoop
         from harness.core.config import PipelineConfig
-        from harness.artifacts import ArtifactStore
+        from harness.core.artifacts import ArtifactStore
         from harness.core.llm import LLM
 
         cfg_data = {
@@ -465,7 +465,7 @@ class TestAutoUpdatePromptsGuard:
         from harness.pipeline.phase import PhaseConfig
         from harness.pipeline.pipeline_loop import PipelineLoop
         from harness.core.config import PipelineConfig
-        from harness.artifacts import ArtifactStore
+        from harness.core.artifacts import ArtifactStore
         from harness.core.llm import LLM
 
         cfg_data = {
@@ -506,7 +506,7 @@ class TestAutoUpdatePromptsGuard:
         from harness.pipeline.phase import PhaseConfig
         from harness.pipeline.pipeline_loop import PipelineLoop
         from harness.core.config import PipelineConfig
-        from harness.artifacts import ArtifactStore
+        from harness.core.artifacts import ArtifactStore
         from harness.core.llm import LLM
 
         cfg_data = {

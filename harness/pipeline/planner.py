@@ -7,7 +7,7 @@ import re
 
 from harness.core.config import HarnessConfig
 from harness.core.llm import LLM
-from harness.three_way import ThreeWayResolver
+from harness.pipeline.three_way import ThreeWayResolver
 from harness.prompts import planner as default_prompts
 
 log = logging.getLogger(__name__)
