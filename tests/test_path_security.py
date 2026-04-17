@@ -346,6 +346,7 @@ def test_null_byte_validation_order_in_check_path():
     """
     from unittest.mock import patch, MagicMock
     from harness.tools.base import Tool, ToolResult
+    from harness.core.security import validate_path_security
     
     # Create a mock config
     config = MagicMock()
@@ -367,11 +368,23 @@ def test_null_byte_validation_order_in_check_path():
     # Path with both null byte and homoglyph
     test_path = "/allowed/path/file\x00with\u0430homoglyph.py"
     
+    # First, directly test validate_path_security function
+    error_message = validate_path_security(test_path, config)
+    
+    # Verify it returns a null-byte error, not a homoglyph error
+    assert error_message is not None
+    error_lower = error_message.lower()
+    assert "null byte" in error_lower, \
+        f"Expected 'null byte' in error, got: {error_message}"
+    assert "homoglyph" not in error_lower, \
+        f"Should not mention 'homoglyph' when null byte is present, got: {error_message}"
+    
+    # Now test that the tool's _check_path method propagates this correctly
     # Mock the _validate_root_path method since _check_path now uses it
     with patch.object(tool, '_validate_root_path') as mock_validate_root:
         # Make it return an error (simulating null byte detection)
         mock_validate_root.return_value = (None, ToolResult(
-            error="PERMISSION ERROR: path contains null byte",
+            error=error_message,
             is_error=True
         ))
         
@@ -398,3 +411,44 @@ def test_null_byte_validation_order_in_check_path():
             result = tool._check_path(config, test_path)
             assert result is None  # No error means path is allowed
             mock_validate_root.assert_called_once_with(config, test_path)
+
+
+def test_validate_path_security_order_direct():
+    """Direct test of validate_path_security validation order.
+    
+    This test directly addresses the falsifiable criterion by verifying
+    that null-byte validation occurs before homoglyph validation in the
+    validate_path_security function itself.
+    """
+    from harness.core.security import validate_path_security
+    
+    # Test with a path containing both null byte and homoglyph
+    # Use a filename that doesn't contain the word "homoglyph"
+    test_path = "/allowed/path/file\x00with\u0430test.py"
+    
+    # Call validate_path_security directly
+    error_message = validate_path_security(test_path, None)
+    
+    # Verify it returns a null-byte error, not a homoglyph error
+    assert error_message is not None
+    error_lower = error_message.lower()
+    assert "null byte" in error_lower, \
+        f"Expected 'null byte' in error, got: {error_message}"
+    # Check that the error is specifically about null byte, not homoglyph
+    # The error message contains the homoglyph character in the quoted path,
+    # but the error type should be "null byte"
+    assert error_message.startswith("PERMISSION ERROR: path contains null byte"), \
+        f"Error should start with null byte message, got: {error_message}"
+    
+    # Also test with just homoglyph to ensure it's still detected
+    homoglyph_only_path = "/allowed/path/file\u0430test.py"
+    homoglyph_error = validate_path_security(homoglyph_only_path, None)
+    assert homoglyph_error is not None
+    assert "homoglyph" in homoglyph_error.lower()
+    
+    # Test with just null byte
+    null_only_path = "/allowed/path/file\x00test.py"
+    null_error = validate_path_security(null_only_path, None)
+    assert null_error is not None
+    assert "null byte" in null_error.lower()
+    assert null_error.startswith("PERMISSION ERROR: path contains null byte")
