@@ -15,11 +15,12 @@ class TestPipelineHealth:
     def test_health_metrics_in_summary(self, tmp_path):
         """Test that health metrics are included in the pipeline summary."""
         # Create a config with temporary workspace
-        config = HarnessConfig(
+        harness_config = HarnessConfig(
             model="test-model",
             max_tokens=1000,
             workspace=str(tmp_path),
         )
+        config = PipelineConfig(harness=harness_config)
         
         # Create a PipelineLoop instance
         pipeline = PipelineLoop(config)
@@ -95,11 +96,12 @@ class TestPipelineHealth:
     def test_health_metrics_when_monitor_missing(self, tmp_path):
         """Test that health_metrics is None when health monitor is not initialized."""
         # Create a config with temporary workspace
-        config = HarnessConfig(
+        harness_config = HarnessConfig(
             model="test-model",
             max_tokens=1000,
             workspace=str(tmp_path),
         )
+        config = PipelineConfig(harness=harness_config)
         
         # Create a PipelineLoop instance
         pipeline = PipelineLoop(config)
