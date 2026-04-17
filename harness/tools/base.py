@@ -92,6 +92,13 @@ class Tool(ABC):
                     is_error=True,
                 )
         
+        # Check for Unicode homoglyphs that could bypass security
+        if error_msg := self._validate_path_contains_no_homoglyphs(path):
+            return ToolResult(
+                error=f"PERMISSION ERROR: {error_msg}",
+                is_error=True,
+            )
+        
         if not config.is_path_allowed(path):
             return ToolResult(
                 error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
@@ -132,6 +139,8 @@ class Tool(ABC):
             if char in path:
                 return f"PERMISSION ERROR: Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
         
+        # TODO: Expand this to use a configurable blocklist from harness/core/config.py
+        # to allow customization based on deployment environment and threat model.
         return None
 
     def _resolve_and_check(
