@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import re
+from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -105,7 +107,7 @@ class CrossReferenceTool(Tool):
                             "line": node.lineno,
                             "signature": function_signature(node, lines),
                         }
-                        callees = extract_callees(node)
+                        callees = extract_callees(node)[:30]
                 elif class_name is None and isinstance(node, ast.ClassDef):
                     if node.name == func_name and definition is None:
                         definition = {
@@ -142,7 +144,16 @@ class CrossReferenceTool(Tool):
 
             # Test file detection
             if include_tests and len(test_files) < 20:
-                if ("test" in rel or "spec" in rel) and func_name in source:
+                # More precise test file detection
+                filename = Path(rel).name
+                is_test_file = (
+                    filename.startswith("test_") or
+                    filename.endswith("_test.py") or
+                    filename.endswith("_spec.py")
+                )
+                # Check if func_name appears as a whole word in source
+                pattern = re.compile(rf'\b{re.escape(func_name)}\b')
+                if is_test_file and pattern.search(source):
                     test_files.append(rel)
 
         result: dict[str, Any] = {
