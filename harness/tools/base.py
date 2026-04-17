@@ -6,13 +6,13 @@ import itertools
 import json
 import logging
 import os
-import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.core.security import validate_path_no_homoglyphs
 
 log = logging.getLogger(__name__)
 
@@ -76,9 +76,6 @@ class Tool(ABC):
         string causes undefined behaviour on some OSes and can be used to
         truncate the path at the OS level, bypassing prefix checks.
         """
-        # Import here to avoid circular imports
-        from harness.core.security import validate_path_no_homoglyphs
-        
         # Check for Unicode homoglyphs FIRST (security ordering fix)
         if error_msg := validate_path_no_homoglyphs(path):
             return ToolResult(
@@ -145,18 +142,8 @@ class Tool(ABC):
         
         # Check for Unicode homoglyphs that could bypass security
         if self.requires_path_check:
-            # Import here to avoid circular imports
-            from harness.core.security import validate_path_no_homoglyphs
             if error_msg := validate_path_no_homoglyphs(path, config):
                 return "", ToolResult(error=error_msg, is_error=True)
-        
-        # Check for Unicode homoglyphs and non-standard characters
-        normalized = unicodedata.normalize('NFKC', path)
-        if normalized != path:
-            return "", ToolResult(
-                error=f"PERMISSION ERROR: Path contains Unicode homoglyphs or non-standard characters: {path!r}",
-                is_error=True,
-            )
         
         try:
             resolved = str(Path(os.path.realpath(path)))
