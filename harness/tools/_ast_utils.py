@@ -218,32 +218,67 @@ def find_symbol_references(
     
     # Split symbol into parts for qualified name matching
     symbol_parts = symbol.split(".")
+    is_qualified = len(symbol_parts) > 1
+    
+    # Build parent map for checking context
+    parent_map = build_parent_map(tree)
     
     for node in ast.walk(tree):
         # Check for definitions
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if node.name == symbol_parts[-1]:
-                # For qualified names, need to check parent context
-                if len(symbol_parts) > 1:
-                    # Check if this is a method inside the right class
-                    # This is simplified - full implementation would need parent tracking
-                    pass
-                result["definitions"].append((node.lineno, node.col_offset))
+                if is_qualified:
+                    # For qualified names like "ClassName.method", we need to check context
+                    if len(symbol_parts) == 2:  # ClassName.method format
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            # Check if this method is inside the right class
+                            parent = parent_map.get(id(node))
+                            if isinstance(parent, ast.ClassDef) and parent.name == symbol_parts[0]:
+                                result["definitions"].append((node.lineno, node.col_offset))
+                        elif isinstance(node, ast.ClassDef):
+                            # For class definitions, check if we're looking for just the class
+                            result["definitions"].append((node.lineno, node.col_offset))
+                else:
+                    # Simple symbol name
+                    result["definitions"].append((node.lineno, node.col_offset))
         
         # Check for calls
         elif isinstance(node, ast.Call):
-            call_name = None
             if isinstance(node.func, ast.Name):
-                call_name = node.func.id
+                # Simple function call like func()
+                if node.func.id == symbol_parts[-1] and not is_qualified:
+                    result["calls"].append((node.lineno, node.col_offset))
             elif isinstance(node.func, ast.Attribute):
-                call_name = node.func.attr
-            
-            if call_name == symbol_parts[-1]:
-                result["calls"].append((node.lineno, node.col_offset))
+                # Method call like obj.method() or ClassName.method()
+                if node.func.attr == symbol_parts[-1]:
+                    if is_qualified:
+                        # Check if the full dotted name matches
+                        full_name = dotted_name(node.func)
+                        if full_name == symbol:
+                            result["calls"].append((node.lineno, node.col_offset))
+                    else:
+                        # Simple method name match
+                        result["calls"].append((node.lineno, node.col_offset))
         
         # Check for other references (names)
         elif isinstance(node, ast.Name):
-            if node.id == symbol_parts[-1]:
-                result["references"].append((node.lineno, node.col_offset))
+            if node.id == symbol_parts[-1] and not is_qualified:
+                # Check context to avoid false positives
+                # Skip if this is part of an attribute chain
+                parent = parent_map.get(id(node))
+                if not isinstance(parent, ast.Attribute):
+                    result["references"].append((node.lineno, node.col_offset))
+        
+        # Check for attribute references (not calls)
+        elif isinstance(node, ast.Attribute):
+            if node.attr == symbol_parts[-1]:
+                if is_qualified:
+                    # Check if the full dotted name matches
+                    full_name = dotted_name(node)
+                    if full_name == symbol:
+                        result["references"].append((node.lineno, node.col_offset))
+                else:
+                    # Simple attribute name match
+                    result["references"].append((node.lineno, node.col_offset))
     
     return result
