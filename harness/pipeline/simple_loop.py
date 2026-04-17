@@ -9,10 +9,10 @@ from dataclasses import dataclass, field
 
 from harness.core.config import HarnessConfig
 from harness.evaluation.evaluator import Evaluator, Verdict
-from harness.executor import ExecutionResult, Executor
+from harness.pipeline.executor import ExecutionResult, Executor
 from harness.core.llm import LLM
-from harness.planner import Planner
-from harness.project_context import ProjectContextBuilder
+from harness.pipeline.planner import Planner
+from harness.core.project_context import ProjectContextBuilder
 from harness.tools import build_registry
 
 log = logging.getLogger(__name__)

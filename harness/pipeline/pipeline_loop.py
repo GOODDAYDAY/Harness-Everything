@@ -11,12 +11,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from harness.artifacts import ArtifactStore
-from harness.checkpoint import CheckpointManager
+from harness.core.artifacts import ArtifactStore
+from harness.core.checkpoint import CheckpointManager
 from harness.core.config import PipelineConfig
 from harness.core.llm import LLM
-from harness.memory import MemoryStore
-from harness.metrics import MetricsCollector
+from harness.pipeline.memory import MemoryStore
+from harness.pipeline.metrics import MetricsCollector
 from harness.pipeline.phase import PhaseConfig, PhaseResult
 from harness.prompts.meta_review import META_REVIEW_SYSTEM, META_REVIEW_USER
 from harness.pipeline.phase_runner import PhaseRunner
