@@ -145,10 +145,11 @@ class CheckpointManager:
         # Security: validate paths BEFORE content to prevent bypass
         self._validate_path_segments(*segments)
         
-        # Validate synthesis_specificity_score range
-        if not (0 <= metadata.synthesis_specificity_score <= 10):
+        # Validate synthesis_specificity_score type and range (0-10)
+        score = metadata.synthesis_specificity_score
+        if not isinstance(score, int) or not (0 <= score <= 10):
             raise ValueError(
-                f"synthesis_specificity_score must be between 0 and 10, got {metadata.synthesis_specificity_score}"
+                f"synthesis_specificity_score must be an integer between 0 and 10, got {score}"
             )
         
         metadata_dict = {
@@ -189,6 +190,17 @@ class CheckpointManager:
             data = json.loads(json_path.read_text(encoding="utf-8"))
             # Convert timestamp string back to datetime
             data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            
+            # Validate synthesis_specificity_score range (0-10) and type
+            score = data.get("synthesis_specificity_score")
+            if not isinstance(score, int) or not (0 <= score <= 10):
+                logger.warning(
+                    "Invalid synthesis_specificity_score in checkpoint metadata at %s: %s",
+                    json_path,
+                    score
+                )
+                return None
+            
             return CheckpointMetadata(**data)
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(
