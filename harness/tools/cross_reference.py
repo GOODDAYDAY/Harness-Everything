@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import json
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -144,13 +143,6 @@ class CrossReferenceTool(Tool):
             "truncated": len(callers) >= 50 or len(callees) >= 30,
         }
 
-        # Compact JSON; trim callers list further if output exceeds budget
-        output = json.dumps(result)
-        if len(output) > _MAX_OUTPUT_BYTES:
-            # Trim callers to fit within budget
-            while len(output) > _MAX_OUTPUT_BYTES and result["callers"]:
-                result["callers"] = result["callers"][: len(result["callers"]) - 5]
-                result["truncated"] = True
-                output = json.dumps(result)
-
+        # Use the base class's safe JSON serialization
+        output = self._safe_json(result, max_bytes=_MAX_OUTPUT_BYTES)
         return ToolResult(output=output)

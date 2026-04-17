@@ -147,7 +147,7 @@ class Tool(ABC):
         if self.requires_path_check:
             # Import here to avoid circular imports
             from harness.core.security import validate_path_no_homoglyphs
-            if error_msg := validate_path_no_homoglyphs(path):
+            if error_msg := validate_path_no_homoglyphs(path, config):
                 return "", ToolResult(error=error_msg, is_error=True)
         
         # Check for Unicode homoglyphs and non-standard characters
