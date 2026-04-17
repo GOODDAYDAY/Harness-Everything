@@ -53,9 +53,11 @@ class ReadFileTool(Tool):
                 is_error=True,
             )
 
-        resolved, err = self._validate_root_path(config, path)
-        if err:
-            return err
+        # FIX: Use _check_path instead of _validate_root_path directly
+        path_result = self._check_path(config, path)
+        if isinstance(path_result, ToolResult):
+            return path_result  # This is a security or validation error
+        resolved = path_result  # This is the validated path string
 
         p = Path(resolved)
         if not p.exists():

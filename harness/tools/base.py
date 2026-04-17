@@ -99,6 +99,10 @@ class Tool(ABC):
         # Handle empty root (use workspace)
         path_to_check = root if root else config.workspace
         
+        # If path is relative, join it with workspace
+        if not os.path.isabs(path_to_check):
+            path_to_check = os.path.join(config.workspace, path_to_check)
+        
         # 1. Security validation on raw path
         if error_msg := validate_path_security(path_to_check, config):
             return "", ToolResult(
