@@ -76,7 +76,7 @@ class TestUnicodePathSecurity:
         result = _execute_read_tool(cfg, cyrillic_path)
         
         # Should fail with homoglyph validation error
-        assert result.is_error
+        assert result.is_error is True
         # Check that the error message contains "homoglyph" 
         assert "homoglyph" in result.error.lower(), f"Expected 'homoglyph' in error message, got: {result.error}"
     
