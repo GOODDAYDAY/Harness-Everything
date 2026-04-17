@@ -95,7 +95,7 @@ def safe_parse(source: str, filename: str = "<string>") -> ast.Module | None:
     """
     try:
         return ast.parse(source, filename=filename)
-    except SyntaxError:
+    except (SyntaxError, MemoryError, RecursionError):
         return None
 
 

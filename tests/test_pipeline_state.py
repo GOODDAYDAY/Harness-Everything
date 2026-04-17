@@ -180,7 +180,7 @@ class TestWriteRunSummary:
         assert len(pipeline.score_trend_warnings) > 0
         warning = pipeline.score_trend_warnings[0]
         assert "TREND WARNING" in warning["message"]
-        assert "declined for 3 consecutive round(s)" in warning["message"]
+        assert "score has declined for 3 consecutive round(s)" in warning["message"]
         assert warning["decline_streak"] >= 3
     
     def test_write_round_metrics_json_structure(self, tmp_path):

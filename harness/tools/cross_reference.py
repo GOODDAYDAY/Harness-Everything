@@ -13,6 +13,7 @@ from harness.tools._ast_utils import (
     function_signature,
     call_name,
     extract_callees,
+    safe_parse,
 )
 from harness.tools.base import Tool, ToolResult
 
@@ -87,8 +88,10 @@ class CrossReferenceTool(Tool):
         for fpath in py_files:
             try:
                 source = fpath.read_text(encoding="utf-8", errors="replace")
-                tree = ast.parse(source, filename=str(fpath))
-            except SyntaxError:
+                tree = safe_parse(source, filename=str(fpath))
+                if tree is None:
+                    continue
+            except Exception:
                 continue
 
             try:
