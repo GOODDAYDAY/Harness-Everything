@@ -269,3 +269,57 @@ class TestToolCheckPath:
             # Verify both methods returned expected results
             assert result1 is None, "_check_path should return None for valid path"
             assert result2[2] is None, "_check_dir_root should return None error for valid path"
+    
+    def test_check_path_security_validation_order(self, tmp_path):
+        """Test that security validation order is correct: null bytes before homoglyphs.
+        
+        This test directly addresses the falsifiable criterion by asserting that
+        a path containing both a null byte and a homoglyph results in an error
+        message about the null byte, not the homoglyph.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Test with a path containing both null byte and homoglyph
+        # Cyrillic 'a' (U+0430) looks like ASCII 'a'
+        malicious_path = f"{workspace}/safe\x00path\u0430file.txt"
+        
+        # Call _check_path
+        result = tool._check_path(config, malicious_path)
+        
+        # Verify it returns an error
+        assert result is not None
+        assert result.is_error is True
+        
+        # CRITICAL ASSERTION: Error should be about null byte, NOT homoglyph
+        error_lower = result.error.lower()
+        assert "null byte" in error_lower, \
+            f"Expected 'null byte' in error, got: {result.error}"
+        assert "homoglyph" not in error_lower, \
+            f"Should not mention 'homoglyph' when null byte is present, got: {result.error}"
+        
+        # Also test with just homoglyph (should be caught)
+        homoglyph_only_path = f"{workspace}/safe\u0430path/file.txt"
+        result2 = tool._check_path(config, homoglyph_only_path)
+        assert result2 is not None
+        assert result2.is_error is True
+        assert "homoglyph" in result2.error.lower()

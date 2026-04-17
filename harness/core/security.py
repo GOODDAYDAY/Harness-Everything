@@ -88,9 +88,9 @@ def validate_path_security(path: str, config: HarnessConfig | None = None) -> st
     """Comprehensive path security validation.
     
     Runs all security checks on a path in the correct order:
-    1. Unicode homoglyph validation
-    2. Null byte validation
-    3. Control character validation
+    1. Null byte validation (most critical - can truncate paths at OS level)
+    2. Control character validation (can cause unexpected behavior)
+    3. Unicode homoglyph validation (visual spoofing attacks)
     
     Args:
         path: The path string to validate
@@ -100,10 +100,10 @@ def validate_path_security(path: str, config: HarnessConfig | None = None) -> st
         First error message found, or None if all checks pass
     """
     # Check in security-critical order
-    if error := validate_path_no_homoglyphs(path, config):
-        return error
     if error := validate_path_no_null_bytes(path):
         return error
     if error := validate_path_no_control_chars(path):
+        return error
+    if error := validate_path_no_homoglyphs(path, config):
         return error
     return None
