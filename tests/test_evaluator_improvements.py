@@ -33,7 +33,8 @@ def test_parse_score_multiple():
     text = """SCORE: 5.0
     Some intermediate calculation: SCORE = 3.0
     Final verdict: SCORE: 7.0"""
-    # Only the first line matches strict anchored pattern (score at end of line)
+    # Only the first line matches strict anchored pattern (score at start of line)
+    # The third line has text before SCORE: so it doesn't match strict anchored pattern
     assert parse_score(text) == 5.0
 
 
