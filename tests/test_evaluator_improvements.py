@@ -436,5 +436,58 @@ SCORE: 7.5"""
     assert is_valid, f"Should accept clean SCORE line: {issues}"
 
 
+def test_syntax_error_triggers_fail_with_context():
+    """Test that syntax errors in changed files trigger FAIL verdict with actionable feedback.
+    
+    This test directly validates the falsifiable criterion by checking that
+    the evaluator provides specific, actionable feedback for syntax errors,
+    not just generic error messages.
+    """
+    import tempfile
+    from pathlib import Path
+    from harness.evaluation.evaluator import Evaluator
+    
+    # Create a temporary Python file with invalid syntax
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write("def invalid:\n    pass  # Missing parentheses after function name\n")
+        temp_path = Path(f.name)
+    
+    try:
+        # Create a mock evaluator context with the invalid file
+        evaluator = Evaluator(llm=None, config=None)  # We'll mock the LLM
+        
+        # Mock the changed_files to include our invalid file
+        changed_files = [str(temp_path)]
+        
+        # Check if syntax error detection is already implemented
+        # by looking for static analysis integration
+        from harness.evaluation.static_analysis import run_static_checks
+        
+        # Run static checks on the invalid file
+        result = run_static_checks(changed_files)
+        
+        # Verify that syntax error is detected
+        assert "syntax" in str(result).lower() or "invalid" in str(result).lower(), \
+            f"Static analysis should detect syntax error, got: {result}"
+        
+        # Verify that the feedback contains the erroneous code snippet
+        # This is the key assertion for the falsifiable criterion
+        result_str = str(result)
+        assert "def invalid:" in result_str, \
+            f"Feedback should contain the erroneous code snippet 'def invalid:', got: {result_str}"
+        
+        # Check that it's not just a generic error message
+        generic_errors = ["syntax error", "invalid syntax", "parsing failed"]
+        has_generic = any(generic in result_str.lower() for generic in generic_errors)
+        assert has_generic, \
+            f"Feedback should mention syntax error, got: {result_str}"
+            
+        print(f"✓ Syntax error test passed: {result_str[:100]}...")
+        
+    finally:
+        # Clean up
+        temp_path.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

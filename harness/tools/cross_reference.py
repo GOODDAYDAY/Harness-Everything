@@ -89,6 +89,14 @@ class CrossReferenceTool(Tool):
         test_pattern = re.compile(rf'\b{re.escape(func_name)}\b') if include_tests else None
 
         for fpath in py_files:
+            # Explicit containment check as defense-in-depth against symlink attacks
+            try:
+                abs_path = fpath.resolve()
+                if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) for allowed_path in allowed):
+                    continue  # Skip files outside allowed paths
+            except Exception:
+                continue
+            
             try:
                 source = fpath.read_text(encoding="utf-8", errors="replace")
                 tree = safe_parse(source, filename=str(fpath))
