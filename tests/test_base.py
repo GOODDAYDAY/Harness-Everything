@@ -322,7 +322,7 @@ class TestToolCheckPath:
             mock_validate.assert_any_call(config, clean_path)
             
             # Verify both methods returned expected results
-            assert result1 is None, "_check_path should return None for valid path"
+            assert result1 == clean_path, f"_check_path should return resolved path '{clean_path}', got {result1!r}"
             assert result2[2] is None, "_check_dir_root should return None error for valid path"
     
     def test_check_path_security_validation_order(self, tmp_path):
