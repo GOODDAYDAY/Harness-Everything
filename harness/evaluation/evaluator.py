@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from harness.core.config import HarnessConfig
 from harness.pipeline.executor import ExecutionResult
@@ -175,7 +176,6 @@ def _extract_before_snapshots(execution_log: list[dict]) -> dict[str, str]:
 
 
 @dataclass
-@dataclass
 class Verdict:
     """Evaluation outcome with structured scoring."""
     
@@ -190,6 +190,10 @@ class Verdict:
     top_defect: str = ""  # Most critical issue
     actionable_items: list[str] = field(default_factory=list)  # Specific action items
     evaluation_mode: str = "implementation"  # "implementation" or "phase"  # attached for downstream use
+    score_confidence: float = 0.0  # 0-1 confidence in score calibration
+    critique_structure_score: float = 0.0  # 0-1 rating of critique structure quality
+    calibration_anchors_used: bool = False  # Whether calibration anchors were detected
+    validation_warnings: list[str] = field(default_factory=list)  # Validation warnings from output
 
 
 class Evaluator:
@@ -376,11 +380,38 @@ class Evaluator:
             executor_status or "DONE",
         )
 
+        # Extract structured feedback and validate output
+        structured_feedback = _extract_structured_feedback(three_way.merged)
+        is_valid, validation_warnings = _validate_evaluator_output(three_way.merged)
+        
+        # Log validation warnings
+        if validation_warnings:
+            log.warning("Evaluator output validation warnings: %s", validation_warnings)
+        
+        # Extract score from structured feedback or fallback
+        score = structured_feedback.get("score")
+        if score is None:
+            score = _extract_score_from_verdict(three_way.merged)
+        
+        # Determine evaluation mode based on context
+        evaluation_mode = "implementation"
+        if "phase" in task.lower() or "phase" in plan.lower():
+            evaluation_mode = "phase"
+        
         return Verdict(
             passed=passed,
-            reason=reason or "(no reason extracted)",
+            reason=reason or structured_feedback.get("top_defect") or "(no reason extracted)",
             feedback=feedback or three_way.merged,
             static_report=static_report,
+            score=score,
+            score_breakdown=structured_feedback.get("score_breakdown", {}),
+            top_defect=structured_feedback.get("top_defect", ""),
+            actionable_items=structured_feedback.get("actionable_items", []),
+            evaluation_mode=evaluation_mode,
+            score_confidence=structured_feedback.get("score_confidence", 0.0),
+            critique_structure_score=structured_feedback.get("critique_structure_score", 0.0),
+            calibration_anchors_used=structured_feedback.get("calibration_anchors_used", False),
+            validation_warnings=validation_warnings,
         )
 
 
@@ -400,45 +431,191 @@ def _extract_executor_status(summary_text: str) -> str:
     return ""
 
 
-def _extract_score_from_verdict(verdict_text: str) -> float:
-    """Extract numeric score from evaluator verdict text.
+def _extract_structured_feedback(verdict_text: str) -> dict[str, Any]:
+    """Extract structured feedback from evaluator verdict text.
     
-    Looks for patterns like:
-    - FINAL SCORE: 8.5
-    - COMBINED_SCORE: 7.2/10
-    - Score: 9
-    
-    Returns 0.0 if no score found.
+    Returns a dict with keys:
+        - "score": float or None
+        - "score_breakdown": dict mapping dimension names to scores
+        - "top_defect": str or None
+        - "actionable_items": list of actionable feedback strings
+        - "score_confidence": float 0-1 based on calibration anchors and structure
+        - "calibration_anchors_used": bool indicating if calibration anchors were detected
+        - "critique_structure_score": float 0-1 rating of critique structure quality
+        - "validation_warnings": list of validation warnings
     """
     import re
+    from typing import Any
     
-    # Try to find FINAL SCORE: X or COMBINED_SCORE: X
-    patterns = [
+    result: dict[str, Any] = {
+        "score": None,
+        "score_breakdown": {},
+        "top_defect": None,
+        "actionable_items": [],
+        "score_confidence": 0.0,
+        "calibration_anchors_used": False,
+        "critique_structure_score": 0.0,
+        "validation_warnings": [],
+    }
+    
+    # Check for calibration anchors in text
+    calibration_phrases = [
+        "SCORING CALIBRATION",
+        "0-10 scale",
+        "score ≤ 5",
+        "score ≥ 8",
+        "critical failure",
+        "perfect — no issues",
+        "core goal achieved",
+        "risk assessment"
+    ]
+    anchor_count = sum(1 for line in verdict_text.split('\n') if any(phrase in line for phrase in calibration_phrases))
+    result["calibration_anchors_used"] = anchor_count >= 2
+    
+    # Extract score using multiple patterns
+    score_patterns = [
         r"FINAL\s+SCORE[:\s]+(\d+(?:\.\d+)?)",
         r"COMBINED_SCORE[:\s]+(\d+(?:\.\d+)?)",
         r"Score[:\s]+(\d+(?:\.\d+)?)",
+        r"SCORE[:\s]+(\d+(?:\.\d+)?)",
     ]
     
-    for pattern in patterns:
+    for pattern in score_patterns:
         matches = re.findall(pattern, verdict_text, re.IGNORECASE)
         if matches:
             try:
-                return float(matches[-1])
+                result["score"] = float(matches[-1])
+                break
             except (ValueError, TypeError):
                 continue
     
-    # Try to extract from individual dimension scores and average them
-    dimension_scores = []
-    dimension_pattern = r"(\d+)\.\s+\w+:\s+SCORE:\s+(\d+)"
-    matches = re.findall(dimension_pattern, verdict_text, re.IGNORECASE)
-    for _, score_str in matches:
-        try:
-            dimension_scores.append(float(score_str))
-        except (ValueError, TypeError):
-            continue
+    # Extract dimension scores from DETAILS section
+    if "DETAILS:" in verdict_text:
+        details_section = verdict_text.split("DETAILS:")[1].split("\n\n")[0]
+        # Look for patterns like "1. Completeness: SCORE: 8 — finding"
+        dimension_patterns = [
+            r"(\d+)\.\s+([^:]+):\s+SCORE:\s+(\d+(?:\.\d+)?)\s*—\s*(.+)",
+            r"(\d+)\.\s+([^:]+):\s+SCORE:\s+(\d+(?:\.\d+)?)",
+            r"([^:]+):\s+SCORE:\s+(\d+(?:\.\d+)?)\s*—\s*(.+)",
+        ]
+        
+        for pattern in dimension_patterns:
+            matches = re.findall(pattern, details_section, re.IGNORECASE)
+            for match in matches:
+                if len(match) == 4:  # Format with number, dimension, score, finding
+                    _, dimension, score, _ = match
+                    result["score_breakdown"][dimension.strip()] = float(score)
+                elif len(match) == 3:  # Format with dimension, score, finding
+                    dimension, score, _ = match
+                    result["score_breakdown"][dimension.strip()] = float(score)
+                elif len(match) == 2:  # Format with dimension, score
+                    dimension, score = match
+                    result["score_breakdown"][dimension.strip()] = float(score)
     
-    if dimension_scores:
-        return sum(dimension_scores) / len(dimension_scores)
+    # Extract top defect from REASON or look for defect patterns
+    if "REASON:" in verdict_text:
+        reason_line = [line for line in verdict_text.split('\n') if line.strip().startswith("REASON:")]
+        if reason_line:
+            reason = reason_line[0].split("REASON:")[1].strip()
+            if len(reason) > 10:  # Non-trivial reason
+                result["top_defect"] = reason
     
-    return 0.0
+    # Extract actionable items from SUGGESTIONS or FEEDBACK
+    suggestions_section = None
+    if "SUGGESTIONS:" in verdict_text:
+        suggestions_section = verdict_text.split("SUGGESTIONS:")[1].split("\n\n")[0]
+    elif "FEEDBACK:" in verdict_text:
+        suggestions_section = verdict_text.split("FEEDBACK:")[1].split("END_FEEDBACK")[0] if "END_FEEDBACK" in verdict_text else verdict_text.split("FEEDBACK:")[1].split("\n\n")[0]
+    
+    if suggestions_section:
+        # Extract numbered items
+        item_patterns = [
+            r"^\s*(\d+)\.\s+(.+)$",
+            r"^\s*[-*]\s+(.+)$",
+            r"^\s*<line\s+\d+\s*—\s*(.+)>$",  # From MERGE_SYSTEM format
+        ]
+        
+        for line in suggestions_section.split('\n'):
+            line = line.strip()
+            if not line or line.lower() == "none":
+                continue
+                
+            for pattern in item_patterns:
+                match = re.match(pattern, line)
+                if match:
+                    if len(match.groups()) == 2:
+                        _, item_text = match.groups()
+                    else:
+                        item_text = match.group(1)
+                    result["actionable_items"].append(item_text.strip())
+                    break
+    
+    # Calculate score confidence based on structure
+    if result["score"] is not None:
+        result["score_confidence"] += 0.3
+    
+    if result["score_breakdown"]:
+        result["score_confidence"] += 0.3
+        result["critique_structure_score"] += 0.3
+    
+    if result["top_defect"]:
+        result["score_confidence"] += 0.2
+        result["critique_structure_score"] += 0.2
+    
+    if result["actionable_items"]:
+        result["score_confidence"] += 0.2
+        result["critique_structure_score"] += 0.2
+    
+    if result["calibration_anchors_used"]:
+        result["score_confidence"] += 0.2
+    
+    # Cap scores at 1.0
+    result["score_confidence"] = min(1.0, result["score_confidence"])
+    result["critique_structure_score"] = min(1.0, result["critique_structure_score"])
+    
+    return result
+
+
+def _validate_evaluator_output(verdict_text: str) -> tuple[bool, list[str]]:
+    """Validate evaluator output structure and return (is_valid, warnings).
+    
+    Args:
+        verdict_text: Evaluator output text to validate
+    
+    Returns:
+        Tuple of (is_valid, list_of_warnings)
+    """
+    warnings = []
+    
+    # Check for required sections
+    required_sections = ["VERDICT:", "REASON:"]
+    for section in required_sections:
+        if section not in verdict_text:
+            warnings.append(f"Missing required section: {section}")
+    
+    # Check VERDICT value
+    if "VERDICT:" in verdict_text:
+        verdict_line = [line for line in verdict_text.split('\n') if line.strip().startswith("VERDICT:")]
+        if verdict_line:
+            verdict_value = verdict_line[0].split("VERDICT:")[1].strip().upper()
+            if verdict_value not in ["PASS", "FAIL"]:
+                warnings.append(f"Invalid VERDICT value: '{verdict_value}' (must be PASS or FAIL)")
+    
+    # Check for score
+    if "FINAL SCORE:" not in verdict_text and "COMBINED_SCORE:" not in verdict_text:
+        warnings.append("Missing score section (FINAL SCORE: or COMBINED_SCORE:)")
+    
+    # Check for DETAILS section with dimension scores
+    if "DETAILS:" in verdict_text:
+        details_section = verdict_text.split("DETAILS:")[1].split("\n\n")[0]
+        # Check for at least one dimension score
+        if "SCORE:" not in details_section:
+            warnings.append("DETAILS section should contain dimension SCORE: entries")
+    
+    # Check for actionable feedback
+    if "SUGGESTIONS:" not in verdict_text and "FEEDBACK:" not in verdict_text:
+        warnings.append("Missing actionable feedback section (SUGGESTIONS: or FEEDBACK:)")
+    
+    is_valid = len(warnings) == 0
+    return is_valid, warnings
 
