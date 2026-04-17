@@ -168,7 +168,8 @@ class HealthMonitor:
             self.check_performance_trends(),
             self.check_error_rate(tool_error_rate),
             self.check_memory_usage(memory_entries),
-            self.check_operational_readiness(phases_completed, phases_total)
+            self.check_operational_readiness(phases_completed, phases_total),
+            self.check_llm_health()
         ]
         
         # Log any warnings or critical issues
@@ -199,6 +200,56 @@ class HealthMonitor:
         }
         
         return summary
+    
+    def record_llm_metrics(self, call_type: str, success: bool, tokens_used: int, duration: float):
+        """Record LLM API call metrics."""
+        self.record_metric(
+            name="llm_call",
+            value=1.0 if success else 0.0,
+            unit="success_flag",
+            call_type=call_type,
+            tokens_used=tokens_used,
+            duration=duration
+        )
+    
+    def check_llm_health(self) -> HealthCheckResult:
+        """Check LLM API health and token usage trends."""
+        llm_calls = [m for m in self.metrics_history if m.name == "llm_call"]
+        if not llm_calls:
+            return HealthCheckResult(name="llm_health", status="healthy", message="No LLM calls recorded")
+        
+        success_rate = sum(m.value for m in llm_calls) / len(llm_calls)
+        if success_rate < 0.8:
+            return HealthCheckResult(
+                name="llm_health",
+                status="critical",
+                message=f"Low LLM success rate: {success_rate:.1%}"
+            )
+        
+        # Check token usage trends
+        recent_calls = llm_calls[-10:] if len(llm_calls) >= 10 else llm_calls
+        if len(recent_calls) >= 3:
+            recent_tokens = [m.tags.get("tokens_used", 0) for m in recent_calls]
+            avg_tokens = sum(recent_tokens) / len(recent_tokens)
+            
+            # Check for token usage spikes
+            if len(llm_calls) >= 10:
+                previous_calls = llm_calls[-20:-10] if len(llm_calls) >= 20 else llm_calls[:-10]
+                previous_tokens = [m.tags.get("tokens_used", 0) for m in previous_calls]
+                if previous_tokens:
+                    avg_previous = sum(previous_tokens) / len(previous_tokens)
+                    if avg_tokens > avg_previous * 1.5:  # 50% increase
+                        return HealthCheckResult(
+                            name="llm_health",
+                            status="warning",
+                            message=f"Token usage increased: recent avg {avg_tokens:.0f} vs previous {avg_previous:.0f} tokens"
+                        )
+        
+        return HealthCheckResult(
+            name="llm_health",
+            status="healthy",
+            message=f"LLM health normal: success rate {success_rate:.1%}"
+        )
     
     @property
     def metrics_dict(self) -> Dict[str, Any]:
