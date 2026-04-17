@@ -51,6 +51,18 @@ def test_evaluator_mode_headers():
     # Check implement mode mentions executed code
     assert "executed code change" in _MODE_HEADERS["implement"].lower()
     assert "code state" in _MODE_HEADERS["implement"].lower()
+    
+    # Check enhanced mode headers have calibration anchors
+    assert "calibration anchors" in _MODE_HEADERS["debate"].lower()
+    assert "calibration anchors" in _MODE_HEADERS["implement"].lower()
+    
+    # Check scoring guidance is present
+    assert "scoring guidance" in _MODE_HEADERS["debate"].lower()
+    assert "scoring guidance" in _MODE_HEADERS["implement"].lower()
+    
+    # Check critical quality signals
+    assert "critical quality signals" in _MODE_HEADERS["debate"].lower()
+    assert "critical quality signals" in _MODE_HEADERS["implement"].lower()
 
 
 def test_structured_output_format():
