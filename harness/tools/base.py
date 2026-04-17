@@ -75,17 +75,34 @@ class Tool(ABC):
         Rejects null bytes before any Path operation — a null byte in a path
         string causes undefined behaviour on some OSes and can be used to
         truncate the path at the OS level, bypassing prefix checks.
+        
+        Security validation order:
+        1. validate_path_security on raw path (homoglyphs, null bytes, control chars)
+        2. Resolve path with os.path.realpath to eliminate symlink TOCTOU
+        3. Check if resolved path is allowed
         """
-        # Use comprehensive security validation
+        import os
+        
+        # 1. Security validation on raw path
         if error_msg := validate_path_security(path, config):
             return ToolResult(
                 error=error_msg,
                 is_error=True,
             )
         
-        if not config.is_path_allowed(path):
+        # 2. Resolve path to eliminate symlink TOCTOU
+        try:
+            resolved = os.path.realpath(path)
+        except (ValueError, OSError) as exc:
             return ToolResult(
-                error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
+                error=f"PERMISSION ERROR: invalid path {path!r}: {exc}",
+                is_error=True,
+            )
+        
+        # 3. Check if resolved path is allowed
+        if not config.is_path_allowed(resolved):
+            return ToolResult(
+                error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
                 is_error=True,
             )
         return None
