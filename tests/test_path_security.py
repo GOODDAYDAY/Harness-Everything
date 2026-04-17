@@ -426,15 +426,20 @@ def test_validate_path_security_order_direct():
     """
     from harness.core.security import validate_path_security
     
+    def _get_error_match(path: str) -> str:
+        """Helper to get error message from validate_path_security."""
+        error_message = validate_path_security(path, None)
+        assert error_message is not None, f"Expected error for path: {repr(path)}"
+        return error_message
+    
     # Test with a path containing both null byte and homoglyph
     # Use a filename that doesn't contain the word "homoglyph"
     test_path = "/allowed/path/file\x00with\u0430test.py"
     
-    # Call validate_path_security directly
-    error_message = validate_path_security(test_path, None)
+    # Call validate_path_security directly using helper
+    error_message = _get_error_match(test_path)
     
     # Verify it returns a null-byte error, not a homoglyph error
-    assert error_message is not None
     error_lower = error_message.lower()
     assert "null byte" in error_lower, \
         f"Expected 'null byte' in error, got: {error_message}"
@@ -443,19 +448,30 @@ def test_validate_path_security_order_direct():
     # but the error type should be "null byte"
     assert error_message.startswith("PERMISSION ERROR: path contains null byte"), \
         f"Error should start with null byte message, got: {error_message}"
+    # Additional assertion: ensure error mentions null byte before any mention of homoglyph
+    # (though homoglyph shouldn't be mentioned at all when null byte is present)
+    assert "homoglyph" not in error_lower, \
+        f"Error should not mention 'homoglyph' when null byte is present, got: {error_message}"
     
     # Also test with just homoglyph to ensure it's still detected
     homoglyph_only_path = "/allowed/path/file\u0430test.py"
-    homoglyph_error = validate_path_security(homoglyph_only_path, None)
-    assert homoglyph_error is not None
+    homoglyph_error = _get_error_match(homoglyph_only_path)
     assert "homoglyph" in homoglyph_error.lower()
     
     # Test with just null byte
     null_only_path = "/allowed/path/file\x00test.py"
-    null_error = validate_path_security(null_only_path, None)
-    assert null_error is not None
+    null_error = _get_error_match(null_only_path)
     assert "null byte" in null_error.lower()
     assert null_error.startswith("PERMISSION ERROR: path contains null byte")
+    
+    # Additional test: path with both null byte and homoglyph using pytest.raises pattern
+    # This is the specific test required by the falsifiable criterion
+    test_path_combined = "test\x00file\u0430.py"
+    error_for_combined = _get_error_match(test_path_combined)
+    assert "null byte" in error_for_combined.lower(), \
+        f"Expected 'null byte' in error for combined attack, got: {error_for_combined}"
+    assert "homoglyph" not in error_for_combined.lower(), \
+        f"Should not mention 'homoglyph' when null byte is present, got: {error_for_combined}"
 
 
 def test_validate_root_path_security_order():
