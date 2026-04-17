@@ -2,7 +2,6 @@
   "//": "=== Server Self-Improve Pipeline (DeepSeek + 10-round chunks) ===",
   "// purpose": "Sanitized template for /home/ubuntu/harness-everything on the deploy server. Each pipeline run does 10 outer rounds, then commits/pushes/tags. The pushed tag triggers .github/workflows/deploy.yml which restarts the harness service so the freshly-improved code takes effect.",
   "// usage": "Server: cp this to pipeline_server.json. API key goes in /home/ubuntu/.config/harness/env as HARNESS_API_KEY=...",
-
   "harness": {
     "model": "deepseek-chat",
     "// max_tokens": "DeepSeek-Chat caps output at 8K. 8000 leaves a safety margin so we don't trigger 'suspiciously short response' warnings on truncation.",
@@ -11,14 +10,22 @@
     "// api_key": "Empty here. Service reads HARNESS_API_KEY from EnvironmentFile=/home/ubuntu/.config/harness/env.",
     "api_key": "",
     "workspace": "/home/ubuntu/harness-everything",
-    "allowed_paths": ["/home/ubuntu/harness-everything"],
+    "allowed_paths": [
+      "/home/ubuntu/harness-everything"
+    ],
     "allowed_tools": [],
     "extra_tools": [],
-    "bash_command_denylist": ["rm", "shutdown", "reboot", "poweroff", "mkfs", "dd"],
+    "bash_command_denylist": [
+      "rm",
+      "shutdown",
+      "reboot",
+      "poweroff",
+      "mkfs",
+      "dd"
+    ],
     "max_tool_turns": 20,
     "log_level": "INFO"
   },
-
   "// outer_rounds": "Chunk size. Each pipeline run = 10 outer rounds, then exit cleanly. systemd Restart=on-failure means clean exit waits for CI tag-push to restart with new code.",
   "outer_rounds": 10,
   "inner_rounds": 2,
@@ -28,17 +35,14 @@
   "output_dir": "/home/ubuntu/harness-everything/harness_output",
   "min_synthesis_chars": 150,
   "max_file_context_chars": 30000,
-
   "// meta_review_interval": "0 = disabled in server mode. Each chunk is short (10 rounds) and meta-review adds latency. Re-enable per-server if needed.",
   "meta_review_interval": 0,
   "meta_review_system": "",
   "meta_review_inject": false,
-
   "// auto_push_interval": "Push every round for real-time progress visibility.",
   "auto_push_interval": 1,
   "auto_push_remote": "origin",
   "auto_push_branch": "main",
-
   "// auto_tag_*": "Per-round tag, threshold 5.0, push to origin. The tag name format is {prefix}-{rounds}-{shortsha}, e.g. harness-r-10-a3f5d2c. CI workflow listens for harness-r* tag pushes.",
   "auto_tag_interval": 10,
   "auto_tag_prefix": "harness-r",
@@ -46,17 +50,13 @@
   "auto_tag_min_score": 5.0,
   "// auto_tag_at_end": "Force a tag at end of every pipeline run, regardless of score / patience early stop. CRITICAL for self-improvement loops: the next chunk is only triggered by tag push, so every chunk MUST emit a tag or the loop dies.",
   "auto_tag_at_end": true,
-
   "rich_commit_metadata": true,
   "auto_update_prompts": false,
   "run_mode": "automatic",
-
   "dual_evaluator": {
     "basic_system": "You are an adversarial code reviewer for an AI coding harness framework (Python 3.11+, async, Anthropic-compatible API).\n\nEvaluate proposals/implementations:\n1. Find the single most critical defect (security hole, race condition, data loss, context leak, prompt injection)\n2. Verify changes follow existing patterns (async, dataclass config, Tool ABC, ToolResult, frozenset tags)\n3. Check: no path security bypass, no arbitrary code execution regression, no sensitive data written to tracked files\n4. BLOAT GATE (HARD): Does this change increase net line count by >50 lines without equivalent deletions elsewhere? If yes: -3 points\n5. TOOL GATE (HARD): Does this change add a new tool file to harness/tools/ without merging or removing an existing one? If yes: -5 points\n6. ASYNC SAFETY: Does this change introduce blocking I/O in an async context (open(), subprocess.run(), time.sleep())? If yes to blocking: -2 points\n7. CONSOLIDATION BONUS: +2 for merging two tools into one. +2 for extracting shared boilerplate. +1 for adding a test covering a previously untested critical path\n8. QUALITY CHECK: Does this change add dead code, unused imports, or bloat? -2 for introducing dead code. +1 for removing dead code while making improvements\n9. Score 0-10 (10=excellent, 5=works but marginal, 0=broken or insecure)\n\nOutput: SCORE: <number>",
-
     "diffusion_system": "You are a second-order effects analyst for an AI coding harness framework.\n\nDo NOT evaluate correctness. Analyze ripple effects:\n- Does this change break simple mode while improving pipeline mode (or vice versa)?\n- Does it increase context window consumption?\n- Does it make the framework harder to configure or less generic?\n- What happens when the LLM hallucinates tool names or parameter names?\n- Does it affect checkpoint/resume reliability across process restarts?\n- Will this change make path security (_check_path) bypassable?\n- SIGNAL SAFETY: Does this change interact with the graceful shutdown mechanism? Could it leave the event loop in a bad state on SIGINT?\n- CODE QUALITY RIPPLE: Does this change leave orphaned imports, dead functions, or stale references in OTHER files?\n- TOOL COUNT INFLATION: Does this change increase the number of tool files? Every new tool must be justified by removing or merging an existing one.\n\nForce yourself to find at least one negative second-order impact.\n\nScore 0-10 (10=excellent ripple, 0=dangerous cascade).\nOutput: SCORE: <number>"
   },
-
   "phases": [
     {
       "name": "framework_analysis",
@@ -64,10 +64,19 @@
       "mode": "debate",
       "skip_cycle": 2,
       "inner_rounds": 2,
-      "glob_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
-      "tool_tags": ["file_read", "search", "git", "analysis"],
+      "glob_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
+      "tool_tags": [
+        "file_read",
+        "search",
+        "git",
+        "analysis"
+      ],
       "min_proposal_chars": 150,
-      "system_prompt": "You are a senior AI systems engineer analyzing an AI coding harness framework. Your job is to find the highest-leverage improvements and security issues.\n\nSource code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nARCHITECTURE:\n- harness/core/: config.py, llm.py (async, retry, pruning)\n- harness/evaluation/: dual_evaluator.py, evaluator.py\n- harness/pipeline/: pipeline_loop.py (outer rounds + shutdown + meta-review + auto-push/tag), phase_runner.py (inner rounds + synthesis), phase.py\n- harness/tools/: ~30 tools, base.py (Tool ABC + tags), registry.py\n- harness/prompts/: synthesis.py, dual_evaluator.py\n- harness/checkpoint.py, harness/hooks.py, harness/artifacts.py, harness/metrics.py\n\nPRIORITIES:\n1. EVALUATOR EFFECTIVENESS: Does scoring discriminate? Are critiques actionable? What blind spots exist?\n2. PIPELINE EFFECTIVENESS: Does information flow well across rounds? Is synthesis picking the best?\n3. SECURITY AND CODE QUALITY: Path security, prompt injection, dead code, AST boilerplate duplication.\n\nOutput format: For each finding, state (a) the specific file/function, (b) the problem, (c) a concrete improvement proposal. Rank by expected impact.\n\nFalsifiable criterion: $falsifiable_criterion",
+      "system_prompt": "You are a senior AI systems engineer analyzing an AI coding harness framework. Your job is to find the highest-leverage improvements and security issues.\n\nSource code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nARCHITECTURE:\n- harness/core/: config.py, llm.py (async, retry, pruning)\n- harness/evaluation/: dual_evaluator.py, evaluator.py\n- harness/pipeline/: pipeline_loop.py (outer rounds + shutdown + meta-review + auto-push/tag), phase_runner.py (inner rounds + synthesis), phase.py\n- harness/tools/: ~30 tools, base.py (Tool ABC + tags), registry.py\n- harness/prompts/: synthesis.py, dual_evaluator.py\n- harness/core/: artifacts.py, checkpoint.py, project_context.py, security.py; harness/pipeline/: executor.py, hooks.py, memory.py, metrics.py, planner.py; harness/evaluation/: static_analysis.py\n\nPRIORITIES:\n1. EVALUATOR EFFECTIVENESS: Does scoring discriminate? Are critiques actionable? What blind spots exist?\n2. PIPELINE EFFECTIVENESS: Does information flow well across rounds? Is synthesis picking the best?\n3. SECURITY AND CODE QUALITY: Path security, prompt injection, dead code, AST boilerplate duplication.\n\nOutput format: For each finding, state (a) the specific file/function, (b) the problem, (c) a concrete improvement proposal. Rank by expected impact.\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Each finding must reference a specific function name and file path. Findings must include a concrete, testable improvement proposal. Vague findings without code references lose 3 points."
     },
     {
@@ -75,56 +84,94 @@
       "index": 1,
       "mode": "implement",
       "inner_rounds": 2,
-      "glob_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
+      "glob_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
       "tool_tags": [],
       "min_proposal_chars": 0,
       "system_prompt": "You are a senior AI systems engineer improving an AI coding harness framework.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nSENSITIVE INFORMATION POLICY (HARD RULE — violating loses 5 points):\n- NEVER write real domain names, internal API URLs, company names, or internal project codenames into any tracked file\n- NEVER write absolute personal paths (/Users/<name>/...) into code or configs\n- NEVER hardcode API keys, tokens, or passwords\n- Git commits are auto-signed — do not override git config\n\nSELF-IMPROVEMENT LOOP PROTECTION (HARD RULE — violating loses 10 points):\nThis harness runs in an autonomous loop. The next chunk is only triggered by a git tag push from the auto-tag mechanism. Modifying the loop infrastructure can break the cycle and require manual recovery. Do NOT modify any of these:\n- .github/workflows/ (CI deploy workflow)\n- deploy/ (systemd unit, heartbeat / cleanup scripts)\n- pipeline_loop.py functions: _maybe_auto_push, _maybe_auto_tag, _run_git\n- config.py fields: auto_push_*, auto_tag_*\n- main.py --pipeline argument handling\nYou MAY improve other parts of pipeline_loop.py and config.py, but the auto-push/auto-tag plumbing is sacred. If you think the plumbing has a bug, log a comment in CHANGELOG_AUTO.md instead of editing it.\n\nIMPLEMENTATION RULES:\n- Follow existing patterns: async, dataclass config, Tool ABC, ToolResult\n- Do NOT break existing APIs or config format\n- One focused, high-quality improvement per round\n- Do NOT create new tool files\n\nPRIORITY ORDER — implement the highest-priority item that has not yet been done:\n1. EVALUATOR IMPROVEMENTS: structured score format, phase-mode adaptation, critique structure, score calibration anchors\n2. SYNTHESIS IMPROVEMENTS: explicit selection criteria, anti-repetition discipline\n3. LLM CALL IMPROVEMENTS: context pruning correctness, retry signal logging\n\nROUND OUTPUT: Append a 3-5 line summary to CHANGELOG_AUTO.md.\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Each change must produce a measurable improvement: more structured evaluator output, better discrimination, more actionable critiques, or more specific synthesis. Changes that only add comments lose 3 points. Net line-count increase >30 without clear benefit loses 2 points.",
-      "syntax_check_patterns": ["harness/**/*.py", "main.py"],
+      "syntax_check_patterns": [
+        "harness/**/*.py",
+        "main.py"
+      ],
       "commit_on_success": true,
-      "commit_repos": ["."]
+      "commit_repos": [
+        "."
+      ]
     },
     {
       "name": "security_and_cleanup",
       "index": 2,
       "mode": "implement",
       "inner_rounds": 2,
-      "glob_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
+      "glob_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
       "tool_tags": [],
       "min_proposal_chars": 0,
       "system_prompt": "You are a senior developer doing code cleanup, dead code removal, and security hardening for an AI coding harness framework.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nSENSITIVE INFORMATION POLICY (HARD RULE — violating loses 5 points):\n- NEVER write real domain names, internal API URLs, company names, or internal project codenames into any tracked file\n- NEVER write absolute personal paths (/Users/<name>/...) into code or configs\n- NEVER hardcode API keys, tokens, or passwords — use env var placeholders only\n- Example configs must use generic placeholders\n- Git commits are auto-signed — do not override git config\n\nSELF-IMPROVEMENT LOOP PROTECTION (HARD RULE — violating loses 10 points):\nThis harness runs in an autonomous loop. The next chunk is only triggered by a git tag push from the auto-tag mechanism. Modifying the loop infrastructure can break the cycle and require manual recovery. Do NOT modify any of these:\n- .github/workflows/ (CI deploy workflow)\n- deploy/ (systemd unit, heartbeat / cleanup scripts)\n- pipeline_loop.py functions: _maybe_auto_push, _maybe_auto_tag, _run_git\n- config.py fields: auto_push_*, auto_tag_*\n- main.py --pipeline argument handling\nYou MAY improve other parts of pipeline_loop.py and config.py, but the auto-push/auto-tag plumbing is sacred. If you think the plumbing has a bug, log a comment in CHANGELOG_AUTO.md instead of editing it.\n\nIMPLEMENTATION RULES:\n- Follow existing patterns: Tool ABC, async execute(), ToolResult, frozenset tags\n- Do NOT break existing config format or tool APIs\n- One focused improvement per round\n- Do NOT create new tool files\n\nSTRICT LINE BUDGET (HARD RULE):\n- If you add N lines in this round, you MUST remove >= N lines elsewhere.\n- Net-positive line count is a failure signal.\n\nPRIORITY ORDER:\n1. DEAD CODE PURGE: unused imports, unreachable branches, orphaned helpers. Verify zero callers before deleting.\n2. PATH SECURITY HARDENING: _check_path() in harness/tools/base.py — symlink traversal, Unicode normalization, null bytes.\n3. ASYNC CORRECTNESS: blocking calls in async context (open() without aiofiles, subprocess.run(), time.sleep()).\n4. SHARED HELPERS: extract repeated AST parse/walk boilerplate into harness/tools/_ast_utils.py (NOT a Tool).\n5. TEST COVERAGE: 1-2 tests for an untested critical path.\n\nROUND OUTPUT: Append a 3-5 line summary to CHANGELOG_AUTO.md.\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Changes must remove verified dead code (with before/after line counts), add a security guard with a test, or extract shared boilerplate. Net-positive line count loses 3 points. New tool files are automatic 0.",
-      "syntax_check_patterns": ["harness/**/*.py", "main.py"],
+      "syntax_check_patterns": [
+        "harness/**/*.py",
+        "main.py"
+      ],
       "commit_on_success": true,
-      "commit_repos": ["."]
+      "commit_repos": [
+        "."
+      ]
     },
     {
       "name": "consolidation_and_testing",
       "index": 3,
       "mode": "implement",
       "inner_rounds": 2,
-      "glob_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
+      "glob_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
       "tool_tags": [],
       "min_proposal_chars": 0,
       "system_prompt": "You are a senior developer consolidating tools and adding test coverage for an AI coding harness framework.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nSENSITIVE INFORMATION POLICY (HARD RULE — violating loses 5 points):\n- NEVER write real domain names, internal API URLs, company names, or internal project codenames into any tracked file\n- NEVER write absolute personal paths into code or configs\n- NEVER hardcode API keys, tokens, or passwords\n- Git commits are auto-signed — do not override git config\n\nSELF-IMPROVEMENT LOOP PROTECTION (HARD RULE — violating loses 10 points):\nThis harness runs in an autonomous loop. The next chunk is only triggered by a git tag push from the auto-tag mechanism. Modifying the loop infrastructure can break the cycle and require manual recovery. Do NOT modify any of these:\n- .github/workflows/ (CI deploy workflow)\n- deploy/ (systemd unit, heartbeat / cleanup scripts)\n- pipeline_loop.py functions: _maybe_auto_push, _maybe_auto_tag, _run_git\n- config.py fields: auto_push_*, auto_tag_*\n- main.py --pipeline argument handling\nYou MAY improve other parts of pipeline_loop.py and config.py, but the auto-push/auto-tag plumbing is sacred. If you think the plumbing has a bug, log a comment in CHANGELOG_AUTO.md instead of editing it.\n\nIMPLEMENTATION RULES:\n- Follow existing patterns: Tool ABC, async execute(), ToolResult\n- Do NOT break existing config format or tool APIs\n- One focused improvement per round\n- ABSOLUTE PROHIBITION: Do NOT create new tool files. Any new tool file is automatic 0.\n\nCONSOLIDATION PRIORITIES:\n1. EXTRACT SHARED AST UTILITIES: code_analysis, symbol_extractor, cross_reference, call_graph, data_flow, feature_search all duplicate ast.parse + walk + parent-pointer. Extract to harness/tools/_ast_utils.py (private helper, not registered).\n2. SIMPLIFY LARGE TOOL FILES: audit large files for dead branches, over-engineered fallbacks, verbose docstrings duplicating type annotations.\n3. ADD CRITICAL TESTS: ToolRegistry.execute() routing, filter_by_tags(), _check_path() rejections, PipelineConfig.from_dict() comment stripping.\n4. REVIEW NEW PIPELINE CODE: pipeline_loop.py for simplification opportunities.\n\nROUND OUTPUT: Append a 3-5 line summary to CHANGELOG_AUTO.md.\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Each change must reduce total line count, add a test covering a previously untested critical path, or extract measurable shared boilerplate. New tool files are automatic 0.",
-      "syntax_check_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
+      "syntax_check_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
       "commit_on_success": true,
-      "commit_repos": ["."]
+      "commit_repos": [
+        "."
+      ]
     },
     {
       "name": "traceability_and_structure",
       "index": 4,
       "mode": "implement",
       "inner_rounds": 2,
-      "glob_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
+      "glob_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
       "tool_tags": [],
       "min_proposal_chars": 0,
       "system_prompt": "You are a senior developer improving traceability, run observability, and production quality of an AI coding harness framework.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nSENSITIVE INFORMATION POLICY (HARD RULE — violating loses 5 points):\n- NEVER write real domain names, internal API URLs, company names, or internal project codenames into any tracked file\n- NEVER write absolute personal paths into code or configs\n- NEVER hardcode API keys, tokens, or passwords\n- Git commits are auto-signed — do not override git config\n\nSELF-IMPROVEMENT LOOP PROTECTION (HARD RULE — violating loses 10 points):\nThis harness runs in an autonomous loop. The next chunk is only triggered by a git tag push from the auto-tag mechanism. Modifying the loop infrastructure can break the cycle and require manual recovery. Do NOT modify any of these:\n- .github/workflows/ (CI deploy workflow)\n- deploy/ (systemd unit, heartbeat / cleanup scripts)\n- pipeline_loop.py functions: _maybe_auto_push, _maybe_auto_tag, _run_git\n- config.py fields: auto_push_*, auto_tag_*\n- main.py --pipeline argument handling\nYou MAY improve other parts of pipeline_loop.py and config.py, but the auto-push/auto-tag plumbing is sacred. If you think the plumbing has a bug, log a comment in CHANGELOG_AUTO.md instead of editing it.\n\nIMPLEMENTATION RULES:\n- Do NOT break existing APIs or config format\n- One improvement per round\n- Ensure async correctness\n- Do NOT create new tool files\n\nTRACEABILITY PRIORITIES:\n1. RUN DASHBOARD: Improve summary.json schema with end_time, total_phases_run, score_history per phase, shutdown_reason, meta_review_count, auto_push_count.\n2. SCORE TREND DETECTION: Detect 3 consecutive declining best_scores and log a WARNING.\n3. METRICS ROLLUP: per-round aggregation in metrics.json.\n4. TEST COVERAGE: Add tests for new traceability code.\n\nQUALITY DISCIPLINE:\n- Every round must leave the codebase with fewer lines of dead code.\n- Verify async correctness.\n\nROUND OUTPUT: Append a 3-5 line summary to CHANGELOG_AUTO.md.\n\nFalsifiable criterion: $falsifiable_criterion",
       "falsifiable_criterion": "Each improvement must produce a verifiable artifact (summary.json field added, warning logged, test added). Changes that only add docstrings lose 3 points. New tool files are automatic 0.",
-      "syntax_check_patterns": ["harness/**/*.py", "main.py", "tests/**/*.py"],
+      "syntax_check_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py"
+      ],
       "commit_on_success": true,
-      "commit_repos": ["."]
+      "commit_repos": [
+        "."
+      ]
     }
   ]
 }
