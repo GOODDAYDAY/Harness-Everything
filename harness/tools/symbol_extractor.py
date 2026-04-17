@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools._ast_utils import parse_module
+from harness.tools._ast_utils import parse_module, safe_parse
 from harness.tools.base import Tool, ToolResult
 
 
@@ -125,9 +125,8 @@ def _extract_symbols_from_source(
     Returns an empty list when the file has a syntax error (the caller logs
     and continues).
     """
-    try:
-        tree = ast.parse(source, filename=filepath)
-    except SyntaxError:
+    tree = safe_parse(source, filepath)
+    if tree is None:
         return []
 
     matches: list[_SymbolMatch] = []

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import parse_module
 from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 24_000
@@ -150,10 +151,8 @@ def _build_graph(
     graph: dict[str, list[str]] = {}
 
     for fpath in py_files:
-        try:
-            source = fpath.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source, filename=str(fpath))
-        except (SyntaxError, OSError):
+        tree = parse_module(fpath)
+        if tree is None:
             continue
 
         file_mod = _file_to_module(fpath, root)
@@ -390,10 +389,8 @@ class DependencyAnalyzerTool(Tool):
                     continue
                 if module_filter and not file_mod.startswith(module_filter):
                     continue
-                try:
-                    source = fpath.read_text(encoding="utf-8", errors="replace")
-                    tree = ast.parse(source, filename=str(fpath))
-                except (SyntaxError, OSError):
+                tree = parse_module(fpath)
+                if tree is None:
                     continue
                 raw = _extract_imports(tree, file_mod)
                 if not include_stdlib:

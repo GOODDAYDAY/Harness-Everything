@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.core.security import validate_path_no_homoglyphs
+from harness.core.security import validate_path_security
 
 log = logging.getLogger(__name__)
 
