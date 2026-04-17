@@ -366,7 +366,8 @@ def test_null_byte_validation_order_in_check_path():
     tool = TestTool()
     
     # Path with both null byte and homoglyph
-    test_path = "/allowed/path/file\x00with\u0430homoglyph.py"
+    # Use a filename that doesn't contain the word "homoglyph" to avoid false positives
+    test_path = "/allowed/path/file\x00with\u0430test.py"
     
     # First, directly test validate_path_security function
     error_message = validate_path_security(test_path, config)
@@ -452,3 +453,85 @@ def test_validate_path_security_order_direct():
     assert null_error is not None
     assert "null byte" in null_error.lower()
     assert null_error.startswith("PERMISSION ERROR: path contains null byte")
+
+
+def test_validate_root_path_security_order():
+    """Test the correct security validation order in _validate_root_path method.
+    
+    This test directly addresses the falsifiable criterion by verifying
+    that the consolidated _validate_root_path method (used by multiple tools)
+    correctly applies security validation in the order:
+    1. null bytes → 2. control characters → 3. homoglyphs
+    
+    The test creates a path containing all three attack vectors and asserts
+    that the error message is about null bytes, not control characters or homoglyphs.
+    """
+    from unittest.mock import Mock
+    from harness.tools.base import Tool, ToolResult
+    
+    # Create a mock config
+    config = Mock()
+    config.workspace = "/allowed/workspace"
+    config.allowed_paths = ["/allowed/workspace"]
+    config.is_path_allowed = Mock(return_value=True)
+    config.homoglyph_blocklist = None  # Add this attribute to avoid AttributeError
+    
+    # Create a concrete Tool instance
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        
+        def input_schema(self):
+            return {"type": "object", "properties": {}}
+        
+        async def execute(self, config, **params):
+            return None
+    
+    tool = TestTool()
+    
+    # Create a test path containing all three attack vectors:
+    # 1. Null byte (\x00) - should be detected first
+    # 2. Control character (\x01) - should be detected second if null byte wasn't present
+    # 3. Homoglyph (\u0430 - Cyrillic small a) - should be detected third
+    # Note: Use a filename that doesn't contain the word "homoglyph" to avoid false positives
+    attack_path = "/allowed/workspace/file\x00with\x01control\u0430test.py"
+    
+    # Call _validate_root_path directly
+    resolved_path, error_result = tool._validate_root_path(config, attack_path)
+    
+    # Verify it returns an error
+    assert error_result is not None, "Should return error for malicious path"
+    assert error_result.is_error is True, "Error result should have is_error=True"
+    
+    # CRITICAL ASSERTION: Error should be about null byte, NOT control character or homoglyph
+    error_lower = error_result.error.lower()
+    assert "null byte" in error_lower, \
+        f"Expected 'null byte' in error, got: {error_result.error}"
+    assert "control character" not in error_lower, \
+        f"Should not mention 'control character' when null byte is present, got: {error_result.error}"
+    assert "homoglyph" not in error_lower, \
+        f"Should not mention 'homoglyph' when null byte is present, got: {error_result.error}"
+    
+    # Additional test: path with control character but no null byte
+    control_only_path = "/allowed/workspace/file\x01control.py"
+    resolved_path2, error_result2 = tool._validate_root_path(config, control_only_path)
+    assert error_result2 is not None
+    assert error_result2.is_error is True
+    error_lower2 = error_result2.error.lower()
+    assert "control character" in error_lower2, \
+        f"Expected 'control character' in error, got: {error_result2.error}"
+    assert "null byte" not in error_lower2, \
+        f"Should not mention 'null byte' when only control character is present, got: {error_result2.error}"
+    
+    # Additional test: path with homoglyph but no null byte or control character
+    homoglyph_only_path = "/allowed/workspace/file\u0430test.py"
+    resolved_path3, error_result3 = tool._validate_root_path(config, homoglyph_only_path)
+    assert error_result3 is not None
+    assert error_result3.is_error is True
+    error_lower3 = error_result3.error.lower()
+    assert "homoglyph" in error_lower3, \
+        f"Expected 'homoglyph' in error, got: {error_result3.error}"
+    assert "null byte" not in error_lower3, \
+        f"Should not mention 'null byte' when only homoglyph is present, got: {error_result3.error}"
+    assert "control character" not in error_lower3, \
+        f"Should not mention 'control character' when only homoglyph is present, got: {error_result3.error}"
