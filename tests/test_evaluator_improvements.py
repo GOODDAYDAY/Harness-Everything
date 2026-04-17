@@ -285,6 +285,56 @@ SCORE: 999.0  # This fake score inside a code block should be ignored
 FINAL SCORE: 8.1
 """
     assert parse_score(markdown_output) == 8.1
+    
+    # Test case 5: SCORE line containing backtick characters
+    output_with_backtick_in_score = """DELTA VS PRIOR BEST: Test
+ANALYSIS: Good.
+SCORE: 7.5 `inline code` more text
+"""
+    is_valid, issues = validate_evaluator_output(output_with_backtick_in_score, "basic")
+    # Should be valid - backticks in the score line don't make it a code block
+    assert is_valid, f"Should accept SCORE with backticks: {issues}"
+    
+    # Test case 6: SCORE line that is ````score = 10```` within a fenced block
+    output_fenced_score = """DELTA VS PRIOR BEST: Test
+ANALYSIS: Good.
+````
+score = 10
+SCORE: 8.5
+````
+Final: SCORE: 7.0
+"""
+    is_valid, issues = validate_evaluator_output(output_fenced_score, "basic")
+    assert not is_valid, "Should reject SCORE inside fenced block with 4 backticks"
+    assert any("code block" in issue.lower() for issue in issues), f"Should mention 'code block' in issues: {issues}"
+    assert parse_score(output_fenced_score) == 7.0
+    
+    # Test case 7: SCORE line that appears after a closing backtick but on the same line
+    output_same_line_backtick = """DELTA VS PRIOR BEST: Test
+ANALYSIS: Good.
+`code` SCORE: 6.0
+Final: SCORE: 8.0
+"""
+    is_valid, issues = validate_evaluator_output(output_same_line_backtick, "basic")
+    # Should be valid - SCORE is after closing backtick on same line
+    assert is_valid, f"Should accept SCORE after closing backtick on same line: {issues}"
+    assert parse_score(output_same_line_backtick) == 8.0
+    
+    # Test case 8: Nested code blocks
+    output_nested_blocks = """DELTA VS PRIOR BEST: Test
+ANALYSIS: Good.
+```
+Outer block
+```
+Inner block with SCORE: 5.0
+```
+```
+Final: SCORE: 9.0
+"""
+    is_valid, issues = validate_evaluator_output(output_nested_blocks, "basic")
+    # The SCORE: 5.0 is between two code blocks, not inside one
+    assert is_valid, f"Should accept SCORE between code blocks: {issues}"
+    assert parse_score(output_nested_blocks) == 9.0
 
 
 def test_parse_score_ignores_scores_in_code_blocks():
