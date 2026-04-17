@@ -199,3 +199,8 @@ class HealthMonitor:
         }
         
         return summary
+    
+    @property
+    def metrics_dict(self) -> Dict[str, Any]:
+        """Get health metrics as a dictionary for inclusion in pipeline summary."""
+        return self.get_health_summary()

@@ -959,6 +959,7 @@ class PipelineLoop:
             "shutdown_reason": self.shutdown_reason,
             "meta_review_count": self.meta_review_count,
             "auto_push_count": self.auto_push_count,
+            "health_metrics": self.health_monitor.metrics_dict if self.health_monitor else None,
         }
         payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
         try:
