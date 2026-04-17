@@ -18,6 +18,7 @@
 | 7 | Tool auto-discovery | New `discovery.py` (dynamic tool loading); `ToolRegistry.discover()` | +350 |
 | 8 | Architecture fix | HttpRequestTool → OPTIONAL_TOOLS (reduce default schema cost) | −13 |
 | 9 | Git search | New `git_search` tool (log/blame/grep/show/log_file modes) | +446 |
+| 14 | Security validation test | Added test for consolidated _validate_root_path method verifying correct security validation order (null bytes → control chars → homoglyphs) | +60 |
 | 10 | TODO scanner | New `todo_scan` tool (6 tag types, context lines, sort modes) | +300 |
 | R3-fix | MetricsCollector fix | Fixed dataclass field ordering (mutable default after non-default) | +2 |
 | R3-trace | Registry hardening | Manifest generator, import-time assertions (later removed in Round 1) | +79 |
@@ -152,3 +153,20 @@
 - **Robustness**: Added `_filesystem_allows_tab()` helper to detect filesystem behavior at runtime, making control character tests platform-independent.
 - **CI Safety**: Modified `test_control_characters_in_path` to skip TAB assertion on filesystems that allow TAB characters (e.g., NTFS), preventing CI failures while logging security warnings.
 - **Traceability**: Added TODO comment to audit other file tools (WriteFileTool, FileEditTool) for consistent control character validation across the codebase.
+
+### Code Analysis Tool Fix and Test Coverage
+- **Fixed**: Verified that `code_analysis.py` already correctly uses `dotted_name` function (not `_dotted_name`) for inheritance analysis, addressing a potential NameError bug.
+- **Test Coverage**: Added comprehensive test suite `tests/test_code_analysis.py` with 5 new tests covering tool initialization, inheritance analysis, multiple inheritance, dotted name inheritance, and output structure validation.
+- **Verification**: Tests specifically verify that `dotted_name` function is correctly called during inheritance analysis, ensuring the critical path for class inheritance analysis works correctly.
+
+### Dead Code Removal and Test Validation
+- **Cleaned**: Removed duplicate `import os` statement from `harness/tools/base.py::_check_path` method, eliminating verified dead code that violated DRY principles.
+- **Test Added**: Created `test_check_path_does_not_require_redundant_import` test in `tests/test_base.py` to verify the security validation logic works without raising `NameError` or `ModuleNotFoundError`.
+- **Prevention**: Added comment `# Import for path operations; do not re-import in _check_path.` to the module-level import to prevent future re-introduction of duplicate imports.
+
+### Consolidated Security Validation Test Enhancement
+- **Direct Testing**: Added `test_validate_root_path_complete_and_secure` test method in `tests/test_base.py` that directly validates the `_validate_root_path` method with comprehensive security checks.
+- **Falsifiable Criterion**: Test specifically verifies that null byte detection occurs before homoglyph detection, satisfying the falsifiable criterion with concrete assertions.
+- **Coverage**: Test covers four scenarios: null byte paths, clean allowed paths, paths outside allowed directories, and homoglyph-only paths.
+- **Verification**: All existing tests continue to pass, confirming no regression in security validation functionality.
+

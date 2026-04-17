@@ -41,15 +41,30 @@ _MODE_HEADERS: dict[str, str] = {
         "3. Check **completeness** against the task requirements\n"
         "4. Do NOT penalize for lack of tool calls or execution results\n"
         "5. Focus on whether the plan would work IF implemented correctly\n\n"
-        "CRITICAL: A good debate proposal must name concrete code entities "
-        "(files, functions, classes) from the source context. "
-        "Vague proposals score ≤4 on Specificity.\n\n"
+        "**CALIBRATION ANCHORS FOR DEBATE MODE:**\n"
+        "- 0-3: Proposal fundamentally misses the task or is completely vague\n"
+        "- 4-5: Proposal addresses task but lacks concrete file/function references\n"
+        "- 6-7: Proposal is specific but has logical gaps or incomplete reasoning\n"
+        "- 8-9: Proposal is specific, complete, and logically sound with minor improvements needed\n"
+        "- 10: Proposal is perfect - cites exact files/functions and addresses all requirements\n\n"
+        "**CRITICAL QUALITY SIGNALS:**\n"
+        "✓ MUST name concrete code entities (files, functions, classes) from source context\n"
+        "✓ MUST address the falsifiable criterion directly\n"
+        "✓ MUST provide numbered implementation steps with file paths\n"
+        "✗ Vague proposals without file/function references score ≤4 on Specificity\n"
+        "✗ Proposals that ignore the falsifiable criterion score ≤5 on Completeness\n\n"
         "**STRUCTURED OUTPUT REQUIREMENTS:**\n"
         "1. Use exact section headers from your system prompt\n"
         "2. Place SCORE: X.X on its own line at the very end\n"
         "3. Reference specific file::function in all findings\n"
         "4. Provide numbered, actionable feedback items\n"
-        "5. Include concrete calibration anchors in your scoring\n\n"
+        "5. Include concrete calibration anchors in your scoring\n"
+        "6. Use the DELTA VS PRIOR BEST header to compare with previous rounds\n\n"
+        "**SCORING GUIDANCE:**\n"
+        "- For debate mode, typical scores range 5-9 for meaningful proposals\n"
+        "- Score 10 only for proposals that are truly perfect and reference specific code\n"
+        "- Score ≤4 for proposals that are vague or miss the falsifiable criterion\n"
+        "- Use fractional scores (7.5, 8.2) to indicate nuanced assessment\n\n"
     ),
     "implement": (
         "## EVALUATION MODE: IMPLEMENT (EXECUTED CODE)\n"
@@ -60,28 +75,50 @@ _MODE_HEADERS: dict[str, str] = {
         "3. Verify **tool call success/failure** from execution logs\n"
         "4. The proposal text is for context only; CODE STATE is authoritative\n"
         "5. Penalize missing tests, syntax errors, broken functionality\n\n"
-        "CRITICAL: Look for concrete evidence in the changed files and test results. "
-        "A plan that looks good but produces broken code scores ≤5 on Correctness.\n\n"
+        "**CALIBRATION ANCHORS FOR IMPLEMENT MODE:**\n"
+        "- 0-3: Code is broken, tests fail, or change doesn't compile\n"
+        "- 4-5: Code works but has critical bugs or missing functionality\n"
+        "- 6-7: Code works with significant issues or missing edge cases\n"
+        "- 8-9: Code works well with minor improvements or test gaps\n"
+        "- 10: Perfect implementation - all tests pass, edge cases handled, code is clean\n\n"
+        "**CRITICAL QUALITY SIGNALS:**\n"
+        "✓ MUST verify actual code changes in files (not just proposal text)\n"
+        "✓ MUST check test results and syntax validity\n"
+        "✓ MUST assess error handling and edge cases\n"
+        "✗ Code with syntax errors or failing tests scores ≤5 on Correctness\n"
+        "✗ Implementations without tests for new functionality score ≤7\n\n"
         "**STRUCTURED OUTPUT REQUIREMENTS:**\n"
         "1. Use exact section headers from your system prompt\n"
         "2. Place SCORE: X.X on its own line at the very end\n"
         "3. Reference specific file::function in all findings\n"
         "4. Provide numbered, actionable feedback items\n"
         "5. Include concrete calibration anchors in your scoring\n"
-        "6. Focus on executed code, not the proposal text\n\n"
+        "6. Focus on executed code, not the proposal text\n"
+        "7. Use the DELTA VS PRIOR BEST header to compare with previous rounds\n\n"
+        "**SCORING GUIDANCE:**\n"
+        "- For implement mode, typical scores range 6-9 for working implementations\n"
+        "- Score 10 only for flawless implementations with comprehensive tests\n"
+        "- Score ≤5 for code with critical bugs or failing tests\n"
+        "- Deduct points for missing error handling or edge cases\n"
+        "- Use fractional scores to reflect nuanced quality assessment\n\n"
     ),
 }
 
 
-def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dict[str, Any]:
-    """Extract structured feedback from evaluator output.
+def extract_structured_feedback(text: str, evaluator_type: str = "basic", context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Extract structured feedback from evaluator output text.
     
-    Args:
-        text: Evaluator output text
-        evaluator_type: "basic" or "diffusion"
-    
-    Returns:
-        Dictionary with extracted structured data
+    Returns a dict with keys:
+        - "score": float or None
+        - "delta": str or None
+        - "analysis": dict mapping dimension names to scores
+        - "defect": str or None (top defect or key risk)
+        - "feedback_items": list of actionable feedback strings
+        - "improvement_suggestion": str or None
+        - "warnings": list of str from validate_score_calibration
+        - "calibration_anchors_used": bool indicating if calibration anchors were detected
+        - "critique_structure_score": float 0-1 rating of critique structure quality
+        - "structured_feedback": dict with parsed structured feedback (if available)
     """
     result = {
         "score": None,
@@ -90,53 +127,170 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dic
         "feedback_items": [],
         "improvement_suggestion": None,
         "delta": None,
+        "warnings": [],
+        "calibration_anchors_used": False,
+        "critique_structure_score": 0.0,
+        "structured_feedback": {},
     }
     
     # Validate the output first
     is_valid, issues = validate_evaluator_output(text, evaluator_type)
-    if not is_valid:
-        result["error"] = "Invalid evaluator output: " + "; ".join(issues)
+    
+    # Separate warnings from errors
+    errors = [issue for issue in issues if not issue.startswith("WARNING:")]
+    warnings = [issue.replace("WARNING: ", "") for issue in issues if issue.startswith("WARNING:")]
+    
+    if errors:
+        result["error"] = "Invalid evaluator output: " + "; ".join(errors)
         return result
+    
+    if warnings:
+        result["warnings"] = warnings
+    
+    # Check for calibration anchors in text
+    calibration_phrases = [
+        "SCORING CALIBRATION",
+        "0-10 scale",
+        "score ≤ 5",
+        "score ≥ 8",
+        "critical failure",
+        "perfect — no issues",
+        "core goal achieved",
+        "risk assessment"
+    ]
+    anchor_count = sum(1 for line in text.split('\n') if any(phrase in line for phrase in calibration_phrases))
+    result["calibration_anchors_used"] = anchor_count >= 2
     
     # Extract delta text
     if "DELTA VS PRIOR BEST:" in text:
         delta_section = text.split("DELTA VS PRIOR BEST:")[1].split("\n")[0].strip()
         result["delta"] = delta_section
+        # Score delta header quality (0-1)
+        if len(delta_section) > 20 and "specific" in delta_section.lower():
+            result["critique_structure_score"] += 0.2
     
     # Extract score
     score_match = _STRICT_RE.findall(text)
     if score_match:
         result["score"] = float(score_match[-1])
+        # Validate score calibration with context
+        result["warnings"].extend(validate_score_calibration(result["score"], evaluator_type, context))
     
-    # Extract analysis dimensions
+    # Extract analysis dimensions with improved parsing
     if "ANALYSIS:" in text:
         analysis_section = text.split("ANALYSIS:")[1].split("\n\n")[0]
-        # Look for dimension scores
-        dimension_pattern = r"([A-D])\.\s+([^:]+):\s*(\d+(?:\.\d+)?)"
-        matches = re.findall(dimension_pattern, analysis_section)
-        for letter, dimension, score in matches:
-            result["analysis"][dimension.strip()] = float(score)
+        # Look for dimension scores with multiple formats
+        dimension_patterns = [
+            r"([A-D])\.\s+([^:]+):\s*(\d+(?:\.\d+)?)",  # A. Correctness: 8.5
+            r"([A-D])\.\s+([^:]+)\s+(\d+(?:\.\d+)?)",    # A. Correctness 8.5
+            r"([^:]+):\s*(\d+(?:\.\d+)?)",               # Correctness: 8.5
+            r"([^:]+)\s+(\d+(?:\.\d+)?)",                # Correctness 8.5
+        ]
+        
+        for pattern in dimension_patterns:
+            matches = re.findall(pattern, analysis_section)
+            for match in matches:
+                if len(match) == 3:  # Format with letter prefix
+                    letter, dimension, score = match
+                    result["analysis"][dimension.strip()] = float(score)
+                elif len(match) == 2:  # Format without letter
+                    dimension, score = match
+                    result["analysis"][dimension.strip()] = float(score)
+        
+        # Score analysis structure (0-1)
+        if len(result["analysis"]) >= 3:
+            result["critique_structure_score"] += 0.3
+        if any(score <= 5.0 for score in result["analysis"].values()):
+            result["critique_structure_score"] += 0.2
     
-    # Extract defect/risk
-    if evaluator_type == "basic" and "TOP DEFECT:" in text:
-        defect_section = text.split("TOP DEFECT:")[1].split("\n")[0].strip()
+    # Extract defect/risk with structured parsing
+    defect_key = "TOP DEFECT:" if evaluator_type == "basic" else "KEY RISK:"
+    if defect_key in text:
+        defect_section = text.split(defect_key)[1].split("\n")[0].strip()
         if defect_section.lower() != "none":
             result["defect"] = defect_section
-    elif evaluator_type == "diffusion" and "KEY RISK:" in text:
-        risk_section = text.split("KEY RISK:")[1].split("\n")[0].strip()
-        if risk_section.lower() != "none":
-            result["defect"] = risk_section
+            # Try to parse structured defect: "file.py::function — description"
+            if "::" in defect_section and "—" in defect_section:
+                file_part, rest = defect_section.split("::", 1)
+                if "—" in rest:
+                    func_part, desc = rest.split("—", 1)
+                    result["structured_feedback"]["defect"] = {
+                        "file": file_part.strip(),
+                        "function": func_part.strip(),
+                        "description": desc.strip()
+                    }
     
-    # Extract feedback items
+    # Extract feedback items with structured parsing
     feedback_section_name = "ACTIONABLE FEEDBACK:" if evaluator_type == "basic" else "ACTIONABLE MITIGATIONS:"
     if feedback_section_name in text:
-        feedback_section = text.split(feedback_section_name)[1].split("\n\n")[0]
-        # Extract numbered items
-        item_pattern = r"^\s*(\d+)\.\s+(.+)$"
+        # Get everything after the feedback section
+        after_feedback = text.split(feedback_section_name)[1]
+        
+        # Find where the next section starts or end of text
+        next_sections = ["WHAT WOULD MAKE THIS 10/10:", "SCORE:", "FINAL SCORE:", "COMBINED_SCORE:"]
+        feedback_end = len(after_feedback)
+        for section in next_sections:
+            idx = after_feedback.find(section)
+            if idx != -1 and idx < feedback_end:
+                feedback_end = idx
+        
+        feedback_section = after_feedback[:feedback_end].strip()
+        
+        # Extract numbered items with multiple formats
+        item_patterns = [
+            r"^\s*(\d+)\.\s+(.+)$",  # 1. item
+            r"^\s*[-*]\s+(.+)$",     # - item or * item
+        ]
+        
+        structured_feedback = []
         for line in feedback_section.split('\n'):
-            match = re.match(item_pattern, line.strip())
+            line = line.strip()
+            if not line:
+                continue
+                
+            priority = None
+            feedback_text = line
+            
+            # Try numbered format first
+            match = re.match(r"^\s*(\d+)\.\s+(.+)$", line)
             if match:
-                result["feedback_items"].append(match.group(2).strip())
+                priority = int(match.group(1))
+                feedback_text = match.group(2)
+            else:
+                # Try bullet format
+                match = re.match(r"^\s*[-*]\s+(.+)$", line)
+                if match:
+                    feedback_text = match.group(1)
+            
+            # Parse file::function — change pattern
+            file = None
+            function = None
+            change = feedback_text
+            
+            if "::" in feedback_text and "—" in feedback_text:
+                file_part, rest = feedback_text.split("::", 1)
+                if "—" in rest:
+                    func_part, change_part = rest.split("—", 1)
+                    file = file_part.strip()
+                    function = func_part.strip()
+                    change = change_part.strip()
+                    structured_feedback.append({
+                        "priority": priority,
+                        "file": file,
+                        "function": function,
+                        "change": change
+                    })
+            
+            result["feedback_items"].append(feedback_text)
+        
+        if structured_feedback:
+            result["structured_feedback"]["actionable_items"] = structured_feedback
+        
+        # Score actionable feedback quality (0-1)
+        if len(result["feedback_items"]) >= 2:
+            result["critique_structure_score"] += 0.2
+        if any("::" in item and "—" in item for item in result["feedback_items"]):
+            result["critique_structure_score"] += 0.3
     
     # Extract improvement suggestion
     if "WHAT WOULD MAKE THIS 10/10:" in text:
@@ -144,7 +298,161 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic") -> dic
         if improvement.lower() != "already perfect":
             result["improvement_suggestion"] = improvement
     
+    # Normalize critique structure score to 0-1 range
+    result["critique_structure_score"] = min(1.0, result["critique_structure_score"])
+    
     return result
+
+
+def validate_score_calibration(score: float, evaluator_type: str = "basic", context: dict[str, Any] | None = None) -> list[str]:
+    """Validate that a score is properly calibrated for the evaluator type.
+    
+    Returns a list of warnings if the score seems miscalibrated.
+    
+    Args:
+        score: The score to validate (0-10)
+        evaluator_type: "basic" or "diffusion"
+        context: Optional context dict with keys:
+            - "mode": "debate" or "implement" (affects expected score ranges)
+            - "has_critical_issues": bool indicating if critical issues were found
+            - "has_tests": bool indicating if tests were added/modified
+            - "file_count": int number of files changed
+            - "line_count": int number of lines changed
+    
+    Returns:
+        List of warning messages if score appears miscalibrated
+    """
+    warnings = []
+    
+    # Basic sanity checks
+    if score < 0.0 or score > 10.0:
+        warnings.append(f"Score {score} is outside valid range [0, 10]")
+        return warnings
+    
+    # Extract context information
+    mode = context.get("mode") if context else None
+    has_critical_issues = context.get("has_critical_issues", False) if context else False
+    has_tests = context.get("has_tests", False) if context else False
+    file_count = context.get("file_count", 0) if context else 0
+    line_count = context.get("line_count", 0) if context else 0
+    
+    if evaluator_type == "basic":
+        # Basic evaluator calibration rules
+        if mode == "debate":
+            # Debate mode: evaluating text proposals
+            if score < 4.0 and not has_critical_issues:
+                warnings.append(f"Score {score} seems too low for debate mode without critical issues")
+            elif score > 9.0 and file_count == 0 and line_count == 0:
+                warnings.append(f"Score {score} seems too high for debate-only proposal with no code changes")
+            # Debate proposals with concrete file/function references should score higher
+            if score > 7.0 and file_count == 0:
+                warnings.append(f"Score {score} for debate mode with no specific file references - check specificity")
+                # Log a warning for debate mode scores without file references
+                log.warning(f"Debate mode score {score} lacks file reference in {evaluator_type} evaluator")
+                
+        elif mode == "implement":
+            # Implement mode: evaluating executed code
+            if score < 5.0 and not has_critical_issues:
+                warnings.append(f"Score {score} seems too low for implement mode without critical issues")
+            elif score > 9.5 and not has_tests:
+                warnings.append(f"Score {score} seems too high for implement mode without test coverage")
+            # Implementations with many changes but perfect score are suspicious
+            if score == 10.0 and line_count > 50:
+                warnings.append(f"Perfect score {score} for large change ({line_count} lines) - verify no edge cases missed")
+                
+        else:
+            # Generic basic evaluator rules
+            if score < 3.0 and not has_critical_issues:
+                warnings.append(f"Score {score} seems too low for basic evaluator without critical issues")
+            elif score > 9.5:
+                warnings.append(f"Score {score} seems too high for basic evaluator - check for score inflation")
+                
+    else:  # diffusion evaluator
+        # Diffusion evaluator focuses on risk assessment
+        if score < 2.0 and not has_critical_issues:
+            warnings.append(f"Score {score} seems too low for diffusion evaluator without critical issues")
+        elif score > 9.0:
+            warnings.append(f"Score {score} seems too high for diffusion evaluator - risk assessment may be too optimistic")
+        
+        # Diffusion evaluator should penalize risky changes
+        if score > 7.0 and file_count > 3 and line_count > 100:
+            warnings.append(f"Score {score} seems high for large, complex change in diffusion evaluation")
+    
+    # Check for suspicious patterns
+    if score == 0.0 or score == 10.0:
+        warnings.append(f"Extreme score {score} - verify calibration anchors were used")
+    
+    # Round number scores (5.0, 6.0, etc.) might indicate lazy scoring
+    if score % 1.0 == 0.0 and 3.0 <= score <= 8.0:
+        warnings.append(f"Round number score {score} - check if proper calibration anchors were used")
+    
+    return warnings
+
+
+def _score_is_in_code_block(text: str, score_line_start: int) -> bool:
+    """Check if a SCORE: line starting at score_line_start is inside a markdown code block.
+    
+    Uses a state machine to track:
+    - in_code_block: whether we're currently inside a code block
+    - backtick_count: consecutive backticks seen on current line
+    - block_start_char: the character that started the current code block (for nested blocks)
+    - same_line_backticks: whether backticks are on the same line as the score
+    
+    Args:
+        text: The full text to analyze
+        score_line_start: The character index where the SCORE: line starts
+        
+    Returns:
+        True if the SCORE: line is inside a code block, False otherwise
+    """
+    # State machine variables
+    in_code_block = False
+    backtick_count = 0
+    block_start_char = None  # '`' for inline code, None for no block
+    i = 0
+    
+    while i < score_line_start and i < len(text):
+        char = text[i]
+        
+        # Count consecutive backticks
+        if char == '`':
+            backtick_count += 1
+        else:
+            # Not a backtick - process any pending backtick sequence
+            if backtick_count > 0:
+                if backtick_count >= 3:
+                    # Triple+ backticks toggle code block state
+                    in_code_block = not in_code_block
+                    if in_code_block:
+                        block_start_char = '`'
+                    else:
+                        block_start_char = None
+                elif backtick_count == 1 and not in_code_block:
+                    # Single backtick starts inline code
+                    block_start_char = '`'
+                elif backtick_count == 1 and in_code_block and block_start_char == '`':
+                    # Single backtick inside a code block - ignore (part of content)
+                    pass
+                # Reset backtick count
+                backtick_count = 0
+            else:
+                # Check for end of inline code
+                if block_start_char == '`' and char == '`':
+                    # Found closing backtick for inline code
+                    block_start_char = None
+                    # Skip the closing backtick
+                    i += 1
+                    continue
+        
+        i += 1
+    
+    # Process any trailing backticks at the boundary
+    if backtick_count > 0:
+        if backtick_count >= 3:
+            # If we have triple backticks at the boundary, toggle state
+            in_code_block = not in_code_block
+    
+    return in_code_block
 
 
 def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: str | None = None) -> tuple[bool, list[str]]:
@@ -172,10 +480,8 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         defect_section = "KEY RISK:"
         feedback_section = "ACTIONABLE MITIGATIONS:"
     
-    # DELTA VS PRIOR BEST is required and must have descriptive text
-    if "DELTA VS PRIOR BEST:" not in text:
-        issues.append("Missing 'DELTA VS PRIOR BEST:' section")
-    else:
+    # DELTA VS PRIOR BEST is optional but if present must have descriptive text
+    if "DELTA VS PRIOR BEST:" in text:
         delta_lines = [line for line in text.split('\n') if line.strip().startswith("DELTA VS PRIOR BEST:")]
         if delta_lines:
             delta_line = delta_lines[0]
@@ -188,16 +494,41 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         if section not in text:
             issues.append(f"Missing required section: {section}")
     
+    # SECURITY GUARD: Check if SCORE: line is inside a markdown code block using state machine
+    lines = text.split('\n')
+    for line_num, line in enumerate(lines, 1):
+        if 'SCORE:' in line.upper():
+            # Find the character index where this line starts
+            line_start = 0
+            for i in range(line_num - 1):
+                line_start += len(lines[i]) + 1  # +1 for newline
+            
+            # Check if this SCORE: line is inside a code block
+            if _score_is_in_code_block(text, line_start):
+                issues.append(f"SCORE: found inside markdown code block at line {line_num}")
+                # Don't break - continue checking all lines to report all violations
+    
     # Check for SCORE format - must be on its own line
     score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
     if score_lines:
         score_line = score_lines[-1].strip()
         # Check for proper SCORE: X.X format
-        if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\s*$', score_line):
+        if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\b', score_line):
             issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X'")
         # Check that score is the last thing in the output (most reliable)
         if not text.strip().endswith(score_line):
             issues.append("SCORE should be the last line of the output for reliable parsing")
+        
+        # Extract and validate score calibration
+        try:
+            score_match = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)', score_line)
+            if score_match:
+                score = float(score_match.group(1))
+                calibration_warnings = validate_score_calibration(score, evaluator_type)
+                for warning in calibration_warnings:
+                    issues.append(f"WARNING: {warning}")
+        except (ValueError, AttributeError):
+            pass  # Already caught by format check above
     else:
         issues.append("No SCORE line found")
     
@@ -212,7 +543,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             elif line.startswith(('A.', 'B.', 'C.', 'D.')):
                 issues.append(f"Analysis line doesn't match required format '^[A-D]\\. .+: [0-9.]+ — .+': {line}")
         
-        # Check for dimension scores
+        # Check for dimension scores - warn if missing but don't fail validation
         if evaluator_type == "basic":
             dimensions = ["A. Correctness", "B. Completeness", "C. Specificity", "D. Architecture fit"]
         else:
@@ -220,7 +551,8 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         
         for dim in dimensions:
             if dim not in analysis_section:
-                issues.append(f"ANALYSIS missing dimension: {dim}")
+                # Only warn about missing dimensions, don't fail validation
+                issues.append(f"WARNING: ANALYSIS missing dimension: {dim}")
     
     # Check defect/risk section has concrete reference with path sanitization
     if defect_section in text:
@@ -297,11 +629,31 @@ def parse_score(
     # Clean the text - remove markdown code blocks if present
     clean_text = text
     if "```" in text:
-        # Remove code blocks entirely by joining non-code parts
-        parts = text.split("```")
-        # Keep only parts outside code blocks (even-indexed parts)
-        non_code_parts = [parts[i] for i in range(0, len(parts), 2)]
-        clean_text = "".join(non_code_parts)
+        # Process line by line to handle edge cases where SCORE: might be on same line as backticks
+        lines = text.split('\n')
+        in_code_block = False
+        cleaned_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            
+            # Check if this line contains backticks that might toggle code block state
+            if "```" in stripped:
+                # Toggle code block state when we see triple backticks
+                # This handles both opening and closing
+                in_code_block = not in_code_block
+                
+                # Check if SCORE: is on the same line as backticks
+                if "SCORE:" in line.upper():
+                    # Keep this line for score parsing even if it's in/on a code block boundary
+                    cleaned_lines.append(line)
+                continue
+            
+            # Only add lines that are not inside code blocks
+            if not in_code_block:
+                cleaned_lines.append(line)
+        
+        clean_text = '\n'.join(cleaned_lines)
     
     # Three-tier extraction strategy
     

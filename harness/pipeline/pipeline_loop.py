@@ -101,6 +101,7 @@ class PipelineLoop:
         self.start_time: float = time.time()
         self.score_history: list[float] = []  # Track scores for trend detection
         self.score_trend_warnings: list[dict] = []  # Track score trend warnings
+        self.phase_score_history: list[dict] = []  # Track phase-level scores with metadata
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -684,6 +685,17 @@ class PipelineLoop:
                 if resumed_score is not None:
                     phase_scores.append(resumed_score)
                     log.info("    ↳ recovered score=%.1f", resumed_score)
+                    # Track resumed phase score history for traceability
+                    self.phase_score_history.append({
+                        "outer_round": outer + 1,
+                        "phase": phase.label,
+                        "phase_name": phase.name,
+                        "score": round(resumed_score, 2),
+                        "inner_results": 0,  # Unknown for resumed phases
+                        "elapsed_s": 0.0,  # Not measured for resumed phases
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "status": "resumed",
+                    })
                 # Count resumed phases for total phases run tracking
                 self.total_phases_run += 1
                 continue
@@ -714,6 +726,16 @@ class PipelineLoop:
                 # Record learnings for future rounds
                 self.memory.record(outer, phase_result)
                 self._metrics_collector.record_phase(phase.name, phase_result)
+                # Track phase score history for traceability
+                self.phase_score_history.append({
+                    "outer_round": outer + 1,
+                    "phase": phase.label,
+                    "phase_name": phase.name,
+                    "score": round(phase_result.best_score, 2),
+                    "inner_results": len(phase_result.inner_results),
+                    "elapsed_s": round(time.monotonic() - phase_start, 2),
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                })
                 # Increment total phases run counter for traceability
                 self.total_phases_run += 1
                 _phase_elapsed = time.monotonic() - phase_start
@@ -866,6 +888,8 @@ class PipelineLoop:
             "total_rounds": rounds_completed,
             "best_score": round(best_score, 2),
             "score_history": score_history,
+            "phase_score_history": self.phase_score_history,
+            "score_trend_warnings": self.score_trend_warnings,
             "tool_error_rate": tool_error_rate,
             "total_tool_calls": total_tool_calls,
             "elapsed_total_s": round(total_elapsed, 2),

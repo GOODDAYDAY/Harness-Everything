@@ -25,7 +25,7 @@ class ListDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
         p = Path(resolved)
@@ -58,7 +58,7 @@ class CreateDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
         Path(resolved).mkdir(parents=True, exist_ok=True)
@@ -91,7 +91,7 @@ class TreeTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, max_depth: int = 3
     ) -> ToolResult:
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
         root = Path(resolved)

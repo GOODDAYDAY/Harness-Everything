@@ -189,8 +189,11 @@ class FeatureSearchTool(Tool):
                 continue
 
             # Parse AST for symbols and config
-            tree = parse_module(fpath)
+            tree, parse_error = parse_module(fpath)
             if tree is None:
+                # Log parse error for debugging but continue scanning other files
+                if parse_error:
+                    log.debug("feature_search: %s", parse_error)
                 continue
 
             lines = source.splitlines()

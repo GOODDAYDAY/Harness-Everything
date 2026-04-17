@@ -54,6 +54,10 @@ class HarnessConfig:
     workspace: str = "."
     allowed_paths: list[str] = field(default_factory=list)
     # If empty, defaults to [workspace]. Paths outside these are rejected.
+    homoglyph_blocklist: dict[str, str] = field(default_factory=dict)
+    # Unicode homoglyph characters that are disallowed in paths for security.
+    # Maps character to description. If empty, uses a minimal high-risk set.
+    # Example: {'\u2044': 'Fraction slash (looks like ASCII /)'}
 
     # --- tools ---
     allowed_tools: list[str] = field(default_factory=list)
@@ -94,6 +98,24 @@ class HarnessConfig:
         if not self.allowed_paths:
             self.allowed_paths = [self.workspace]
         self.allowed_paths = [str(Path(p).resolve()) for p in self.allowed_paths]
+        
+        # --- initialize homoglyph blocklist if empty ---
+        if not self.homoglyph_blocklist:
+            # Default minimal high-risk set targeting path delimiter spoofs
+            self.homoglyph_blocklist = {
+                '\u0430': 'Cyrillic small a (looks like ASCII a)',
+                '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
+                '\u0500': 'Cyrillic capital komi s (looks like ASCII O)',
+                '\u01C3': 'Latin letter retroflex click (looks like ASCII !)',
+                '\u0391': 'Greek capital alpha (looks like ASCII A)',
+                '\u03B1': 'Greek small alpha (looks like ASCII a)',
+                '\u041E': 'Cyrillic capital O (looks like ASCII O)',
+                '\u043E': 'Cyrillic small o (looks like ASCII o)',
+                '\u0555': 'Armenian comma (looks like ASCII comma)',
+                '\u058A': 'Armenian hyphen (looks like ASCII hyphen)',
+                '\u2044': 'Fraction slash (looks like ASCII /)',
+                '\uFF0F': 'Full-width solidus (looks like ASCII /)',
+            }
 
         # --- validate numeric fields ---
         if self.max_tokens < 1:
@@ -252,8 +274,11 @@ allowed_tools=all log_level=INFO
         to a target outside it.
         """
         import os
+        from harness.core.security import validate_path_security
+        
         path_str = str(path)
-        if "\x00" in path_str:
+        # Use comprehensive security validation
+        if validate_path_security(path_str, self):
             return False
         resolved = os.path.realpath(path_str)
         return any(

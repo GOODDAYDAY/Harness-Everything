@@ -53,7 +53,7 @@ class ReadFileTool(Tool):
                 is_error=True,
             )
 
-        resolved, err = self._resolve_and_check(config, path)
+        resolved, err = self._validate_root_path(config, path)
         if err:
             return err
 

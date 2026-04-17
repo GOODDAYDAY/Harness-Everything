@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import ast
-import json
+import re
+from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -12,6 +13,7 @@ from harness.tools._ast_utils import (
     function_signature,
     call_name,
     extract_callees,
+    safe_parse,
 )
 from harness.tools.base import Tool, ToolResult
 
@@ -30,7 +32,7 @@ class CrossReferenceTool(Tool):
         "callers list, callees list, and test files. Uses AST parsing — no "
         "regex, no false positives from comments."
     )
-    requires_path_check = False  # manual allowed_paths enforcement in execute()
+    requires_path_check = True  # use base class security validation
     tags = frozenset({"analysis"})
 
     def input_schema(self) -> dict[str, Any]:
@@ -58,6 +60,8 @@ class CrossReferenceTool(Tool):
             "required": ["symbol"],
         }
 
+
+
     async def execute(
         self,
         config: HarnessConfig,
@@ -65,9 +69,10 @@ class CrossReferenceTool(Tool):
         root: str = "",
         include_tests: bool = True,
     ) -> ToolResult:
-        search_root, allowed, err = self._check_dir_root(config, root)
-        if err:
-            return err
+        # Use _check_dir_root to validate the path and get allowed paths
+        search_root, allowed, err_result = self._check_dir_root(config, root)
+        if err_result:
+            return err_result
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
@@ -79,12 +84,17 @@ class CrossReferenceTool(Tool):
         callers: list[dict[str, Any]] = []
         callees: list[str] = []
         test_files: list[str] = []
+        
+        # Compile regex pattern once for efficiency
+        test_pattern = re.compile(rf'\b{re.escape(func_name)}\b') if include_tests else None
 
         for fpath in py_files:
             try:
                 source = fpath.read_text(encoding="utf-8", errors="replace")
-                tree = ast.parse(source, filename=str(fpath))
-            except SyntaxError:
+                tree = safe_parse(source, filename=str(fpath))
+                if tree is None:
+                    continue
+            except Exception:
                 continue
 
             try:
@@ -106,7 +116,12 @@ class CrossReferenceTool(Tool):
                             "line": node.lineno,
                             "signature": function_signature(node, lines),
                         }
-                        callees = extract_callees(node)
+                        # Append new callees, respecting the global limit
+                        new_callees = extract_callees(node)
+                        for callee in new_callees:
+                            if len(callees) >= 30:
+                                break
+                            callees.append(callee)
                 elif class_name is None and isinstance(node, ast.ClassDef):
                     if node.name == func_name and definition is None:
                         definition = {
@@ -118,20 +133,40 @@ class CrossReferenceTool(Tool):
                 # Caller detection
                 if isinstance(node, ast.Call) and len(callers) < 50:
                     cname = call_name(node)
-                    if cname and func_name in cname:
-                        lineno = getattr(node, "lineno", 0)
-                        snippet = (
-                            lines[lineno - 1].strip()
-                            if lines and lineno > 0
-                            else ""
-                        )
-                        callers.append(
-                            {"file": rel, "line": lineno, "snippet": snippet}
-                        )
+                    if cname:
+                        # For class methods: check if cname matches "ClassName.method_name"
+                        # For standalone functions: check if cname matches "func_name"
+                        if class_name:
+                            # Looking for ClassName.method_name
+                            expected = f"{class_name}.{func_name}"
+                            match = cname == expected
+                        else:
+                            # Looking for standalone function
+                            # Use exact match to avoid false positives like "test" matching "test_function"
+                            match = cname == func_name
+                        
+                        if match:
+                            lineno = getattr(node, "lineno", 0)
+                            snippet = (
+                                lines[lineno - 1].strip()
+                                if lines and lineno > 0
+                                else ""
+                            )
+                            callers.append(
+                                {"file": rel, "line": lineno, "snippet": snippet}
+                            )
 
             # Test file detection
             if include_tests and len(test_files) < 20:
-                if ("test" in rel or "spec" in rel) and func_name in source:
+                # More precise test file detection
+                filename = Path(rel).name
+                is_test_file = (
+                    filename.startswith("test_") or
+                    filename.endswith("_test.py") or
+                    filename.endswith("_spec.py")
+                )
+                # Use pre-compiled pattern for efficiency
+                if is_test_file and test_pattern and test_pattern.search(source):
                     test_files.append(rel)
 
         result: dict[str, Any] = {
@@ -144,13 +179,6 @@ class CrossReferenceTool(Tool):
             "truncated": len(callers) >= 50 or len(callees) >= 30,
         }
 
-        # Compact JSON; trim callers list further if output exceeds budget
-        output = json.dumps(result)
-        if len(output) > _MAX_OUTPUT_BYTES:
-            # Trim callers to fit within budget
-            while len(output) > _MAX_OUTPUT_BYTES and result["callers"]:
-                result["callers"] = result["callers"][: len(result["callers"]) - 5]
-                result["truncated"] = True
-                output = json.dumps(result)
-
+        # Use the base class's safe JSON serialization
+        output = self._safe_json(result, max_bytes=_MAX_OUTPUT_BYTES)
         return ToolResult(output=output)

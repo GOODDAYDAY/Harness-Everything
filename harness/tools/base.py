@@ -5,14 +5,14 @@ from __future__ import annotations
 import itertools
 import json
 import logging
-import os
-import unicodedata
+import os  # Import for path operations; do not re-import in _check_path.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.core.security import validate_path_security
 
 log = logging.getLogger(__name__)
 
@@ -75,123 +75,75 @@ class Tool(ABC):
         Rejects null bytes before any Path operation — a null byte in a path
         string causes undefined behaviour on some OSes and can be used to
         truncate the path at the OS level, bypassing prefix checks.
+        
+        Security validation order:
+        1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
+        2. Resolve path with os.path.realpath to eliminate symlink TOCTOU
+        3. Check if resolved path is allowed
         """
-        if "\x00" in path:
-            return ToolResult(
-                error=f"PERMISSION ERROR: path contains null byte: {path!r}",
-                is_error=True,
-            )
         
-        # Check for control characters \x01 through \x1f (except \t, \n, \r)
-        for i in range(1, 0x20):
-            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
-                continue
-            if chr(i) in path:
-                return ToolResult(
-                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
-                    is_error=True,
-                )
+        # Use the consolidated validation method
+        resolved_path, err = self._validate_root_path(config, path)
+        if err:
+            return err
         
-        if not config.is_path_allowed(path):
-            return ToolResult(
-                error=f"Path not allowed: {path}  (allowed: {config.allowed_paths})",
-                is_error=True,
-            )
+        # The path has already been validated and resolved by _validate_root_path
+        # No additional checks needed
         return None
 
-    def _validate_path_contains_no_homoglyphs(self, path: str) -> str | None:
-        """Check if path contains Unicode homoglyphs that could bypass security.
+
+
+    def _validate_root_path(self, config: HarnessConfig, root: str) -> tuple[str, ToolResult | None]:
+        """Validate a root path for directory operations.
         
-        Homoglyphs are characters that look like ASCII but are different code points.
-        For example, CYRILLIC SMALL LETTER A (U+0430) looks like ASCII 'a' (U+0061).
+        Combines security validation from _check_path with path resolution
+        and allowed paths checking. Returns (resolved_path, None) on success
+        or ("", error_ToolResult) on failure.
         
-        Args:
-            path: The path string to validate
-            
-        Returns:
-            Error message if homoglyph found, None if path is clean
+        This method consolidates the logic previously duplicated in
+        _resolve_and_check and _check_dir_root.
         """
-        # Start with a minimal, high-risk character set
-        # These are visual spoofs of ASCII path delimiters or common letters
-        homoglyphs = {
-            '\u0430': 'Cyrillic small a (looks like ASCII a)',
-            '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
-            '\u0500': 'Cyrillic capital komi s (looks like ASCII O)',
-            '\u01C3': 'Latin letter retroflex click (looks like ASCII !)',
-            '\u0391': 'Greek capital alpha (looks like ASCII A)',
-            '\u03B1': 'Greek small alpha (looks like ASCII a)',
-            '\u041E': 'Cyrillic capital O (looks like ASCII O)',
-            '\u043E': 'Cyrillic small o (looks like ASCII o)',
-            '\u0555': 'Armenian comma (looks like ASCII comma)',
-            '\u058A': 'Armenian hyphen (looks like ASCII hyphen)',
-            '\u2044': 'Fraction slash (looks like ASCII /)',
-            '\uFF0F': 'Full-width solidus (looks like ASCII /)',
-        }
+        # Handle empty root (use workspace)
+        path_to_check = root if root else config.workspace
         
-        for char, description in homoglyphs.items():
-            if char in path:
-                return f"PERMISSION ERROR: Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
-        
-        return None
-
-    def _resolve_and_check(
-        self, config: HarnessConfig, path: str
-    ) -> tuple[str, ToolResult | None]:
-        """Null-byte check → resolve → allowed-paths check in one call.
-
-        Replaces the scattered ``resolved = str(Path(path).resolve())`` +
-        ``self._check_path(config, resolved)`` pattern in every file tool.
-        Performing the null-byte check *before* ``Path(path)`` is constructed
-        closes a subtle gap: CPython raises ``ValueError`` on a null byte inside
-        ``Path()``, which surfaces as an opaque TOOL ERROR from the registry
-        rather than the expected PERMISSION ERROR.
-
-        Returns:
-            (resolved_path, None) on success.
-            ("", error_ToolResult) on any failure.
-        """
-        if "\x00" in path:
+        # 1. Security validation on raw path
+        if error_msg := validate_path_security(path_to_check, config):
             return "", ToolResult(
-                error=f"PERMISSION ERROR: path contains null byte: {path!r}",
+                error=error_msg,
                 is_error=True,
             )
         
-        # Check for control characters \x01 through \x1f (except \t, \n, \r)
-        for i in range(1, 0x20):
-            if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
-                continue
-            if chr(i) in path:
-                return "", ToolResult(
-                    error=f"PERMISSION ERROR: path contains control character {chr(i)!r} (\\x{i:02x}): {path!r}",
-                    is_error=True,
-                )
-        
-        # Check for Unicode homoglyphs that could bypass security
-        if self.requires_path_check:
-            if error_msg := self._validate_path_contains_no_homoglyphs(path):
-                return "", ToolResult(error=error_msg, is_error=True)
-        
-        # Check for Unicode homoglyphs and non-standard characters
-        normalized = unicodedata.normalize('NFKC', path)
-        if normalized != path:
-            return "", ToolResult(
-                error=f"PERMISSION ERROR: Path contains Unicode homoglyphs or non-standard characters: {path!r}",
-                is_error=True,
-            )
-        
+        # 2. Resolve path to eliminate symlink TOCTOU
         try:
-            resolved = str(Path(os.path.realpath(path)))
+            resolved = os.path.realpath(path_to_check)
         except (ValueError, OSError) as exc:
             return "", ToolResult(
-                error=f"PERMISSION ERROR: invalid path {path!r}: {exc}",
+                error=f"PERMISSION ERROR: invalid path {path_to_check!r}: {exc}",
                 is_error=True,
             )
+        
+        # 3. Check if resolved path is allowed
         if not config.is_path_allowed(resolved):
             return "", ToolResult(
                 error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
                 is_error=True,
             )
+        
         return resolved, None
+
+    def _resolve_and_check(
+        self, config: HarnessConfig, path: str
+    ) -> tuple[str, ToolResult | None]:
+        """Validate and resolve a file path.
+        
+        Uses the consolidated _validate_root_path method for security validation,
+        path resolution, and allowed paths checking.
+        
+        Returns:
+            (resolved_path, None) on success.
+            ("", error_ToolResult) on any failure.
+        """
+        return self._validate_root_path(config, path)
 
     def _check_dir_root(
         self,
@@ -207,31 +159,16 @@ class Tool(ABC):
         callers never re-derive it (eliminates the asymmetry present in
         the inline copies in cross_reference.py and feature_search.py).
 
-        Guards:
-        - Null-byte rejection before any Path operation.
-        - 'PERMISSION ERROR' prefix so HarnessLoop's error-category logic fires.
+        Uses comprehensive security validation including homoglyph detection.
         """
-        if "\x00" in root:
-            return Path("."), [], ToolResult(
-                error=f"PERMISSION ERROR: root contains null byte: {root!r}",
-                is_error=True,
-            )
-        # Use os.path.realpath (calls realpath(3)) for symlink resolution —
-        # consistent with HarnessConfig.is_path_allowed() and immune to the
-        # Path.resolve() differences on Python < 3.6 edge cases.
-        raw_root = root if root else config.workspace
-        search_root = Path(os.path.realpath(raw_root))
+        # Use the consolidated validation method
+        resolved_path, err = self._validate_root_path(config, root)
+        if err:
+            return Path("."), [], err
+        
+        # Convert to Path and compute allowed list
+        search_root = Path(resolved_path)
         allowed = [Path(os.path.realpath(p)) for p in config.allowed_paths]
-        if not any(
-            search_root == a or search_root.is_relative_to(a) for a in allowed
-        ):
-            return search_root, [], ToolResult(
-                error=(
-                    f"PERMISSION ERROR: root {str(search_root)!r} is outside "
-                    f"allowed_paths {config.allowed_paths}"
-                ),
-                is_error=True,
-            )
         return search_root, allowed, None
 
     @staticmethod
