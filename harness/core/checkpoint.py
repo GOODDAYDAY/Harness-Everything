@@ -36,22 +36,21 @@ class CheckpointManager:
 
     # ---- path validation ----
 
-    def _validate_and_sanitize_path(self, *segments: str) -> tuple[str, ...]:
-        """Validate that path segments stay within the artifact store.
+    def _validate_path_segments(self, *segments: str) -> None:
+        """Validate path segments for security and directory traversal.
         
         Args:
             *segments: Path segments to validate.
             
-        Returns:
-            Sanitized tuple of path segments.
-            
         Raises:
-            ValueError: If segments contain '..' or attempt directory traversal.
+            ValueError: If segments contain '..', empty strings, or security issues.
         """
         # Check for directory traversal attempts
         for segment in segments:
             if segment == "..":
                 raise ValueError(f"Path segment '..' not allowed: {segments}")
+            if segment == "":
+                raise ValueError(f"Empty path segment not allowed: {segments}")
         
         # Build the full path and ensure it's within the run directory
         full_path = self.store.path(*segments)
@@ -61,7 +60,11 @@ class CheckpointManager:
         except ValueError:
             raise ValueError(f"Path attempts to escape artifact store: {segments}")
         
-        return segments
+        # Use comprehensive security validation
+        from harness.core.security import validate_path_security
+        path_str = str(full_path)
+        if error := validate_path_security(path_str):
+            raise ValueError(error)
 
     # ---- basic markers ----
 
@@ -71,6 +74,8 @@ class CheckpointManager:
 
     def mark_done(self, *segments: str) -> None:
         """Write ``.done`` marker at the given path."""
+        # Validate path segments for security
+        self._validate_path_segments(*segments)
         self.store.write("", *segments, ".done")
 
     def is_skipped(self, *segments: str) -> bool:
@@ -133,7 +138,8 @@ class CheckpointManager:
         """Write structured checkpoint metadata as JSON alongside .done marker."""
         import json
         # Validate path segments
-        validated_segments = self._validate_and_sanitize_path(*segments)
+        self._validate_path_segments(*segments)
+        validated_segments = segments
         
         # Validate synthesis_specificity_score range
         if not (0 <= metadata.synthesis_specificity_score <= 10):
@@ -169,7 +175,8 @@ class CheckpointManager:
         logger = logging.getLogger(__name__)
         
         # Validate path segments
-        validated_segments = self._validate_and_sanitize_path(*segments)
+        self._validate_path_segments(*segments)
+        validated_segments = segments
         
         json_path = self.store.path(*validated_segments, "checkpoint_metadata.json")
         if not json_path.exists():
@@ -177,18 +184,9 @@ class CheckpointManager:
         
         try:
             data = json.loads(json_path.read_text(encoding="utf-8"))
-            return CheckpointMetadata(
-                checkpoint_type=data["checkpoint_type"],
-                outer_round=data["outer_round"],
-                phase_label=data.get("phase_label", ""),
-                inner_index=data.get("inner_index", -1),
-                basic_score=data["basic_score"],
-                diffusion_score=data["diffusion_score"],
-                critique_count=data["critique_count"],
-                actionable_critiques=data["actionable_critiques"],
-                synthesis_specificity_score=data["synthesis_specificity_score"],
-                timestamp=datetime.fromisoformat(data["timestamp"])
-            )
+            # Convert timestamp string back to datetime
+            data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            return CheckpointMetadata(**data)
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(
                 "Failed to read checkpoint metadata from %s: %s",
