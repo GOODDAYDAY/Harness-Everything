@@ -191,15 +191,24 @@ class CheckpointManager:
             # Convert timestamp string back to datetime
             data["timestamp"] = datetime.fromisoformat(data["timestamp"])
             
-            # Validate synthesis_specificity_score range (0-10) and type
-            score = data.get("synthesis_specificity_score")
-            if not isinstance(score, int) or not (0 <= score <= 10):
-                logger.warning(
-                    "Invalid synthesis_specificity_score in checkpoint metadata at %s: %s",
-                    json_path,
-                    score
+            # Validate synthesis_specificity_score exists, is integer, and is within range 0-10
+            if "synthesis_specificity_score" not in data:
+                raise ValueError(
+                    "Missing synthesis_specificity_score in checkpoint metadata"
                 )
-                return None
+            
+            score = data["synthesis_specificity_score"]
+            if not isinstance(score, int):
+                raise ValueError(
+                    f"Invalid synthesis_specificity_score in checkpoint metadata: "
+                    f"must be an integer between 0 and 10, got {score!r} (type: {type(score).__name__})"
+                )
+            
+            if not (0 <= score <= 10):
+                raise ValueError(
+                    f"Invalid synthesis_specificity_score in checkpoint metadata: "
+                    f"must be an integer between 0 and 10, got {score}"
+                )
             
             return CheckpointMetadata(**data)
         except (json.JSONDecodeError, KeyError) as e:
