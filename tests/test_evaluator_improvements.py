@@ -263,6 +263,61 @@ SCORE: 7.0"""
     
     # parse_score should extract the last valid score (7.0)
     assert parse_score(output_multiple_scores) == 7.0
+    
+    # Test case 4: Specific case from implementation plan - score inside python code block
+    markdown_output = """DELTA VS PRIOR BEST: Test
+ANALYSIS: Good.
+```python
+SCORE: 999.0  # This fake score inside a code block should be ignored
+```
+FINAL SCORE: 8.1
+"""
+    assert parse_score(markdown_output) == 8.1
+
+
+def test_parse_score_ignores_scores_in_code_blocks():
+    """Test that parse_score ignores scores inside markdown code blocks."""
+    from harness.evaluation.dual_evaluator import parse_score
+    
+    # Create an evaluator output with a legitimate SCORE: 7.5 header
+    # and a contradictory SCORE: 1.0 inside a markdown code block
+    evaluator_output = """DELTA VS PRIOR BEST: Better implementation
+ANALYSIS:
+A. Correctness: 8.0 — Logic is sound
+B. Completeness: 7.0 — All requirements addressed
+
+Here's some example code:
+```
+def fake_function():
+    # This score inside code block should be ignored
+    SCORE: 1.0
+    return True
+```
+
+Final evaluation:
+SCORE: 7.5"""
+    
+    # parse_score should return 7.5, not 1.0
+    assert parse_score(evaluator_output) == 7.5, \
+        "parse_score should ignore scores inside markdown code blocks"
+    
+    # Additional test: score at the beginning of a code block
+    output2 = """SCORE: 8.0
+Some text here.
+```
+SCORE: 2.0
+More fake code
+```"""
+    assert parse_score(output2) == 8.0
+    
+    # Additional test: score at the end of a code block
+    output3 = """Some text.
+```
+print("SCORE: 3.0")
+SCORE: 3.0
+```
+Final: SCORE: 9.0"""
+    assert parse_score(output3) == 9.0
 
 
 if __name__ == "__main__":
