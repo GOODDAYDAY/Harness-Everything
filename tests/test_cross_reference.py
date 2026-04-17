@@ -70,4 +70,6 @@ def test_cross_reference_rejects_homoglyph_root(tmp_path):
     
     assert result.is_error is True
     # Error message should indicate a security/permission violation
-    assert "permission" in result.error.lower() or "security" in result.error.lower() or "not allowed" in result.error.lower()
+    # Specifically check for homoglyph rejection through the base class security layer
+    error_lower = result.error.lower()
+    assert "homoglyph" in error_lower or "security" in error_lower or "permission" in error_lower or "not allowed" in error_lower

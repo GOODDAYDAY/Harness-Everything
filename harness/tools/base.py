@@ -90,41 +90,52 @@ class Tool(ABC):
             )
         return None
 
-
-
-    def _resolve_and_check(
-        self, config: HarnessConfig, path: str
-    ) -> tuple[str, ToolResult | None]:
-        """Null-byte check → resolve → allowed-paths check in one call.
-
-        Replaces the scattered ``resolved = str(Path(path).resolve())`` +
-        ``self._check_path(config, resolved)`` pattern in every file tool.
-        Performing the null-byte check *before* ``Path(path)`` is constructed
-        closes a subtle gap: CPython raises ``ValueError`` on a null byte inside
-        ``Path()``, which surfaces as an opaque TOOL ERROR from the registry
-        rather than the expected PERMISSION ERROR.
-
-        Returns:
-            (resolved_path, None) on success.
-            ("", error_ToolResult) on any failure.
-        """
-        # Use comprehensive security validation for all paths
-        if error_msg := validate_path_security(path, config):
-            return "", ToolResult(error=error_msg, is_error=True)
+    def _validate_root_path(self, config: HarnessConfig, root: str) -> tuple[str, ToolResult | None]:
+        """Validate a root path for directory operations.
         
+        Combines security validation from _check_path with path resolution
+        and allowed paths checking. Returns (resolved_path, None) on success
+        or ("", error_ToolResult) on failure.
+        
+        This method consolidates the logic previously duplicated in
+        _resolve_and_check and _check_dir_root.
+        """
+        # First, use the comprehensive security validation from _check_path
+        if err := self._check_path(config, root):
+            return "", err
+        
+        # Resolve the path
         try:
-            resolved = str(Path(os.path.realpath(path)))
+            resolved = str(Path(os.path.realpath(root if root else config.workspace)))
         except (ValueError, OSError) as exc:
             return "", ToolResult(
-                error=f"PERMISSION ERROR: invalid path {path!r}: {exc}",
+                error=f"PERMISSION ERROR: invalid path {root!r}: {exc}",
                 is_error=True,
             )
+        
+        # Check if the resolved path is allowed
         if not config.is_path_allowed(resolved):
             return "", ToolResult(
                 error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
                 is_error=True,
             )
+        
         return resolved, None
+
+
+    def _resolve_and_check(
+        self, config: HarnessConfig, path: str
+    ) -> tuple[str, ToolResult | None]:
+        """Validate and resolve a file path.
+        
+        Uses the consolidated _validate_root_path method for security validation,
+        path resolution, and allowed paths checking.
+        
+        Returns:
+            (resolved_path, None) on success.
+            ("", error_ToolResult) on any failure.
+        """
+        return self._validate_root_path(config, path)
 
     def _check_dir_root(
         self,
@@ -140,31 +151,16 @@ class Tool(ABC):
         callers never re-derive it (eliminates the asymmetry present in
         the inline copies in cross_reference.py and feature_search.py).
 
-        Guards:
-        - Null-byte rejection before any Path operation.
-        - 'PERMISSION ERROR' prefix so HarnessLoop's error-category logic fires.
+        Uses the consolidated _validate_root_path method for security validation.
         """
-        if "\x00" in root:
-            return Path("."), [], ToolResult(
-                error=f"PERMISSION ERROR: root contains null byte: {root!r}",
-                is_error=True,
-            )
-        # Use os.path.realpath (calls realpath(3)) for symlink resolution —
-        # consistent with HarnessConfig.is_path_allowed() and immune to the
-        # Path.resolve() differences on Python < 3.6 edge cases.
-        raw_root = root if root else config.workspace
-        search_root = Path(os.path.realpath(raw_root))
+        # Use the consolidated security validation
+        resolved_str, err = self._validate_root_path(config, root)
+        if err:
+            return Path("."), [], err
+        
+        # Convert to Path and compute allowed list
+        search_root = Path(resolved_str)
         allowed = [Path(os.path.realpath(p)) for p in config.allowed_paths]
-        if not any(
-            search_root == a or search_root.is_relative_to(a) for a in allowed
-        ):
-            return search_root, [], ToolResult(
-                error=(
-                    f"PERMISSION ERROR: root {str(search_root)!r} is outside "
-                    f"allowed_paths {config.allowed_paths}"
-                ),
-                is_error=True,
-            )
         return search_root, allowed, None
 
     @staticmethod
