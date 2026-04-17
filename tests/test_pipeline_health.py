@@ -14,14 +14,16 @@ class TestPipelineHealth:
     
     def test_health_metrics_in_summary(self):
         """Test that health metrics are included in the pipeline summary."""
+        # Create a temporary workspace directory
+        import tempfile
+        import os
+        temp_dir = tempfile.mkdtemp()
+        
         # Create a mock config
         config = HarnessConfig(
-            base_dir="/tmp/test",
-            run_id="test_run",
-            planner=HarnessConfig.PlannerConfig(),
-            evaluator=HarnessConfig.EvaluatorConfig(),
-            synthesis=HarnessConfig.SynthesisConfig(),
-            pipeline=HarnessConfig.PipelineConfig(),
+            model="test-model",
+            max_tokens=1000,
+            workspace=temp_dir,
         )
         
         # Create a PipelineLoop instance
@@ -98,12 +100,9 @@ class TestPipelineHealth:
         """Test that health_metrics is None when health monitor is not initialized."""
         # Create a mock config
         config = HarnessConfig(
-            base_dir="/tmp/test",
-            run_id="test_run",
-            planner=HarnessConfig.PlannerConfig(),
-            evaluator=HarnessConfig.EvaluatorConfig(),
-            synthesis=HarnessConfig.SynthesisConfig(),
-            pipeline=HarnessConfig.PipelineConfig(),
+            model="test-model",
+            max_tokens=1000,
+            workspace="/tmp/test",
         )
         
         # Create a PipelineLoop instance
@@ -144,12 +143,9 @@ class TestPipelineHealth:
         """Test that health monitor is properly initialized in PipelineLoop."""
         # Create a mock config
         config = HarnessConfig(
-            base_dir="/tmp/test",
-            run_id="test_run",
-            planner=HarnessConfig.PlannerConfig(),
-            evaluator=HarnessConfig.EvaluatorConfig(),
-            synthesis=HarnessConfig.SynthesisConfig(),
-            pipeline=HarnessConfig.PipelineConfig(),
+            model="test-model",
+            max_tokens=1000,
+            workspace="/tmp/test",
         )
         
         # Create a PipelineLoop instance
