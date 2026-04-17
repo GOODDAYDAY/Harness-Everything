@@ -888,6 +888,7 @@ class PipelineLoop:
             "total_rounds": rounds_completed,
             "best_score": round(best_score, 2),
             "score_history": score_history,
+            "phase_score_history": self.phase_score_history,
             "score_trend_warnings": self.score_trend_warnings,
             "tool_error_rate": tool_error_rate,
             "total_tool_calls": total_tool_calls,

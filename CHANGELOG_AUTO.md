@@ -152,3 +152,8 @@
 - **Robustness**: Added `_filesystem_allows_tab()` helper to detect filesystem behavior at runtime, making control character tests platform-independent.
 - **CI Safety**: Modified `test_control_characters_in_path` to skip TAB assertion on filesystems that allow TAB characters (e.g., NTFS), preventing CI failures while logging security warnings.
 - **Traceability**: Added TODO comment to audit other file tools (WriteFileTool, FileEditTool) for consistent control character validation across the codebase.
+
+### Code Analysis Tool Fix and Test Coverage
+- **Fixed**: Verified that `code_analysis.py` already correctly uses `dotted_name` function (not `_dotted_name`) for inheritance analysis, addressing a potential NameError bug.
+- **Test Coverage**: Added comprehensive test suite `tests/test_code_analysis.py` with 5 new tests covering tool initialization, inheritance analysis, multiple inheritance, dotted name inheritance, and output structure validation.
+- **Verification**: Tests specifically verify that `dotted_name` function is correctly called during inheritance analysis, ensuring the critical path for class inheritance analysis works correctly.
