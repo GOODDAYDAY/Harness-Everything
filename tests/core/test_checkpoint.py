@@ -38,7 +38,7 @@ class TestCheckpointManager:
         with pytest.raises(ValueError) as exc_info:
             self.checkpoint.write_checkpoint_metadata(metadata, "round_1", "phase_test")
         
-        assert "synthesis_specificity_score must be between 0 and 10" in str(exc_info.value)
+        assert "synthesis_specificity_score must be an integer between 0 and 10" in str(exc_info.value)
         assert "got 11" in str(exc_info.value)
     
     def test_write_checkpoint_metadata_validates_score_range_lower_bound(self):
@@ -59,7 +59,7 @@ class TestCheckpointManager:
         with pytest.raises(ValueError) as exc_info:
             self.checkpoint.write_checkpoint_metadata(metadata, "round_1", "phase_test")
         
-        assert "synthesis_specificity_score must be between 0 and 10" in str(exc_info.value)
+        assert "synthesis_specificity_score must be an integer between 0 and 10" in str(exc_info.value)
         assert "got -1" in str(exc_info.value)
     
     def test_write_checkpoint_metadata_accepts_valid_scores(self):
@@ -128,6 +128,54 @@ class TestCheckpointManager:
         json_path = self.store.path("round_1", "phase_test", "checkpoint_metadata.json")
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text('{"checkpoint_type": "phase"}', encoding="utf-8")
+        
+        # Should return None, not raise
+        result = self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
+        assert result is None
+    
+    def test_read_checkpoint_metadata_validates_score_range(self):
+        """Test that read_checkpoint_metadata validates synthesis_specificity_score range."""
+        # Write JSON with valid structure but invalid score (15)
+        metadata = {
+            "checkpoint_type": "phase",
+            "outer_round": 1,
+            "phase_label": "test_phase",
+            "inner_index": 0,
+            "basic_score": 0.8,
+            "diffusion_score": 0.7,
+            "critique_count": 3,
+            "actionable_critiques": 2,
+            "synthesis_specificity_score": 15,  # Invalid: should be 0-10
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        json_path = self.store.path("round_1", "phase_test", "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata), encoding="utf-8")
+        
+        # Should return None, not raise
+        result = self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
+        assert result is None
+    
+    def test_read_checkpoint_metadata_validates_score_type(self):
+        """Test that read_checkpoint_metadata validates synthesis_specificity_score is integer."""
+        # Write JSON with valid structure but float score (5.5)
+        metadata = {
+            "checkpoint_type": "phase",
+            "outer_round": 1,
+            "phase_label": "test_phase",
+            "inner_index": 0,
+            "basic_score": 0.8,
+            "diffusion_score": 0.7,
+            "critique_count": 3,
+            "actionable_critiques": 2,
+            "synthesis_specificity_score": 5.5,  # Invalid: should be int
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        json_path = self.store.path("round_1", "phase_test", "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata), encoding="utf-8")
         
         # Should return None, not raise
         result = self.checkpoint.read_checkpoint_metadata("round_1", "phase_test")
