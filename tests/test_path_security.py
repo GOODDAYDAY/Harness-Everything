@@ -331,6 +331,9 @@ class TestHomoglyphCleanup:
                 source_content = f.read()
                 assert 'import unicodedata' not in source_content, \
                     "Unused unicodedata import still exists in base.py"
+                # Security guard test: verify base tool integrates centralized security
+                assert '_check_path' in source_content and 'validate_path_security' in source_content, \
+                    "Base tool must use centralized security utilities via _check_path method"
         
         # Verify the new function is properly imported and used
         from harness.core.security import validate_path_no_homoglyphs
