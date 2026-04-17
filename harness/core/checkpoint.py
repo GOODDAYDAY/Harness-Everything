@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime
+
 from harness.core.artifacts import ArtifactStore
+
+
+@dataclass
+class CheckpointMetadata:
+    """Structured metadata for checkpoint evaluation tracking."""
+    checkpoint_type: str  # "phase", "inner", "synthesis", "meta_review"
+    outer_round: int
+    phase_label: str = ""
+    inner_index: int = -1
+    basic_score: float = 0.0
+    diffusion_score: float = 0.0
+    critique_count: int = 0
+    actionable_critiques: int = 0
+    synthesis_specificity_score: int = 0  # 0-10 scale
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 class CheckpointManager:
@@ -16,6 +34,43 @@ class CheckpointManager:
     def __init__(self, store: ArtifactStore) -> None:
         self.store = store
 
+    # ---- path validation ----
+
+    def _validate_path_segments(self, *segments: str) -> None:
+        """Validate path segments for security and directory traversal.
+        
+        Args:
+            *segments: Path segments to validate.
+            
+        Raises:
+            ValueError: If segments contain '..', empty strings, or security issues.
+        """
+        # Check for directory traversal attempts and empty segments
+        for segment in segments:
+            if segment == "..":
+                raise ValueError(f"Path segment '..' not allowed: {segments}")
+            if segment == "":
+                raise ValueError(f"Empty path segment not allowed: {segments}")
+        
+        # Validate each segment for security issues
+        from harness.core.security import validate_path_security
+        for segment in segments:
+            if error := validate_path_security(segment):
+                raise ValueError(f"Invalid path segment '{segment}': {error}")
+        
+        # Build the full path and ensure it's within the run directory
+        full_path = self.store.path(*segments)
+        try:
+            # This will raise ValueError if path escapes run_dir
+            full_path.relative_to(self.store.run_dir)
+        except ValueError:
+            raise ValueError(f"Path attempts to escape artifact store: {segments}")
+        
+        # Also validate the full path for comprehensive security
+        path_str = str(full_path)
+        if error := validate_path_security(path_str):
+            raise ValueError(error)
+
     # ---- basic markers ----
 
     def is_done(self, *segments: str) -> bool:
@@ -24,6 +79,8 @@ class CheckpointManager:
 
     def mark_done(self, *segments: str) -> None:
         """Write ``.done`` marker at the given path."""
+        # Validate path segments for security
+        self._validate_path_segments(*segments)
         self.store.write("", *segments, ".done")
 
     def is_skipped(self, *segments: str) -> bool:
@@ -75,6 +132,92 @@ class CheckpointManager:
 
     def mark_meta_review_done(self, outer: int) -> None:
         self.store.write("", f"round_{outer + 1}", "meta_review.done")
+
+    # ---- structured checkpoint metadata ----
+
+    def write_checkpoint_metadata(
+        self,
+        metadata: CheckpointMetadata,
+        *segments: str
+    ) -> None:
+        """Write structured checkpoint metadata as JSON alongside .done marker."""
+        import json
+        # Security: validate paths BEFORE content to prevent bypass
+        self._validate_path_segments(*segments)
+        
+        # Validate synthesis_specificity_score type and range (0-10)
+        score = metadata.synthesis_specificity_score
+        if not isinstance(score, int) or not (0 <= score <= 10):
+            raise ValueError(
+                f"synthesis_specificity_score must be an integer between 0 and 10, got {score}"
+            )
+        
+        metadata_dict = {
+            "checkpoint_type": metadata.checkpoint_type,
+            "outer_round": metadata.outer_round,
+            "phase_label": metadata.phase_label,
+            "inner_index": metadata.inner_index,
+            "basic_score": metadata.basic_score,
+            "diffusion_score": metadata.diffusion_score,
+            "critique_count": metadata.critique_count,
+            "actionable_critiques": metadata.actionable_critiques,
+            "synthesis_specificity_score": metadata.synthesis_specificity_score,
+            "timestamp": metadata.timestamp.isoformat()
+        }
+        json_path = self.store.path(*segments, "checkpoint_metadata.json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(metadata_dict, indent=2), encoding="utf-8")
+
+    def read_checkpoint_metadata(
+        self,
+        *segments: str
+    ) -> CheckpointMetadata | None:
+        """Read checkpoint metadata if it exists."""
+        import json
+        import logging
+        from datetime import datetime
+        
+        logger = logging.getLogger(__name__)
+        
+        # Validate path segments
+        self._validate_path_segments(*segments)
+        
+        json_path = self.store.path(*segments, "checkpoint_metadata.json")
+        if not json_path.exists():
+            return None
+        
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            # Convert timestamp string back to datetime
+            data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            
+            # Validate synthesis_specificity_score exists, is integer, and is within range 0-10
+            if "synthesis_specificity_score" not in data:
+                raise ValueError(
+                    "Missing synthesis_specificity_score in checkpoint metadata"
+                )
+            
+            score = data["synthesis_specificity_score"]
+            if not isinstance(score, int):
+                raise ValueError(
+                    f"Invalid synthesis_specificity_score in checkpoint metadata: "
+                    f"must be an integer between 0 and 10, got {score!r} (type: {type(score).__name__})"
+                )
+            
+            if not (0 <= score <= 10):
+                raise ValueError(
+                    f"Invalid synthesis_specificity_score in checkpoint metadata: "
+                    f"must be an integer between 0 and 10, got {score}"
+                )
+            
+            return CheckpointMetadata(**data)
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(
+                "Failed to read checkpoint metadata from %s: %s",
+                json_path,
+                e
+            )
+            return None
 
     # ---- hash-based incremental review ----
 

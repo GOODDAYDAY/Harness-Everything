@@ -586,3 +586,43 @@ class TestToolCheckPath:
         
         # Assert the second element is None (no error)
         assert error is None, "Second element should be None for valid path"
+    
+    def test_check_path_returns_toolresult_on_validation_failure(self, tmp_path):
+        """Test that _check_path correctly returns a ToolResult when path validation fails.
+        
+        This test directly addresses the falsifiable criterion by verifying
+        that security validation errors are properly propagated as ToolResult objects.
+        """
+        # Create a mock tool instance
+        class MockTool(Tool):
+            name = "mock_tool"
+            description = "A mock tool for testing"
+            
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+            
+            async def execute(self, config, **params):
+                return Mock()
+        
+        tool = MockTool()
+        
+        # Create a minimal config with allowed paths
+        workspace = str(tmp_path)
+        config = HarnessConfig(
+            model="test-model",
+            max_tokens=1000,
+            workspace=workspace,
+            allowed_paths=[workspace],
+        )
+        
+        # Test with a path containing a Cyrillic 'a' (U+0430) which looks like ASCII 'a'
+        malicious_path = f"{workspace}/evil_\u0430.py"  # Path with homoglyph
+        
+        # Call _check_path
+        result = tool._check_path(config, malicious_path)
+        
+        # Assert the ToolResult error is returned, not a path string
+        assert isinstance(result, ToolResult), "_check_path should return ToolResult on validation failure"
+        assert result.is_error is True, "ToolResult should indicate an error"
+        assert "homoglyph" in result.error.lower() or "security" in result.error.lower(), \
+            "Error message should mention security or homoglyph detection"

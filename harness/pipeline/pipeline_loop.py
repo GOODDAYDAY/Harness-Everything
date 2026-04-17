@@ -16,6 +16,7 @@ from harness.core.artifacts import ArtifactStore
 from harness.core.checkpoint import CheckpointManager
 from harness.core.config import PipelineConfig
 from harness.core.llm import LLM
+from harness.pipeline.health import HealthMonitor
 from harness.pipeline.memory import MemoryStore
 from harness.pipeline.metrics import MetricsCollector
 from harness.pipeline.phase import PhaseConfig, PhaseResult
@@ -88,6 +89,9 @@ class PipelineLoop:
         self._metrics_collector = MetricsCollector(
             output_path=Path(self.config.harness.workspace) / ".harness_metrics.json"
         )
+        
+        # Health monitoring for production quality
+        self.health_monitor = HealthMonitor(config)
 
         # Graceful shutdown
         self._shutdown_requested: bool = False
@@ -503,7 +507,15 @@ class PipelineLoop:
 
             # --- Priority 4: Score trend detection ---
             # Detect 3 consecutive declining scores and log a warning.
+            # Also detect flatlining scores (no improvement over multiple rounds).
             if _prev_score is not None:
+                # Track flatline streak (no improvement)
+                if round_score <= _prev_score:
+                    _flatline_streak += 1
+                else:
+                    _flatline_streak = 0
+                
+                # Track decline streak (actual decrease)
                 if round_score < _prev_score:
                     _decline_streak += 1
                     if _decline_streak >= _DECLINE_WARN_STREAK:
@@ -528,10 +540,35 @@ class PipelineLoop:
                             "round": outer + 1,
                             "decline_streak": _decline_streak,
                             "message": warning_msg,
-                            "scores": streak_scores
+                            "scores": streak_scores,
+                            "type": "decline"
                         })
                 else:
                     _decline_streak = 0
+                
+                # Check for flatline warning (no improvement for 4+ rounds)
+                if _flatline_streak >= _FLATLINE_WARN_STREAK:
+                    # Get scores in the flatline streak
+                    flatline_scores = []
+                    for i in range(_flatline_streak + 1):
+                        idx = -1 - i
+                        flatline_scores.append(score_history[idx]["score"])
+                    flatline_scores.reverse()
+                    
+                    flatline_msg = (
+                        f"TREND WARNING: score has not improved for {_flatline_streak} consecutive "
+                        f"round(s) ({' → '.join(f'{s:.2f}' for s in flatline_scores)}). "
+                        f"Consider adjusting strategy or stopping early."
+                    )
+                    log.warning(flatline_msg)
+                    # Store warning for inclusion in summary
+                    self.score_trend_warnings.append({
+                        "round": outer + 1,
+                        "flatline_streak": _flatline_streak,
+                        "message": flatline_msg,
+                        "scores": flatline_scores,
+                        "type": "flatline"
+                    })
             _prev_score = round_score
 
             # Write round summary
@@ -955,6 +992,7 @@ class PipelineLoop:
             "shutdown_reason": self.shutdown_reason,
             "meta_review_count": self.meta_review_count,
             "auto_push_count": self.auto_push_count,
+            "health_metrics": self.health_monitor.metrics_dict if self.health_monitor else None,
         }
         payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
         try:

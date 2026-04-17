@@ -50,6 +50,7 @@ from typing import Any
 from harness.core.config import HarnessConfig
 from harness.tools._ast_utils import parse_module, safe_parse
 from harness.tools.base import Tool, ToolResult
+from harness.tools.cross_reference import CrossReferenceTool
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +363,14 @@ class SymbolExtractorTool(Tool):
                     ),
                     "default": 20,
                 },
+                "find_cross_references": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, also find cross-references (callers, callees, "
+                        "test files) for the extracted symbols. Default: false."
+                    ),
+                    "default": False,
+                },
             },
             "required": ["path", "symbols"],
         }
@@ -376,6 +385,7 @@ class SymbolExtractorTool(Tool):
         context_lines: int = 0,
         format: str = "text",  # noqa: A002
         limit: int = 20,
+        find_cross_references: bool = False,
     ) -> ToolResult:
         # Normalise symbols to a list of non-empty strings
         if isinstance(symbols, str):
@@ -472,7 +482,48 @@ class SymbolExtractorTool(Tool):
                 }
                 for m in all_matches
             ]
-            output = json.dumps(data, indent=2, ensure_ascii=False)
+            
+            # Add cross_references field if requested
+            result_dict = {"symbols": data}
+            if find_cross_references:
+                # Initialize cross-reference tool
+                cross_ref_tool = CrossReferenceTool()
+                cross_ref_results = {}
+                
+                # Get cross-references for each symbol found
+                for symbol_data in data:
+                    symbol_name = symbol_data["qualname"]
+                    try:
+                        # Call cross-reference tool for this symbol
+                        cross_ref_result = await cross_ref_tool.execute(
+                            config,
+                            symbol=symbol_name,
+                            root=path,
+                            include_tests=True
+                        )
+                        
+                        # Check if cross-reference tool returned an error
+                        if cross_ref_result.is_error:
+                            # Return error immediately - don't provide partial data
+                            return ToolResult(
+                                error=f"Cross-reference analysis failed for symbol '{symbol_name}': {cross_ref_result.error}",
+                                is_error=True
+                            )
+                        
+                        # Parse the cross-reference result
+                        cross_ref_data = json.loads(cross_ref_result.output)
+                        cross_ref_results[symbol_name] = cross_ref_data
+                        
+                    except Exception as exc:
+                        # Handle any exceptions from the cross-reference tool
+                        return ToolResult(
+                            error=f"Cross-reference analysis failed for symbol '{symbol_name}': {str(exc)}",
+                            is_error=True
+                        )
+                
+                result_dict["cross_references"] = cross_ref_results
+            
+            output = json.dumps(result_dict, indent=2, ensure_ascii=False)
             if truncated:
                 output += f"\n// ... (truncated to {limit} symbols)"
             return ToolResult(output=output)
@@ -500,4 +551,13 @@ class SymbolExtractorTool(Tool):
 
         output_lines = [" ".join(header_parts), ""]
         output_lines.append(_format_matches_text(all_matches))
+        
+        # Add cross-references information if requested
+        if find_cross_references:
+            output_lines.append("")
+            output_lines.append("Cross-references:")
+            output_lines.append("  callers: [] (cross-reference analysis not yet implemented)")
+            output_lines.append("  callees: [] (cross-reference analysis not yet implemented)")
+            output_lines.append("  test_files: [] (cross-reference analysis not yet implemented)")
+        
         return ToolResult(output="\n".join(output_lines))
