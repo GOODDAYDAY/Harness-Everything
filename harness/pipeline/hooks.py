@@ -26,6 +26,11 @@ class VerificationHook(ABC):
     """Base class for post-execution verification hooks."""
 
     name: str
+    # When True, failure of this hook suppresses subsequent GitCommitHook
+    # executions in the same phase. Leave False for advisory checks whose
+    # failure should still allow the commit (e.g. pytest when the phase's
+    # job is to add new, initially-failing tests).
+    gates_commit: bool = False
 
     @abstractmethod
     async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
@@ -40,6 +45,7 @@ class SyntaxCheckHook(VerificationHook):
     """Run ``py_compile`` on files matching configured glob patterns."""
 
     name = "syntax_check"
+    gates_commit = True
 
     def __init__(self, patterns: list[str] | None = None) -> None:
         self.patterns = patterns or ["**/*.py"]
@@ -62,6 +68,75 @@ class SyntaxCheckHook(VerificationHook):
             error_text = "\n".join(errors)
             return HookResult(passed=False, output="", errors=error_text)
         return HookResult(passed=True, output="All syntax checks passed")
+
+
+class ImportSmokeHook(VerificationHook):
+    """Verify a fresh subprocess can import the configured modules.
+
+    Cheap, deterministic, offline — catches ImportError/SyntaxError introduced
+    by the preceding phase before the change is committed. Intended for
+    self-improvement pipelines where the harness edits its own source and a
+    broken module would prevent the next round from running at all.
+
+    Runs in a subprocess so the parent's already-imported modules don't mask
+    a freshly-broken import.
+    """
+
+    name = "import_smoke"
+    gates_commit = True
+
+    def __init__(self, modules: list[str] | None = None, timeout: int = 30) -> None:
+        # Default covers the self-improvement case; override via config for
+        # pipelines with different import entry points.
+        self.modules = modules or [
+            "harness.core.config",
+            "harness.pipeline.pipeline_loop",
+            "harness.tools",
+        ]
+        self.timeout = timeout
+
+    async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
+        import_stmts = "\n".join(f"import {m}" for m in self.modules)
+        # build_registry() exercises tool class loading, which is the most
+        # common place a refactor breaks imports without hitting top-level
+        # module imports directly.
+        script = (
+            f"{import_stmts}\n"
+            "from harness.tools import build_registry\n"
+            "build_registry()\n"
+        )
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python", "-c", script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=config.workspace,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=self.timeout
+            )
+        except asyncio.TimeoutError:
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
+            return HookResult(
+                passed=False, output="", errors="import smoke timed out"
+            )
+        except FileNotFoundError:
+            return HookResult(
+                passed=False, output="", errors="python executable not found"
+            )
+        except Exception as e:
+            return HookResult(passed=False, output="", errors=str(e))
+
+        if proc.returncode == 0:
+            return HookResult(
+                passed=True,
+                output=f"import smoke OK ({len(self.modules)} modules)",
+            )
+        err = stderr.decode(errors="replace") + stdout.decode(errors="replace")
+        return HookResult(passed=False, output="", errors=err[:2000])
 
 
 class PytestHook(VerificationHook):
@@ -212,6 +287,12 @@ def build_hooks(
 
     if phase_config.syntax_check_patterns:
         hooks.append(SyntaxCheckHook(phase_config.syntax_check_patterns))
+
+    # Import smoke: opt-in via a non-empty module list. Keep it ordered
+    # before PytestHook/GitCommitHook so a failing import (gates_commit=True)
+    # reliably suppresses the commit via the short-circuit below.
+    if getattr(phase_config, "import_smoke_modules", None):
+        hooks.append(ImportSmokeHook(phase_config.import_smoke_modules))
 
     if phase_config.run_tests:
         hooks.append(PytestHook(phase_config.test_path))

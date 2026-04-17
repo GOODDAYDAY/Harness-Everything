@@ -50,6 +50,11 @@ class PhaseConfig:
     syntax_check_patterns: list[str] = field(default_factory=list)
     run_tests: bool = False
     test_path: str = "tests/"
+    # Non-empty list enables ImportSmokeHook, which launches a fresh Python
+    # subprocess to `import` each module (and build the tool registry). A
+    # failure gates the downstream commit. Intended for self-improvement
+    # pipelines where a broken import would halt the next round entirely.
+    import_smoke_modules: list[str] = field(default_factory=list)
     commit_on_success: bool = False
     commit_repos: list[str] = field(default_factory=list)
 

@@ -66,17 +66,70 @@ _KEY_RISK_RE = re.compile(
     r"KEY\s+RISK\s*:\s*(.+?)(?:\n|$)", re.IGNORECASE
 )
 
+# Fallback patterns: evaluator LLMs frequently render their worst findings as a
+# markdown section (``## CRITICAL DEFECTS`` / ``## SECOND-ORDER EFFECTS``) with
+# a numbered bullet list underneath instead of emitting the single-line
+# ``TOP DEFECT: ...`` anchor the prompt asks for. Without these fallbacks the
+# memory store silently loses its most valuable cross-round learning signal.
+_DEFECT_SECTION_RE = re.compile(
+    r"^#{1,3}\s+CRITICAL\s+DEFECT[^\n]*\n"     # heading line
+    r"(.+?)"                                     # body (non-greedy)
+    r"(?=\n#{1,3}\s|\Z)",                       # stop at next heading or EOF
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+_RISK_SECTION_RE = re.compile(
+    r"^#{1,3}\s+(?:KEY\s+RISKS?|SECOND[- ]ORDER\s+EFFECTS?[^\n]*)\n"
+    r"(.+?)"
+    r"(?=\n#{1,3}\s|\Z)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+# Pull the first non-empty content line from a section body, stripping common
+# markdown prefixes (numbered bullets, dashes, asterisks, bold markers).
+_BULLET_PREFIX_RE = re.compile(r"^\s*(?:\d+\.\s*|[-*+]\s+)?\**")
+
+
+def _first_bullet(section_body: str) -> str:
+    for raw in section_body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Drop leading "1. ", "- ", "* " and then flatten any inline bold
+        # markers — evaluator output routinely writes `1. **Label**: body`
+        # which would otherwise leave dangling `**` in the stored memo.
+        line = _BULLET_PREFIX_RE.sub("", line).replace("**", "").strip()
+        if line:
+            return line
+    return ""
+
 
 def _extract_top_defect(text: str) -> str:
-    """Pull the ``TOP DEFECT:`` line from a basic-evaluator critique."""
+    """Pull the most critical defect description from a basic-evaluator critique.
+
+    Accepts both the canonical ``TOP DEFECT: ...`` single-line form and the
+    markdown section form (``## CRITICAL DEFECTS`` + bullet list).
+    """
     m = _TOP_DEFECT_RE.search(text)
-    return m.group(1).strip()[:200] if m else ""
+    if m:
+        return m.group(1).strip()[:200]
+    section = _DEFECT_SECTION_RE.search(text)
+    if section:
+        return _first_bullet(section.group(1))[:200]
+    return ""
 
 
 def _extract_key_risk(text: str) -> str:
-    """Pull the ``KEY RISK:`` line from a diffusion-evaluator critique."""
+    """Pull the most significant risk description from a diffusion critique.
+
+    Accepts both the canonical ``KEY RISK: ...`` single-line form and the
+    markdown section form (``## KEY RISKS`` or ``## SECOND-ORDER EFFECTS``).
+    """
     m = _KEY_RISK_RE.search(text)
-    return m.group(1).strip()[:200] if m else ""
+    if m:
+        return m.group(1).strip()[:200]
+    section = _RISK_SECTION_RE.search(text)
+    if section:
+        return _first_bullet(section.group(1))[:200]
+    return ""
 
 
 # ---------------------------------------------------------------------------
