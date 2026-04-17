@@ -48,9 +48,9 @@ class TestToolCheckPath:
         # Verify it returns an error
         assert result is not None
         assert result.is_error is True
-        # Error message should indicate homoglyph or security violation
+        # Error message should indicate homoglyph detection
         error_lower = result.error.lower()
-        assert "homoglyph" in error_lower or "security" in error_lower or "permission" in error_lower
+        assert "homoglyph" in error_lower
         
         # Test the consolidated method directly
         search_root, allowed, dir_result = tool._check_dir_root(config, malicious_path)
@@ -163,9 +163,9 @@ class TestToolCheckPath:
         # Verify it returns an error
         assert result is not None
         assert result.is_error is True
-        # Error message should indicate homoglyph or security violation
+        # Error message should indicate homoglyph detection
         error_lower = result.error.lower()
-        assert "homoglyph" in error_lower or "security" in error_lower or "permission" in error_lower
+        assert "homoglyph" in error_lower
         
         # Verify the returned paths are safe defaults
         assert str(search_root) == "."
