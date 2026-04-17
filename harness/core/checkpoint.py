@@ -34,6 +34,35 @@ class CheckpointManager:
     def __init__(self, store: ArtifactStore) -> None:
         self.store = store
 
+    # ---- path validation ----
+
+    def _validate_and_sanitize_path(self, *segments: str) -> tuple[str, ...]:
+        """Validate that path segments stay within the artifact store.
+        
+        Args:
+            *segments: Path segments to validate.
+            
+        Returns:
+            Sanitized tuple of path segments.
+            
+        Raises:
+            ValueError: If segments contain '..' or attempt directory traversal.
+        """
+        # Check for directory traversal attempts
+        for segment in segments:
+            if segment == "..":
+                raise ValueError(f"Path segment '..' not allowed: {segments}")
+        
+        # Build the full path and ensure it's within the run directory
+        full_path = self.store.path(*segments)
+        try:
+            # This will raise ValueError if path escapes run_dir
+            full_path.relative_to(self.store.run_dir)
+        except ValueError:
+            raise ValueError(f"Path attempts to escape artifact store: {segments}")
+        
+        return segments
+
     # ---- basic markers ----
 
     def is_done(self, *segments: str) -> bool:
@@ -103,6 +132,15 @@ class CheckpointManager:
     ) -> None:
         """Write structured checkpoint metadata as JSON alongside .done marker."""
         import json
+        # Validate path segments
+        validated_segments = self._validate_and_sanitize_path(*segments)
+        
+        # Validate synthesis_specificity_score range
+        if not (0 <= metadata.synthesis_specificity_score <= 10):
+            raise ValueError(
+                f"synthesis_specificity_score must be between 0 and 10, got {metadata.synthesis_specificity_score}"
+            )
+        
         metadata_dict = {
             "checkpoint_type": metadata.checkpoint_type,
             "outer_round": metadata.outer_round,
@@ -115,7 +153,7 @@ class CheckpointManager:
             "synthesis_specificity_score": metadata.synthesis_specificity_score,
             "timestamp": metadata.timestamp.isoformat()
         }
-        json_path = self.store.path(*segments, "checkpoint_metadata.json")
+        json_path = self.store.path(*validated_segments, "checkpoint_metadata.json")
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps(metadata_dict, indent=2), encoding="utf-8")
 
@@ -125,25 +163,39 @@ class CheckpointManager:
     ) -> CheckpointMetadata | None:
         """Read checkpoint metadata if it exists."""
         import json
+        import logging
         from datetime import datetime
         
-        json_path = self.store.path(*segments, "checkpoint_metadata.json")
+        logger = logging.getLogger(__name__)
+        
+        # Validate path segments
+        validated_segments = self._validate_and_sanitize_path(*segments)
+        
+        json_path = self.store.path(*validated_segments, "checkpoint_metadata.json")
         if not json_path.exists():
             return None
         
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-        return CheckpointMetadata(
-            checkpoint_type=data["checkpoint_type"],
-            outer_round=data["outer_round"],
-            phase_label=data.get("phase_label", ""),
-            inner_index=data.get("inner_index", -1),
-            basic_score=data["basic_score"],
-            diffusion_score=data["diffusion_score"],
-            critique_count=data["critique_count"],
-            actionable_critiques=data["actionable_critiques"],
-            synthesis_specificity_score=data["synthesis_specificity_score"],
-            timestamp=datetime.fromisoformat(data["timestamp"])
-        )
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            return CheckpointMetadata(
+                checkpoint_type=data["checkpoint_type"],
+                outer_round=data["outer_round"],
+                phase_label=data.get("phase_label", ""),
+                inner_index=data.get("inner_index", -1),
+                basic_score=data["basic_score"],
+                diffusion_score=data["diffusion_score"],
+                critique_count=data["critique_count"],
+                actionable_critiques=data["actionable_critiques"],
+                synthesis_specificity_score=data["synthesis_specificity_score"],
+                timestamp=datetime.fromisoformat(data["timestamp"])
+            )
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(
+                "Failed to read checkpoint metadata from %s: %s",
+                json_path,
+                e
+            )
+            return None
 
     # ---- hash-based incremental review ----
 
