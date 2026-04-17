@@ -390,5 +390,51 @@ Final: SCORE: 9.0"""
     assert parse_score(output3) == 9.0
 
 
+def test_score_line_validation_with_trailing_text():
+    """Test that SCORE line validation allows trailing text after the score.
+    
+    This test directly validates the fix for the falsifiable criterion by
+    providing a measurable check that the framework now correctly parses
+    structured evaluator output with trailing text after the score.
+    """
+    from harness.evaluation.dual_evaluator import validate_evaluator_output
+    
+    # Test case 1: SCORE line with trailing text (should be valid)
+    output_with_trailing = """DELTA VS PRIOR BEST: This is a test delta comparison
+ANALYSIS: A. Correctness: 8.0 — Good implementation.
+TOP DEFECT: test.py::function — missing error handling
+ACTIONABLE FEEDBACK:
+1. Add try/except in test.py::function
+WHAT WOULD MAKE THIS 10/10: Add unit tests
+SCORE: 7.5 with trailing text"""
+    
+    is_valid, issues = validate_evaluator_output(output_with_trailing, "basic")
+    assert is_valid, f"Should accept SCORE with trailing text: {issues}"
+    
+    # Test case 2: SCORE line with inline code (should be valid)
+    output_with_inline_code = """DELTA VS PRIOR BEST: This is a test delta comparison
+ANALYSIS: A. Correctness: 8.0 — Good implementation.
+TOP DEFECT: test.py::function — missing error handling
+ACTIONABLE FEEDBACK:
+1. Add try/except in test.py::function
+WHAT WOULD MAKE THIS 10/10: Add unit tests
+SCORE: 7.5 `inline code` more text"""
+    
+    is_valid, issues = validate_evaluator_output(output_with_inline_code, "basic")
+    assert is_valid, f"Should accept SCORE with inline code: {issues}"
+    
+    # Test case 3: SCORE line ending immediately after score (should still be valid)
+    output_clean = """DELTA VS PRIOR BEST: This is a test delta comparison
+ANALYSIS: A. Correctness: 8.0 — Good implementation.
+TOP DEFECT: test.py::function — missing error handling
+ACTIONABLE FEEDBACK:
+1. Add try/except in test.py::function
+WHAT WOULD MAKE THIS 10/10: Add unit tests
+SCORE: 7.5"""
+    
+    is_valid, issues = validate_evaluator_output(output_clean, "basic")
+    assert is_valid, f"Should accept clean SCORE line: {issues}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

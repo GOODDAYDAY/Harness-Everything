@@ -81,7 +81,6 @@ class Tool(ABC):
         2. Resolve path with os.path.realpath to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
         """
-        import os
         
         # 1. Security validation on raw path
         if error_msg := validate_path_security(path, config):

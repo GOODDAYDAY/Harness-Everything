@@ -513,7 +513,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
     if score_lines:
         score_line = score_lines[-1].strip()
         # Check for proper SCORE: X.X format
-        if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\s*$', score_line):
+        if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\b', score_line):
             issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X'")
         # Check that score is the last thing in the output (most reliable)
         if not text.strip().endswith(score_line):
