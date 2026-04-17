@@ -105,32 +105,37 @@ _MODE_HEADERS: dict[str, str] = {
 }
 
 
-def extract_structured_feedback(text: str, evaluator_type: str = "basic", context: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Extract structured feedback from evaluator output text.
+def extract_structured_feedback(text: str, evaluator_type: str = "basic", context: dict[str, Any] | None = None, mode: str | None = None) -> dict[str, Any]:
+    """Extract structured feedback from evaluator output text with enhanced parsing.
     
     Returns a dict with keys:
         - "score": float or None
+        - "score_confidence": float 0-1 based on calibration anchors and structure
         - "delta": str or None
-        - "analysis": dict mapping dimension names to scores
-        - "defect": str or None (top defect or key risk)
+        - "analysis": dict mapping dimension names to scores with rationale
+        - "defect": dict with structured defect/risk information
         - "feedback_items": list of actionable feedback strings
+        - "structured_feedback": dict with parsed structured feedback items
         - "improvement_suggestion": str or None
+        - "mode_adaptation_score": float 0-1 rating of mode-specific adaptation
         - "warnings": list of str from validate_score_calibration
         - "calibration_anchors_used": bool indicating if calibration anchors were detected
         - "critique_structure_score": float 0-1 rating of critique structure quality
-        - "structured_feedback": dict with parsed structured feedback (if available)
+        - "validation_errors": list of validation errors if any
     """
     result = {
         "score": None,
+        "score_confidence": 0.0,
         "analysis": {},
         "defect": None,
         "feedback_items": [],
+        "structured_feedback": {},
         "improvement_suggestion": None,
-        "delta": None,
+        "mode_adaptation_score": 0.0,
         "warnings": [],
         "calibration_anchors_used": False,
         "critique_structure_score": 0.0,
-        "structured_feedback": {},
+        "validation_errors": [],
     }
     
     # Validate the output first
