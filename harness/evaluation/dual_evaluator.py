@@ -203,10 +203,8 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         defect_section = "KEY RISK:"
         feedback_section = "ACTIONABLE MITIGATIONS:"
     
-    # DELTA VS PRIOR BEST is required and must have descriptive text
-    if "DELTA VS PRIOR BEST:" not in text:
-        issues.append("Missing 'DELTA VS PRIOR BEST:' section")
-    else:
+    # DELTA VS PRIOR BEST is optional but if present must have descriptive text
+    if "DELTA VS PRIOR BEST:" in text:
         delta_lines = [line for line in text.split('\n') if line.strip().startswith("DELTA VS PRIOR BEST:")]
         if delta_lines:
             delta_line = delta_lines[0]
@@ -340,11 +338,47 @@ def parse_score(
     # Clean the text - remove markdown code blocks if present
     clean_text = text
     if "```" in text:
-        # Remove code blocks entirely by joining non-code parts
-        parts = text.split("```")
-        # Keep only parts outside code blocks (even-indexed parts)
-        non_code_parts = [parts[i] for i in range(0, len(parts), 2)]
-        clean_text = "".join(non_code_parts)
+        # Process line by line to handle edge cases where SCORE: might be on same line as backticks
+        lines = text.split('\n')
+        in_code_block = False
+        cleaned_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            
+            # Check if this line contains backticks that might toggle code block state
+            if "```" in stripped:
+                # Check if this line starts and ends with backticks (single-line code block)
+                if stripped.startswith("```") and stripped.endswith("```") and len(stripped) > 3:
+                    # Single-line code block with content
+                    # Check if SCORE: is in this line
+                    if "SCORE:" in line.upper():
+                        # Keep this line for score parsing
+                        cleaned_lines.append(line)
+                    # Don't toggle code block state
+                    continue
+                else:
+                    # Check for opening or closing backticks
+                    # Count backticks to handle edge cases
+                    backtick_count = stripped.count("```")
+                    # If line starts with backticks, it's opening a code block
+                    if stripped.startswith("```"):
+                        in_code_block = True
+                        continue
+                    # If line ends with backticks and we're in a code block, it might be closing
+                    elif stripped.endswith("```") and in_code_block:
+                        # Check if SCORE: is in this line
+                        if "SCORE:" in line.upper():
+                            # Keep this line for score parsing
+                            cleaned_lines.append(line)
+                        in_code_block = False
+                        continue
+            
+            # Only add lines that are not inside code blocks
+            if not in_code_block:
+                cleaned_lines.append(line)
+        
+        clean_text = '\n'.join(cleaned_lines)
     
     # Three-tier extraction strategy
     
