@@ -127,3 +127,18 @@ class TestSecurity:
             content = read_file_atomically(file_via_link, allowed_paths=[allowed])
             # The fix ensures this returns None
             assert content is None
+
+    def test_validate_path_no_control_chars_del(self):
+        """Test that DEL character (U+007F) is properly rejected."""
+        # Assert that path with DEL character returns an error
+        error = validate_path_no_control_chars('safe/path\x7ftest')
+        assert error is not None
+        assert "U+007F (DEL)" in error
+        
+        # Assert that clean path returns None
+        assert validate_path_no_control_chars('safe/path') is None
+        
+        # Assert that whitespace characters are allowed
+        assert validate_path_no_control_chars('safe/\tpath') is None  # tab
+        assert validate_path_no_control_chars('safe/\npath') is None  # newline
+        assert validate_path_no_control_chars('safe/\rpath') is None  # carriage return
