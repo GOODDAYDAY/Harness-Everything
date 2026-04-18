@@ -58,6 +58,10 @@ def some_function():
     assert "a.b.c.d.e.f.g.h.i.j.k" in result.error, \
         f"Error should mention the invalid symbol. Got: {result.error}"
     
+    # New, specific assertion for the falsifiable criterion
+    assert f"Symbol '{max_depth_symbol}' exceeds maximum depth" in result.error, \
+        f"Error message must cite the symbol and mention depth violation for security audit. Got: {result.error}"
+    
     # Test: Valid symbol with maximum allowed depth (9 dots, 10 identifiers)
     valid_max_depth_symbol = "a.b.c.d.e.f.g.h.i.j"  # 9 dots, 10 identifiers
     
@@ -254,3 +258,16 @@ def test_validation_methods_consistent():
             assert symbol.strip() in validate_symbol_result[1] or symbol.strip() in execute_result.error, \
                 f"{description}: Error messages should mention the invalid symbol '{symbol}'. " \
                 f"validate_symbol: {validate_symbol_result[1]}, execute: {execute_result.error}"
+
+
+def test_validate_symbol_format_whitespace_bypass():
+    """Test that whitespace-only symbols are properly rejected.
+    
+    This test validates the fix for the whitespace validation bypass
+    in the _validate_symbol_format method.
+    """
+    tool = CrossReferenceTool()
+    for symbol in ["   ", "\t\t", "\n", " \t\n "]:
+        is_valid, error = tool._validate_symbol_format(symbol)
+        assert not is_valid
+        assert "whitespace-only" in error or "empty" in error
