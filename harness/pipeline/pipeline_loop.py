@@ -990,14 +990,19 @@ class PipelineLoop:
             "total_rounds": <int>,
             "best_score": <float>,
             "score_history": [{"round": <int>, "score": <float>}, ...],
+            "phase_score_history": [{"phase": <str>, "score": <float>}, ...],
+            "score_trend_warnings": [{"round": <int>, "message": <str>}, ...],
             "tool_error_rate": <float>,   // fraction of calls that returned an error
             "total_tool_calls": <int>,
             "elapsed_total_s": <float>,
+            "start_time": <iso8601>,
             "end_time": <iso8601>,
             "total_phases_run": <int>,
             "shutdown_reason": <str>,
             "meta_review_count": <int>,
-            "auto_push_count": <int>
+            "auto_push_count": <int>,
+            "health_metrics": <dict|null>,
+            "metrics_tool_turns": <int>
         }
         """
         import datetime
