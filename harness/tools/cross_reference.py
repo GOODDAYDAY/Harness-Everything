@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import re
 from pathlib import Path
@@ -191,6 +192,7 @@ class CrossReferenceTool(Tool):
         symbol = symbol.strip()
         try:
             symbol = self.validate_symbol(symbol)
+            logging.getLogger(__name__).debug(f"Validated symbol: {symbol}")
         except ValueError as e:
             return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
 
