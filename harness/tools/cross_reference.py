@@ -126,16 +126,39 @@ class CrossReferenceTool(Tool):
             return False
         if call_node.func.attr != func_name:
             return False
-    
-        # Check if the base is a variable name
-        if isinstance(call_node.func.value, ast.Name):
-            var_name = call_node.func.value.id
-            # Check if variable type matches target class
-            if context and var_name in context and context[var_name] == class_name:
-                return True
-            # Special case: 'self' in instance methods
-            if var_name == 'self' and context and context.get('self_class') == class_name:
-                return True
+
+        # Helper function to extract the base variable name from an expression
+        def extract_base_name(node: ast.AST) -> str | None:
+            """Extract the base variable name from an expression.
+            
+            For example:
+            - `obj` -> "obj"
+            - `obj.attr` -> "obj"
+            - `obj.attr.method()` -> "obj"
+            - `self.helper` -> "self"
+            """
+            if isinstance(node, ast.Name):
+                return node.id
+            elif isinstance(node, ast.Attribute):
+                return extract_base_name(node.value)
+            elif isinstance(node, ast.Call):
+                # For method calls like obj.method(), check the base of the method
+                if isinstance(node.func, ast.Attribute):
+                    return extract_base_name(node.func.value)
+            return None
+
+        # Extract the base variable name from the function call
+        base_name = extract_base_name(call_node.func.value)
+        if not base_name:
+            return False
+
+        # Check if variable type matches target class
+        if context and base_name in context and context[base_name] == class_name:
+            return True
+        # Special case: 'self' in instance methods
+        if base_name == 'self' and context and context.get('self_class') == class_name:
+            return True
+        
         return False
 
 
