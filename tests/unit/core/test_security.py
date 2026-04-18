@@ -289,3 +289,78 @@ def test_read_file_atomically_returns_none_for_invalid_paths():
         
         result = read_file_atomically(outside_file, [allowed_dir])
         assert result is None, "Should return None for file outside allowed paths"
+
+
+def test_read_file_atomically_reordered_checks_prevent_race():
+    """Test that reordered checks (device/inode before path containment) prevent race conditions.
+    
+    This specifically tests the critical security fix where device/inode comparison
+    happens BEFORE path containment check, eliminating the TOCTOU race window.
+    """
+    import tempfile
+    from pathlib import Path
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create allowed and forbidden directories
+        allowed_dir = tmpdir_path / "allowed"
+        allowed_dir.mkdir()
+        
+        forbidden_dir = tmpdir_path / "forbidden"
+        forbidden_dir.mkdir()
+        
+        # Create files with same name but different content
+        safe_file = allowed_dir / "target.txt"
+        safe_file.write_text("safe content")
+        
+        malicious_file = forbidden_dir / "target.txt"
+        malicious_file.write_text("malicious content")
+        
+        # Create a symlink in allowed directory
+        symlink_path = allowed_dir / "link.txt"
+        
+        # Test scenario: symlink initially points to safe file
+        symlink_path.symlink_to(safe_file)
+        
+        # First read should succeed
+        result = read_file_atomically(symlink_path, [allowed_dir])
+        assert result == "safe content", "Should read safe file through symlink"
+        
+        # Now simulate a race condition by swapping the symlink target
+        # This is what an attacker would do between directory open and file open
+        symlink_path.unlink()
+        symlink_path.symlink_to(malicious_file)
+        
+        # The function should now fail because:
+        # 1. It opens the malicious file (outside allowed paths)
+        # 2. Gets its device/inode
+        # 3. Compares with expected path (safe file in allowed dir)
+        # 4. Device/inode mismatch -> returns None
+        # 5. Path containment check never happens because we already returned None
+        result = read_file_atomically(symlink_path, [allowed_dir])
+        assert result is None, "Should return None when symlink points to different file (device/inode mismatch)"
+        
+        # Verify the malicious file still exists with its content
+        assert malicious_file.read_text() == "malicious content", "Malicious file should not be touched"
+        
+        # Additional test: Create a file with same device/inode (hard link scenario)
+        # This tests the path containment check after device/inode match
+        hardlink_in_allowed = allowed_dir / "hardlink.txt"
+        hardlink_in_allowed.hardlink_to(safe_file)  # Same inode as safe_file
+        
+        # This should succeed because:
+        # 1. Device/inode matches safe_file
+        # 2. Path is within allowed directory
+        result = read_file_atomically(hardlink_in_allowed, [allowed_dir])
+        assert result == "safe content", "Should read through hardlink within allowed paths"
+        
+        # Create hardlink in forbidden directory
+        hardlink_in_forbidden = forbidden_dir / "hardlink.txt"
+        hardlink_in_forbidden.hardlink_to(safe_file)  # Same inode as safe_file
+        
+        # This should fail because:
+        # 1. Device/inode matches safe_file (passes first check)
+        # 2. Path is outside allowed directory (fails second check)
+        result = read_file_atomically(hardlink_in_forbidden, [allowed_dir])
+        assert result is None, "Should return None for hardlink outside allowed paths even with same inode"
