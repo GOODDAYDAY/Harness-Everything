@@ -137,31 +137,60 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         
         try:
             # Try to open directory with secure flags if available
+            # O_PATH allows opening symlinks without following them
             dir_flags = getattr(os, 'O_PATH', 0) | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_CLOEXEC', 0)
             dir_fd = os.open(str(parent_dir), dir_flags)
         except (OSError, AttributeError):
             # Fallback for systems without O_PATH/O_DIRECTORY
-            dir_fd = os.open(str(parent_dir), os.O_RDONLY)
+            # Try O_NOFOLLOW to avoid following symlinks
+            no_follow = getattr(os, 'O_NOFOLLOW', 0)
+            try:
+                dir_fd = os.open(str(parent_dir), os.O_RDONLY | no_follow)
+            except OSError:
+                # If O_NOFOLLOW fails (e.g., on directories), fall back to regular open
+                # but we lose TOCTOU protection for symlink swaps
+                dir_fd = os.open(str(parent_dir), os.O_RDONLY)
         
-        # 3. [CRITICAL FIX] Get device/inode of the opened directory descriptor
+        # 3. Get device/inode of the opened directory descriptor
         dir_stat = os.fstat(dir_fd)
         
-        # 4. Validate the *real* parent directory is within allowed_paths
+        # 4. Check if what we opened matches what we expected
+        # Get stats of the original path (without following symlinks)
+        try:
+            original_stat = os.lstat(str(parent_dir))
+        except OSError:
+            return None
+        
+        # If the original path is a symlink, we need to verify it hasn't been swapped
+        if os.path.islink(str(parent_dir)):
+            # We opened the symlink (with O_PATH/O_NOFOLLOW) or its target (with O_RDONLY)
+            # Check if what we opened is still the same symlink
+            if not (dir_stat.st_dev == original_stat.st_dev and dir_stat.st_ino == original_stat.st_ino):
+                # What we opened doesn't match the original symlink
+                # This could mean:
+                # 1. We opened the symlink's target (O_RDONLY fallback) - dir_stat is target, original_stat is symlink
+                # 2. The symlink was swapped after we opened it
+                # In either case, we need to verify the symlink still points to what we opened
+                try:
+                    # Get current symlink target
+                    current_target = Path(os.readlink(str(parent_dir)))
+                    if not current_target.is_absolute():
+                        current_target = (parent_dir.parent / current_target).resolve()
+                    
+                    # Get stats of current target
+                    target_stat = current_target.stat()
+                    
+                    # Check if what we opened matches the current target
+                    if not (dir_stat.st_dev == target_stat.st_dev and dir_stat.st_ino == target_stat.st_ino):
+                        return None  # Symlink points elsewhere now
+                except OSError:
+                    return None
+        
+        # 5. Validate the *real* parent directory is within allowed_paths
         # Get the real path of the parent directory for containment check
         try:
             parent_real = Path(os.path.realpath(str(parent_dir)))
         except OSError:
-            return None
-        
-        # Security check: Ensure the opened dir_fd points to the intended directory
-        # Compare device/inode of the opened descriptor with the real path
-        try:
-            parent_real_stat = parent_real.stat()
-        except OSError:
-            return None
-        
-        # Verify the opened directory descriptor matches the real directory
-        if not (dir_stat.st_dev == parent_real_stat.st_dev and dir_stat.st_ino == parent_real_stat.st_ino):
             return None
         
         # Containment check: Ensure the real parent directory is within allowed paths
