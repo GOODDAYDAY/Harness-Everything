@@ -66,38 +66,7 @@ class CrossReferenceTool(Tool):
 
 
 
-    @staticmethod
-    def _is_instance_method_call(call_name: str, target_class: str, target_method: str) -> bool:
-        """Return True if call_name represents an instance method call for the target class."""
-        if not call_name.endswith(f".{target_method}"):
-            return False
-        # call_name could be: "obj.method", "self.method", "OtherClass.method"
-        parts = call_name.split('.')
-        if len(parts) != 2:
-            return False  # Not a simple attribute access
-        caller_obj = parts[0]
-        
-        # 1. Accept common instance references
-        common_refs = {"self", "cls", "obj", "instance", "this"}
-        if caller_obj in common_refs:
-            return True
-        
-        # 2. Accept if it's the target class itself
-        if caller_obj == target_class:
-            return True
-        
-        # 3. Accept if it's a lowercase version of the target class
-        # (e.g., "myclass" for "MyClass" - common convention for instances)
-        if caller_obj.lower() == target_class.lower():
-            return True
-        
-        # 4. Reject if it's clearly a different class (PascalCase)
-        if caller_obj and caller_obj[0].isupper():
-            return False
-        
-        # 5. For other lowercase variables, be conservative
-        # We'll accept them to avoid false negatives, but this may cause false positives
-        return True
+
 
     async def execute(
         self,
@@ -184,21 +153,27 @@ class CrossReferenceTool(Tool):
 
                 # Caller detection
                 if isinstance(node, ast.Call) and len(callers) < 50:
-                    cname = call_name(node)
+                    # Create context for instance method resolution
+                    context = {"self": class_name} if class_name else None
+                    cname = call_name(node, context)
                     if cname:
                         # For class methods: check if cname matches "ClassName.method_name"
                         # For standalone functions: check if cname matches "func_name"
                         if class_name:
                             expected = f"{class_name}.{func_name}"
-                            # Match: 1) Direct class method, 2) Instance method (*.method_name),
-                            # 3) Bare method name from call_name() for instance calls
-                            # Use helper to avoid false positives from OtherClass.method_name
-                            match = (cname == expected or
-                                    CrossReferenceTool._is_instance_method_call(cname, class_name, func_name) or
-                                    cname == func_name)
+                            # Match direct class method calls
+                            if cname == expected:
+                                match = True
+                            # Match instance method calls where call_name returned "ClassName.method_name"
+                            elif cname == func_name and isinstance(node.func, ast.Attribute):
+                                # Additional check: ensure it's called on 'self' or instance variable
+                                if isinstance(node.func.value, ast.Name) and node.func.value.id in (context or {}):
+                                    match = True
+                                else:
+                                    match = False
+                            else:
+                                match = False
                         else:
-                            # Looking for standalone function
-                            # Use exact match to avoid false positives like "test" matching "test_function"
                             match = cname == func_name
                         
                         if match:
