@@ -41,6 +41,10 @@ class CrossReferenceTool(Tool):
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
     _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$', re.ASCII)
+    
+    # Maximum depth for symbol qualification to prevent denial-of-service attacks
+    # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
+    _MAX_SYMBOL_DEPTH = 10
 
 
 
@@ -52,7 +56,8 @@ class CrossReferenceTool(Tool):
                     "type": "string",
                     "description": (
                         "Symbol to look up. Supports 'func_name' and "
-                        "'ClassName.method_name' forms."
+                        "'ClassName.method_name' forms. Maximum qualification depth "
+                        f"is {self._MAX_SYMBOL_DEPTH} (e.g., 'a.b.c.d.e.f.g.h.i.j' is 10)."
                     ),
                 },
                 "root": {
@@ -116,9 +121,17 @@ class CrossReferenceTool(Tool):
         
         return False
 
-
-
-
+    def _validate_symbol_depth(self, symbol: str) -> None:
+        """Validate that symbol qualification depth doesn't exceed maximum.
+        
+        Raises:
+            ValueError: If symbol depth exceeds _MAX_SYMBOL_DEPTH
+        """
+        depth = symbol.count('.') + 1  # Count dots to get depth
+        if depth > self._MAX_SYMBOL_DEPTH:
+            raise ValueError(
+                f"Symbol qualification depth {depth} exceeds maximum of {self._MAX_SYMBOL_DEPTH}"
+            )
 
     async def execute(
         self,
@@ -136,6 +149,12 @@ class CrossReferenceTool(Tool):
         symbol = symbol.strip()
         if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol):
             return ToolResult(error=f"Invalid symbol format: '{symbol}'", is_error=True)
+        
+        # Validate symbol depth to prevent denial-of-service attacks
+        try:
+            self._validate_symbol_depth(symbol)
+        except ValueError as e:
+            return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
         
         # Additional security validation (defense-in-depth)
         if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
