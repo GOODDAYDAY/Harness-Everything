@@ -27,6 +27,9 @@ from harness.tools.base import Tool, ToolResult
 
 _MAX_OUTPUT_BYTES = 8_192
 
+# Core identifier pattern for Python symbols (ASCII only for security)
+_SYMBOL_IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$', re.ASCII)
+
 
 class CrossReferenceTool(Tool):
     name = "cross_reference"
@@ -42,13 +45,15 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    # Allows 1-10 identifiers (0-9 dots), matching _MAX_SYMBOL_DEPTH=10
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,9}$', re.ASCII)
+    # Allows 1-9 identifiers (0-8 dots), matching _MAX_SYMBOL_IDENTIFIERS=10
+    # Note: We need to extract just the core pattern without ^ and $ anchors
+    _CORE_IDENTIFIER_PATTERN = r'[a-zA-Z_][a-zA-Z0-9_]*'
+    _VALID_SYMBOL_PATTERN = re.compile(r'^' + _CORE_IDENTIFIER_PATTERN + r'(?:\.' + _CORE_IDENTIFIER_PATTERN + r'){0,8}$', re.ASCII)
     
-    # Maximum depth for symbol qualification to prevent denial-of-service attacks
-    # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
+    # Maximum total identifiers (e.g., "a.b.c" has 3 identifiers) to prevent
+    # denial-of-service attacks via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
     # Matches regex pattern {0,9} (1-10 identifiers total).
-    _MAX_SYMBOL_DEPTH = 10
+    _MAX_SYMBOL_IDENTIFIERS = 10
 
     def _validate_symbol_format(self, symbol: str) -> tuple[bool, str]:
         """
@@ -62,9 +67,9 @@ class CrossReferenceTool(Tool):
 
         # Explicit depth check first for clearer error messages
         identifiers = symbol.split('.')
-        if len(identifiers) > self._MAX_SYMBOL_DEPTH:
+        if len(identifiers) > self._MAX_SYMBOL_IDENTIFIERS:
             # Enhanced error message for security auditing
-            return False, f"Symbol '{symbol}' exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers (found {len(identifiers)})."
+            return False, f"Symbol '{symbol}' exceeds maximum depth of {self._MAX_SYMBOL_IDENTIFIERS} identifiers (found {len(identifiers)})."
 
         # Defense-in-depth: regex validation
         if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
@@ -81,7 +86,7 @@ class CrossReferenceTool(Tool):
                     "description": (
                         "Symbol to look up. Supports 'func_name' and "
                         "'ClassName.method_name' forms. Maximum qualification depth "
-                        f"is {self._MAX_SYMBOL_DEPTH} (e.g., 'a.b.c.d.e.f.g.h.i.j' is 10)."
+                        f"is {self._MAX_SYMBOL_IDENTIFIERS} (e.g., 'a.b.c.d.e.f.g.h.i.j' is 10)."
                     ),
                 },
                 "root": {
@@ -309,3 +314,7 @@ class CrossReferenceTool(Tool):
         # Use the base class's safe JSON serialization
         output = self._safe_json(result, max_bytes=_MAX_OUTPUT_BYTES)
         return ToolResult(output=output)
+
+
+# Verify the refactored regex pattern works correctly
+assert CrossReferenceTool._VALID_SYMBOL_PATTERN.fullmatch("my.valid.symbol") is not None
