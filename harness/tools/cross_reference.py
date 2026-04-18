@@ -60,7 +60,8 @@ class CrossReferenceTool(Tool):
 
         # Check for empty/whitespace symbols
         if not symbol.strip():
-            return False, "Symbol cannot be empty or whitespace-only"
+            # For whitespace-only symbols, show them in quotes for clarity
+            return False, f"Symbol cannot be empty or whitespace-only: {repr(symbol)}"
 
         # Explicit depth check first for clearer error messages
         identifiers = symbol.split('.')
