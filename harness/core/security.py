@@ -127,8 +127,18 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # Open file descriptor without following symlinks
         fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         
-        # Get file stats from the descriptor (no path.stat() call to avoid TOCTOU)
+        # Get file stats from the descriptor
         fd_stat = os.fstat(fd)
+        
+        # Re-resolve the original path and check if it's still the same file
+        try:
+            path_stat = path.stat()
+        except OSError:
+            return None
+        
+        # Compare device and inode numbers to ensure we're reading the same file
+        if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
+            return None
         
         # Check if the resolved path is within allowed paths
         abs_path = path.resolve()
@@ -137,12 +147,14 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             return None
         
         # Read content from the file descriptor
+        # os.fdopen takes ownership of the file descriptor
         with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+            fd = None  # fdopen took ownership, don't close in finally
             return f.read()
     except (OSError, PermissionError, UnicodeDecodeError):
         return None
     finally:
-        # Ensure file descriptor is closed even if errors occur above
+        # Only close the file descriptor if os.fdopen didn't take ownership
         if fd is not None:
             try:
                 os.close(fd)
