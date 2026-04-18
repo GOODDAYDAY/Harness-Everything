@@ -103,10 +103,7 @@ class ToolRegistry:
         if config.allowed_tools and name not in config.allowed_tools:
             log.warning("registry: tool %r blocked by allowed_tools allowlist", name)
             return ToolResult(
-                error=(
-                    f"PERMISSION ERROR: tool {name!r} is not in the allowed_tools list.  "
-                    f"Allowed: {config.allowed_tools}"
-                ),
+                error=f"PERMISSION ERROR: Tool '{name}' is not in the allowed_tools list.",
                 is_error=True,
             )
 

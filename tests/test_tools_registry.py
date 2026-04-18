@@ -7,6 +7,7 @@ that breaks all modes on every import when a tool is added or removed.
 """
 
 import asyncio
+import tempfile
 from unittest.mock import Mock, AsyncMock
 
 # Import core.config first to resolve the shim circular-import ordering issue.
@@ -188,8 +189,35 @@ def test_tool_registry_execute_allowed_tools_restriction():
     # Test blocked tool
     result = asyncio.run(registry.execute("blocked_tool", config, {}))
     assert result.is_error
+    assert result.error == "PERMISSION ERROR: Tool 'blocked_tool' is not in the allowed_tools list."
     assert "PERMISSION ERROR" in result.error
     assert "not in the allowed_tools list" in result.error
+
+
+def test_tool_registry_execute_allowed_tools_none():
+    """Test ToolRegistry.execute() when allowed_tools is None (allow-all)."""
+    registry = ToolRegistry()
+    
+    # Create mock tool
+    mock_tool = Mock(spec=Tool)
+    mock_tool.name = "test_tool"
+    mock_tool.tags = frozenset()
+    mock_tool.input_schema.return_value = {"type": "object", "properties": {}}
+    mock_tool.execute = AsyncMock(return_value=ToolResult(output="success"))
+    
+    registry.register(mock_tool)
+    
+    # Config with allowed_tools=None (allow-all)
+    config = HarnessConfig(
+        workspace="/tmp/test",
+        allowed_paths=["/tmp/test"],
+        allowed_tools=None  # Should allow all tools
+    )
+    
+    # Test tool execution should succeed
+    result = asyncio.run(registry.execute("test_tool", config, {}))
+    assert not result.is_error
+    assert result.output == "success"
 
 
 def test_tool_registry_execute_parameter_normalization():
