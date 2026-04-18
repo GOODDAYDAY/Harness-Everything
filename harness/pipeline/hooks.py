@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import glob as glob_mod
 import py_compile
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,10 +106,14 @@ class ImportSmokeHook(VerificationHook):
             "from harness.tools import build_registry\n"
             "build_registry()\n"
         )
+        # Use sys.executable so the smoke runs under the same interpreter
+        # (and thus the same venv / installed packages) as the harness itself.
+        # Hardcoding "python" fails inside venv-based deployments where the
+        # bare name is not on PATH.
         proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                "python", "-c", script,
+                sys.executable, "-c", script,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=config.workspace,
@@ -125,7 +130,8 @@ class ImportSmokeHook(VerificationHook):
             )
         except FileNotFoundError:
             return HookResult(
-                passed=False, output="", errors="python executable not found"
+                passed=False, output="",
+                errors=f"interpreter not found: {sys.executable}",
             )
         except Exception as e:
             return HookResult(passed=False, output="", errors=str(e))
@@ -154,7 +160,7 @@ class PytestHook(VerificationHook):
         proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                "python", "-m", "pytest", self.test_path, "-v", "--tb=short",
+                sys.executable, "-m", "pytest", self.test_path, "-v", "--tb=short",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=config.workspace,
