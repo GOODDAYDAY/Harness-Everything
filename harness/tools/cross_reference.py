@@ -158,7 +158,7 @@ class CrossReferenceTool(Tool):
 
         for fpath in py_files:
             # Use atomic file reading to prevent TOCTOU symlink attacks
-            source = self._read_file_atomically(fpath, allowed)
+            source = read_file_atomically(fpath, allowed)
             if source is None:
                 continue
             
