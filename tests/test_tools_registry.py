@@ -155,7 +155,7 @@ def test_tool_registry_execute_unknown_tool():
     assert "Unknown tool" in result.error
 
 
-def test_tool_registry_execute_allowed_tools_restriction():
+def test_tool_registry_execute_allowed_tools_restriction(tmp_path):
     """Test ToolRegistry.execute() respects config.allowed_tools."""
     registry = ToolRegistry()
     
@@ -175,10 +175,14 @@ def test_tool_registry_execute_allowed_tools_restriction():
     registry.register(mock_tool1)
     registry.register(mock_tool2)
     
+    # Create a temporary directory for the workspace
+    workspace = tmp_path / "test_workspace"
+    workspace.mkdir()
+    
     # Config with allowed_tools restriction
     config = HarnessConfig(
-        workspace="/tmp/test",
-        allowed_paths=["/tmp/test"],
+        workspace=str(workspace),
+        allowed_paths=[str(workspace)],
         allowed_tools=["allowed_tool"]
     )
     
