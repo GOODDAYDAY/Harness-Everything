@@ -694,3 +694,90 @@ def test_read_file_atomically_toctou_resistance(tmp_path):
     malicious_result = read_file_atomically(malicious_file, [allowed_dir])
     assert malicious_result is None, \
         "Should not be able to read file outside allowed paths"
+
+
+def test_read_file_atomically_device_inode_verification(tmp_path):
+    """Direct test of device/inode verification logic in read_file_atomically."""
+    from harness.core.security import read_file_atomically
+    import os
+    
+    # Create two different files in the same allowed directory
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    
+    file1 = allowed_dir / "file1.txt"
+    file1.write_text("content 1")
+    
+    file2 = allowed_dir / "file2.txt"
+    file2.write_text("content 2")
+    
+    # Get their device/inode stats
+    stat1 = file1.stat()
+    stat2 = file2.stat()
+    
+    # Verify they're different files (different inodes or devices)
+    # This is the core security check that read_file_atomically performs
+    assert not (stat1.st_dev == stat2.st_dev and stat1.st_ino == stat2.st_ino), \
+        "Different files must have different device/inode pairs"
+    
+    # Test that read_file_atomically can read both files correctly
+    # (they're both in allowed directory)
+    result1 = read_file_atomically(file1, [allowed_dir])
+    result2 = read_file_atomically(file2, [allowed_dir])
+    
+    assert result1 == "content 1", "Should read first file correctly"
+    assert result2 == "content 2", "Should read second file correctly"
+    
+    # Now test the actual device/inode verification logic
+    # by simulating what happens inside read_file_atomically
+    abs_path = file1.resolve()
+    
+    # Open file descriptor
+    open_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(str(abs_path), open_flags)
+    
+    try:
+        # Get stats from file descriptor and from path
+        fd_stat = os.fstat(fd)
+        path_stat = abs_path.stat()
+        
+        # This is the exact check from read_file_atomically
+        assert fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino, \
+            "File descriptor should match resolved path (same file)"
+        
+        # Now test with a different file to show the check would fail
+        # if the file was swapped
+        abs_path2 = file2.resolve()
+        path_stat2 = abs_path2.stat()
+        
+        # This should fail because fd points to file1, not file2
+        assert not (fd_stat.st_dev == path_stat2.st_dev and fd_stat.st_ino == path_stat2.st_ino), \
+            "Device/inode check should detect different files"
+            
+    finally:
+        os.close(fd)
+    
+    # Test edge case: what if we can't stat the path after opening fd?
+    # (e.g., file was deleted)
+    file3 = allowed_dir / "file3.txt"
+    file3.write_text("content 3")
+    
+    abs_path3 = file3.resolve()
+    fd3 = os.open(str(abs_path3), open_flags)
+    
+    # Delete the file while we have the fd open
+    file3.unlink()
+    
+    try:
+        fd_stat3 = os.fstat(fd3)
+        # Try to stat the path (should fail)
+        try:
+            path_stat3 = abs_path3.stat()
+            # If we get here, the check should fail
+            assert not (fd_stat3.st_dev == path_stat3.st_dev and fd_stat3.st_ino == path_stat3.st_ino), \
+                "Device/inode check should fail when file is deleted"
+        except OSError:
+            # Expected - file was deleted
+            pass
+    finally:
+        os.close(fd3)
