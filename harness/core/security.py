@@ -166,6 +166,47 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
     # Create a hash of allowed_paths for cache key
     allowed_paths_hash = hash(tuple(sorted(str(p) for p in allowed_paths)))
     
+    # Get file stats first to check for multiple hardlinks
+    try:
+        file_stat = os.fstat(file_fd)
+        file_dev = file_stat.st_dev
+        file_ino = file_stat.st_ino
+        
+        # SECURITY FIX: Check for multiple hardlinks
+        # Files with multiple hardlinks could be accessed from outside allowed paths
+        if file_stat.st_nlink > 1:
+            # File has multiple hardlinks - potential security risk
+            # We need to ensure ALL hardlinks are within allowed paths
+            
+            # Try to get the path used to open this file
+            try:
+                proc_path = Path(f"/proc/self/fd/{file_fd}")
+                if proc_path.exists():
+                    opened_path = proc_path.readlink()
+                    opened_path_obj = Path(opened_path)
+                    
+                    # Check if the opened path is within allowed directories
+                    opened_in_allowed = any(
+                        opened_path_obj.is_relative_to(allowed) 
+                        for allowed in allowed_paths
+                    )
+                    
+                    # If the file has multiple hardlinks, we need to be extra cautious
+                    # For security, we'll only allow it if we can verify ALL hardlinks
+                    # are within allowed paths. Since we can't easily enumerate all
+                    # hardlinks, we'll take a conservative approach and reject
+                    # multi-hardlink files when opened via /proc path.
+                    if opened_in_allowed:
+                        # Even though opened path is in allowed directory,
+                        # other hardlinks might exist outside. Reject for safety.
+                        return False
+            except (OSError, ValueError):
+                # If we can't check the opened path, reject multi-hardlink files
+                return False
+    except OSError:
+        # Cannot stat file
+        return False
+    
     # Tier 1: Linux-specific /proc resolution (fastest and most accurate)
     try:
         # Read the symlink from /proc/self/fd/{file_fd}
@@ -182,10 +223,8 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
     
     # Tier 2: Cross-platform device/inode comparison
     try:
-        # Get device/inode of the opened file
-        file_stat = os.fstat(file_fd)
-        file_dev = file_stat.st_dev
-        file_ino = file_stat.st_ino
+        # Get device/inode of the opened file (already have from above)
+        # file_dev and file_ino are already set
         
         # Iterate through all files under allowed paths
         for allowed in allowed_paths:
@@ -261,7 +300,7 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # Step 1: Check if parent directory is a symlink before opening
         # This prevents TOCTOU attacks where a symlink could be swapped
         if os.path.islink(str(parent_dir)):
-            return None  # Parent directory is a symlink - reject for security
+            return "PERMISSION ERROR: Parent directory is a symlink"
         
         try:
             # Try to open directory with secure flags if available
@@ -283,18 +322,18 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # This implements device/inode validation to prevent TOCTOU attacks
         if not _validate_dir_fd_consistent(dir_fd, parent_dir):
             os.close(dir_fd)
-            return None  # Directory descriptor mismatch - possible TOCTOU attack
+            return "PERMISSION ERROR: Directory descriptor mismatch - possible TOCTOU attack"
         
         # 5. Validate the *real* parent directory is within allowed_paths
         # Get the real path of the parent directory for containment check
         try:
             parent_real = Path(os.path.realpath(str(parent_dir)))
         except OSError:
-            return None
+            return "PERMISSION ERROR: Cannot resolve real path of parent directory"
         
         # Containment check: Ensure the real parent directory is within allowed paths
         if not any(parent_real.is_relative_to(allowed) for allowed in allowed_paths):
-            return None
+            return "PERMISSION ERROR: Parent directory not within allowed paths"
         
         # 5. Open target file relative to dir_fd
         # Use O_NOFOLLOW to prevent following symlinks - this fixes TOCTOU attacks
@@ -303,32 +342,32 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         try:
             file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
         except OSError:
-            return None
+            return "PERMISSION ERROR: Cannot open file"
         
         # 6. CRITICAL SECURITY FIX: Validate the opened file is within allowed paths
         # This prevents hardlink attacks where a hardlink inside allowed directory
         # points to a file outside allowed directory
         if not _validate_file_within_allowed_paths(file_fd, allowed_paths):
             os.close(file_fd)
-            return None
+            return "PERMISSION ERROR: File not within allowed paths (hardlink attack prevented)"
         
         # 7. Verify the opened file matches the expected file
         file_stat = os.fstat(file_fd)
         try:
             expected_stat = (parent_real / filename).stat()
         except OSError:
-            return None
+            return "PERMISSION ERROR: Cannot stat expected file"
         
         if (file_stat.st_dev != expected_stat.st_dev or 
             file_stat.st_ino != expected_stat.st_ino):
-            return None
+            return "PERMISSION ERROR: File descriptor mismatch"
         
         # 8. Read content
         with os.fdopen(file_fd, 'r', encoding='utf-8', errors='replace') as f:
             file_fd = None
             return f.read()
     except (OSError, PermissionError, UnicodeDecodeError):
-        return None
+        return "PERMISSION ERROR: Error reading file"
     finally:
         # Clean up file descriptors
         if file_fd is not None:

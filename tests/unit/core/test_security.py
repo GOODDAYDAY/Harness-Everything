@@ -60,7 +60,9 @@ class TestSecurity:
             # Second read: With the security fix, symlinks are now rejected
             # to prevent TOCTOU attacks. The read should fail.
             content = read_file_atomically(link_path, allowed_paths=allowed)
-            assert content is None  # Security fix rejects symlinks
+            # Security fix rejects symlinks with a permission error
+            assert content is not None
+            assert "PERMISSION ERROR" in content
 
     def test_validate_path_security_order(self):
         """Validate that checks execute in security-critical order: null bytes first."""
@@ -93,7 +95,9 @@ class TestSecurity:
             # is outside the allowed directory
             content = read_file_atomically(hardlink, allowed_paths=[allowed_path])
             # The security fix now correctly rejects hardlinks to files outside allowed paths
-            assert content is None
+            assert content is not None
+            assert "PERMISSION ERROR" in content
+            assert "hardlink attack" in content
 
     def test_read_file_atomically_toctou_dir_fd_validation(self):
         """Test that TOCTOU attack via parent directory symlink swap is prevented."""
@@ -130,8 +134,9 @@ class TestSecurity:
             # point to 'disallowed'. The validation step will check if the real
             # path of 'disallowed' is within allowed_paths ([allowed]), which it is not.
             content = read_file_atomically(file_via_link, allowed_paths=[allowed])
-            # The fix ensures this returns None
-            assert content is None
+            # The fix ensures this returns a permission error
+            assert content is not None
+            assert "PERMISSION ERROR" in content
 
     def test_validate_path_no_control_chars_del(self):
         """Test that DEL character (U+007F) and whitespace control characters are properly rejected."""
