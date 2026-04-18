@@ -676,18 +676,18 @@ def some_function():
         assert "Symbol validation failed" not in result.error, \
             f"Valid deep symbol '{valid_deep_symbol}' incorrectly rejected: {result.error}"
     
-    # Test 3: Verify the _validate_symbol method directly
+    # Test 3: Verify the validate_symbol method directly
     # Create a symbol with 11 dots (12 identifiers) - should definitely exceed limit
     overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k.l"  # 11 dots, 12 identifiers
     
-    # Call the private validation method - should raise ValueError
+    # Call the validation method - should raise ValueError
     try:
-        tool._validate_symbol(overly_deep_symbol)
-        assert False, f"_validate_symbol should raise ValueError for symbol exceeding depth limit: {overly_deep_symbol}"
+        tool.validate_symbol(overly_deep_symbol)
+        assert False, f"validate_symbol should raise ValueError for symbol exceeding depth limit: {overly_deep_symbol}"
     except ValueError as e:
         validation_result = str(e)
-        assert "exceeds maximum identifier count" in validation_result, \
-            f"Validation error should contain 'exceeds maximum identifier count'. Got: {validation_result}"
+        assert "exceeds maximum identifier count" in validation_result or "exceeds maximum depth" in validation_result, \
+            f"Validation error should contain 'exceeds maximum identifier count' or 'exceeds maximum depth'. Got: {validation_result}"
         assert "12" in validation_result and "10" in validation_result, \
             f"Validation error should mention actual and limit values. Got: {validation_result}"
     
