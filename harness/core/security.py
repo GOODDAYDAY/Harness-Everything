@@ -70,8 +70,7 @@ def validate_path_no_null_bytes(path: str) -> str | None:
 def validate_path_no_control_chars(path: str) -> str | None:
     """Check if path contains control characters (except whitespace).
     
-    Control characters \x01 through \x1f (except \t, \n, \r) and \x7f (DEL)
-    can cause unexpected behavior in file systems and path resolution.
+    Rejects control characters from \x01-\x1F (excluding \t, \n, \r) and \x7F (DEL).
     
     Args:
         path: The path string to validate
