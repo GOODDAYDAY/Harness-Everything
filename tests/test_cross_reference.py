@@ -212,6 +212,15 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     instance_calls = [c for c in data["callers"] if "obj.my_method()" in c.get("snippet", "")]
     assert len(instance_calls) > 0, "Tool failed to detect instance method call `obj.my_method()`"
     
+    # Additional concrete assertion to validate the fix addresses the falsifiable criterion
+    # The test file contains two valid calls to MyClass.my_method:
+    # 1. obj.my_method()
+    # 2. MyClass.my_method(obj)
+    assert len(data["callers"]) == 2, f"Expected 2 calls, found {len(data['callers'])}: {data['callers']}"
+    # Specifically verify the instance method call via object is found
+    assert any("obj.my_method" in caller.get("snippet", "") for caller in data["callers"]), \
+        "Instance method call 'obj.my_method()' was not found"
+    
     # Test that searching for standalone function works correctly
     result2 = asyncio.run(tool.execute(
         config,
