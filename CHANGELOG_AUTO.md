@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-16: Critical TOCTOU security fix in read_file_atomically
+- Fixed critical TOCTOU vulnerability in `read_file_atomically` by adding proper device/inode validation
+- Now correctly detects symlink swaps by comparing opened directory descriptor with original path stats
+- Security test `test_read_file_atomically_toctou_dir_fd_validation` now passes with correct behavior
+
+---
+
 ## Summary
 
 | Round | Theme | Key Changes | Net Lines |
