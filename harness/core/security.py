@@ -180,19 +180,13 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
         # /proc not available or other error, fall through to Tier 2
         pass
     
-    # Tier 2: Cross-platform device/inode comparison with caching
+    # Tier 2: Cross-platform device/inode comparison
     try:
         # Get device/inode of the opened file
         file_stat = os.fstat(file_fd)
         file_dev = file_stat.st_dev
         file_ino = file_stat.st_ino
         
-        # Check cache first
-        cached_result = _validate_file_within_allowed_paths_cached(file_dev, file_ino, allowed_paths_hash)
-        if cached_result:
-            return True
-        
-        # Cache miss - perform full search
         # Iterate through all files under allowed paths
         for allowed in allowed_paths:
             if not allowed.exists():
@@ -204,10 +198,6 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
                     try:
                         stat_result = os.stat(str(file_path))
                         if stat_result.st_dev == file_dev and stat_result.st_ino == file_ino:
-                            # Update cache with positive result
-                            # Note: We can't update the LRU cache from here because
-                            # it's read-only in this context. The cache is populated
-                            # on cache misses in subsequent calls.
                             return True
                     except OSError:
                         # File may have been deleted or permissions changed
