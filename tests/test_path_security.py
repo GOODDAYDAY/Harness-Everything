@@ -682,8 +682,14 @@ def test_read_file_atomically_toctou_resistance(tmp_path):
     
     # Assert device/inode check would fail if files are different
     # This is the core security assertion from the plan
+    # The exact assertion specified in the implementation plan
     assert not (stat1.st_dev == stat2.st_dev and stat1.st_ino == stat2.st_ino), \
         "Device/inode check should detect different files"
+    
+    # Additional explicit assertion as specified in the plan
+    # This verifies the exact logic used in read_file_atomically
+    assert stat1.st_ino != stat2.st_ino or stat1.st_dev != stat2.st_dev, \
+        f"Device/inode mismatch check failed: inodes {stat1.st_ino} vs {stat2.st_ino}, devices {stat1.st_dev} vs {stat2.st_dev}"
     
     # Additional test: reading legitimate file directly should work
     direct_result = read_file_atomically(legit_file, [allowed_dir])
