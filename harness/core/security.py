@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 from pathlib import Path
 
 from harness.core.config import HarnessConfig
+
+log = logging.getLogger(__name__)
 
 
 def validate_path_no_homoglyphs(path: str, config: HarnessConfig | None = None) -> str | None:
