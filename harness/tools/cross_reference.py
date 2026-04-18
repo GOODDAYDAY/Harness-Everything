@@ -256,15 +256,15 @@ class CrossReferenceTool(Tool):
                         match = cname == func_name
                     
                     if match:
-                            lineno = getattr(node, "lineno", 0)
-                            snippet = (
-                                lines[lineno - 1].strip()
-                                if lines and lineno > 0
-                                else ""
-                            )
-                            callers.append(
-                                {"file": rel, "line": lineno, "snippet": snippet}
-                            )
+                        lineno = getattr(node, "lineno", 0)
+                        snippet = (
+                            lines[lineno - 1].strip()
+                            if lines and lineno > 0
+                            else ""
+                        )
+                        callers.append(
+                            {"file": rel, "line": lineno, "snippet": snippet}
+                        )
 
             # Test file detection
             if include_tests and len(test_files) < 20:
