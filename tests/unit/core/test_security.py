@@ -304,41 +304,45 @@ class TestSecurity:
         assert pattern.flags & re.ASCII
         assert pattern.fullmatch("unicode_symbol_α") is None  # Non-ASCII character
         
-        # Test the _validate_symbol method directly
+        # Test the validate_symbol method directly
         # Valid symbols should not raise
-        tool._validate_symbol("simple_function")
-        tool._validate_symbol("ClassName.method_name")
-        tool._validate_symbol("a.b.c.d.e.f.g.h.i.j")  # 10 identifiers, should pass
+        result = tool.validate_symbol("simple_function")
+        assert result == "simple_function"
+        result = tool.validate_symbol("ClassName.method_name")
+        assert result == "ClassName.method_name"
+        result = tool.validate_symbol("a.b.c.d.e.f.g.h.i.j")  # 10 identifiers, should pass
+        assert result == "a.b.c.d.e.f.g.h.i.j"
         # Additional assertion for the boundary case
-        tool._validate_symbol("a.b.c.d.e.f.g.h.i.j")  # Verify 10-identifier symbol passes validation
+        result = tool.validate_symbol("a.b.c.d.e.f.g.h.i.j")  # Verify 10-identifier symbol passes validation
+        assert result == "a.b.c.d.e.f.g.h.i.j"
         
         # Test invalid cases using pytest.raises
         import pytest
         
         # Test empty string
         with pytest.raises(ValueError, match="Symbol cannot be empty"):
-            tool._validate_symbol("")
+            tool.validate_symbol("")
         
         # Test whitespace only
         with pytest.raises(ValueError, match="Symbol cannot be empty"):
-            tool._validate_symbol("   ")
+            tool.validate_symbol("   ")
         
         # Test symbol exceeding maximum depth
         with pytest.raises(ValueError, match="Invalid symbol format"):
-            tool._validate_symbol("a.b.c.d.e.f.g.h.i.j.k")  # 11 identifiers
+            tool.validate_symbol("a.b.c.d.e.f.g.h.i.j.k")  # 11 identifiers
         
         # Test symbol with leading dot
         with pytest.raises(ValueError, match="Invalid symbol format"):
-            tool._validate_symbol(".start")
+            tool.validate_symbol(".start")
         
         # Test symbol with trailing dot
         with pytest.raises(ValueError, match="Invalid symbol format"):
-            tool._validate_symbol("end.")
+            tool.validate_symbol("end.")
         
         # Test symbol with consecutive dots
         with pytest.raises(ValueError, match="Invalid symbol format"):
-            tool._validate_symbol("double..dots")
+            tool.validate_symbol("double..dots")
         
         # Test symbol with Unicode character
         with pytest.raises(ValueError, match="Invalid symbol format"):
-            tool._validate_symbol("func©")
+            tool.validate_symbol("func©")

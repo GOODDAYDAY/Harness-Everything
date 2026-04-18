@@ -142,21 +142,6 @@ class CrossReferenceTool(Tool):
         
         return False
 
-    def _validate_symbol(self, symbol: str) -> None:
-        """Validate symbol format and depth.
-        
-        Performs comprehensive validation:
-        1. Checks for None or empty string
-        2. Validates format against _VALID_SYMBOL_PATTERN (includes ASCII check)
-        3. Checks depth against _MAX_SYMBOL_DEPTH
-        
-        Raises:
-            ValueError: If symbol validation fails
-        """
-        is_valid, error_msg = self._validate_symbol_format(symbol)
-        if not is_valid:
-            raise ValueError(f"Symbol validation failed: {error_msg}")
-    
     def validate_symbol(self, symbol: str) -> str:
         """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
         
