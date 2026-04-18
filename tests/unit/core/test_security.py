@@ -309,6 +309,8 @@ class TestSecurity:
         tool._validate_symbol("simple_function")
         tool._validate_symbol("ClassName.method_name")
         tool._validate_symbol("a.b.c.d.e.f.g.h.i.j")  # 10 identifiers, should pass
+        # Additional assertion for the boundary case
+        tool._validate_symbol("a.b.c.d.e.f.g.h.i.j")  # Verify 10-identifier symbol passes validation
         
         # Test invalid cases using pytest.raises
         import pytest
