@@ -189,9 +189,10 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     assert data["definition"] is not None, "Definition should be found"
     assert data["definition"]["file"] == "test_module.py"
     # Method definition is at line 3 (1-based) in the test content
-    # class MyClass: (line 1)
-    #     def my_method(self): (line 2)
-    assert data["definition"]["line"] == 2  # Line number of method definition
+    # Line 1: (empty line from triple quotes)
+    # Line 2: class MyClass:
+    # Line 3:     def my_method(self):
+    assert data["definition"]["line"] == 3  # Line number of method definition
     
     # Verify callers are found - should find 2 calls:
     # 1. obj.my_method() at line 17
