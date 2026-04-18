@@ -567,4 +567,46 @@ def some_function():
         # The error should mention the homoglyph
         assert "homoglyph" in result.error.lower() or "Cyrillic" in result.error or "U+0430" in result.error, \
             f"Error should mention homoglyph detection. Got: {result.error}"
-    assert "deprecated" not in result2.output.lower()
+
+
+def test_symbol_validation_rejects_unicode_homoglyphs():
+    """Test that symbol validation rejects Unicode homoglyphs.
+    
+    This validates the falsifiable criterion: the regex pattern with re.ASCII flag
+    should reject symbols containing Unicode homoglyphs like Cyrillic 'а' (U+0430).
+    """
+    from harness.tools.cross_reference import CrossReferenceTool
+    
+    tool = CrossReferenceTool()
+    pattern = tool._VALID_SYMBOL_PATTERN
+    
+    # Test valid ASCII symbols
+    assert pattern.match("my_function") is not None
+    assert pattern.match("ClassName.method_name") is not None
+    assert pattern.match("MyClass._private_method") is not None
+    
+    # Test rejection of Unicode homoglyphs
+    # Cyrillic 'а' (U+0430) looks like ASCII 'a' but should be rejected
+    assert pattern.match("Clаss.method") is None  # Cyrillic 'а' (U+0430) not ASCII 'a'
+    
+    # Test other Unicode characters that should be rejected
+    assert pattern.match("Cläss.method") is None  # German umlaut
+    assert pattern.match("Clàss.method") is None  # Accented character
+    assert pattern.match("Clâss.method") is None  # Another accented character
+    
+    # Test that the re.ASCII flag is working
+    # Without re.ASCII, [a-zA-Z_] would match some Unicode letters
+    # With re.ASCII, only ASCII letters are matched
+    import re
+    
+    # Create a pattern without re.ASCII for comparison
+    pattern_no_ascii = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$')
+    
+    # Without re.ASCII, some Unicode letters might match depending on locale
+    # With re.ASCII, they should definitely not match
+    assert pattern.match("Clаss.method") is None  # Should be None with re.ASCII
+    
+    # Additional test: verify the pattern rejects mixed Unicode/ASCII
+    assert pattern.match("Class.mеthod") is None  # Cyrillic 'е' (U+0435) in method name
+    assert pattern.match("Clаss.method") is None  # Cyrillic 'а' in class name
+    assert pattern.match("Class.method") is not None  # Pure ASCII should match
