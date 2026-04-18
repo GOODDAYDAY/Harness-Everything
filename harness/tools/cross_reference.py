@@ -40,7 +40,8 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$', re.ASCII)
+    # Maximum qualification depth of 10 (0-10 repetitions of dot+identifier)
+    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,10}$', re.ASCII)
     
     # Maximum depth for symbol qualification to prevent denial-of-service attacks
     # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
@@ -149,6 +150,9 @@ class CrossReferenceTool(Tool):
         symbol = symbol.strip()
         if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol):
             return ToolResult(error=f"Invalid symbol format: '{symbol}'", is_error=True)
+        
+        # Security assertion to ensure regex validation is working
+        assert re.match(self._VALID_SYMBOL_PATTERN, symbol), f"Invalid or overly deep symbol: {symbol}"
         
         # Validate symbol depth to prevent denial-of-service attacks
         try:

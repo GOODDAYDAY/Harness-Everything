@@ -262,3 +262,41 @@ class TestSecurity:
             # Also verify that the secure alternative is available
             from harness.core.security import read_file_atomically
             assert callable(read_file_atomically)
+
+    def test_cross_reference_symbol_depth_validation(self):
+        """Test that cross-reference tool properly validates symbol depth.
+        
+        This test verifies the security guard against denial-of-service attacks
+        via deeply nested symbols in the cross-reference tool.
+        """
+        # Import CrossReferenceTool and its validation pattern
+        from harness.tools.cross_reference import CrossReferenceTool
+        import re
+        
+        # Get the pattern from the class
+        pattern = CrossReferenceTool._VALID_SYMBOL_PATTERN
+        
+        # Test valid symbols
+        assert pattern.fullmatch("os.path.join") is not None
+        assert pattern.fullmatch("ClassName.method_name") is not None
+        assert pattern.fullmatch("simple_function") is not None
+        
+        # Test valid symbol with maximum depth (11 identifiers, 10 dots)
+        # a.b.c.d.e.f.g.h.i.j.k has 10 dots, which is the maximum allowed
+        valid_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"
+        assert pattern.fullmatch(valid_deep_symbol) is not None
+        
+        # Test overly deep symbol (12 identifiers, 11 dots) - should be rejected
+        overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k.l"
+        assert pattern.fullmatch(overly_deep_symbol) is None
+        
+        # Test invalid symbols
+        assert pattern.fullmatch("bad-symbol") is None  # Invalid character
+        assert pattern.fullmatch("123start") is None    # Starts with number
+        assert pattern.fullmatch(".leading_dot") is None  # Leading dot
+        assert pattern.fullmatch("trailing_dot.") is None  # Trailing dot
+        assert pattern.fullmatch("double..dots") is None  # Consecutive dots
+        
+        # Test that the pattern is ASCII-only (security requirement)
+        assert pattern.flags & re.ASCII
+        assert pattern.fullmatch("unicode_symbol_α") is None  # Non-ASCII character
