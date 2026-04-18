@@ -68,51 +68,36 @@ def test_evaluator_mode_headers():
 
 def test_structured_output_format():
     """Test that evaluator output follows structured format."""
-    from harness.evaluation.dual_evaluator import validate_evaluator_output
+    from harness.evaluation.dual_evaluator import _STRICT_RE
     
-    # Test basic evaluator structure
-    basic_output = """DELTA VS PRIOR BEST: More specific file references
-ANALYSIS:
-A. Correctness: 8.5 — Logic is sound
-B. Completeness: 7.0 — Missing edge cases
-C. Specificity: 9.0 — Names concrete functions
-D. Architecture fit: 8.0 — Fits existing patterns
-TOP DEFECT: dual_evaluator.py::parse_score — doesn't handle markdown code blocks
-ACTIONABLE FEEDBACK:
-1. Update parse_score to strip markdown code blocks
-2. Add test for markdown parsing edge case
-WHAT WOULD MAKE THIS 10/10: Add validation for structured output format
-SCORE: 8.1"""
+    # Test the _STRICT_RE regex directly as specified in the plan
+    # Test cases from the plan
+    assert _STRICT_RE.search("SCORE: 7.5") is not None
+    assert _STRICT_RE.search("SCORE: 7.5 with notes") is not None
+    assert _STRICT_RE.search("SCORE: invalid") is None
     
-    is_valid, issues = validate_evaluator_output(basic_output, "basic")
-    assert is_valid, f"Basic evaluator output should be valid, issues: {issues}"
+    # Additional test cases for robustness
+    assert _STRICT_RE.search("SCORE: 8.1") is not None
+    assert _STRICT_RE.search("  SCORE: 9.0  ") is not None  # With whitespace
+    assert _STRICT_RE.search("SCORE: 10") is not None
+    assert _STRICT_RE.search("SCORE: 0.5") is not None
+    assert _STRICT_RE.search("SCORE: 7.5\n") is not None  # With newline
+    assert _STRICT_RE.search("\nSCORE: 7.5\n") is not None  # With surrounding newlines
     
-    # Test that DELTA VS PRIOR BEST header is present and has content
-    assert "DELTA VS PRIOR BEST:" in basic_output
-    delta_line = [line for line in basic_output.split('\n') if line.startswith("DELTA VS PRIOR BEST:")][0]
-    assert len(delta_line) > len("DELTA VS PRIOR BEST:") + 1  # Must have descriptive text
+    # Negative test cases
+    assert _STRICT_RE.search("SCORE: abc") is None  # Not a number
+    assert _STRICT_RE.search("SCORE: ") is None  # Missing number
+    assert _STRICT_RE.search("SCORE:7.5") is None  # Missing space after colon
+    assert _STRICT_RE.search("SCORE: 7.5.5") is None  # Invalid number format
     
-    # Test diffusion evaluator structure
-    diffusion_output = """DELTA VS PRIOR BEST: Better risk assessment
-ANALYSIS:
-A. Caller impact: 7.0 — 2 callers need updates
-B. Maintenance debt: 8.0 — Minimal new complexity
-C. Emergent behaviour: 9.0 — No unexpected side effects
-D. Rollback safety: 8.5 — Easy to revert
-KEY RISK: cross_reference.py::execute — may exceed output limit
-ACTIONABLE MITIGATIONS:
-1. Add output truncation in cross_reference tool
-2. Validate JSON size before serialization
-WHAT WOULD MAKE THIS 10/10: Already perfect
-SCORE: 8.1"""
+    # Verify the regex captures the score correctly
+    match = _STRICT_RE.search("SCORE: 7.5")
+    assert match is not None
+    assert match.group(1) == "7.5"
     
-    is_valid, issues = validate_evaluator_output(diffusion_output, "diffusion")
-    assert is_valid, f"Diffusion evaluator output should be valid, issues: {issues}"
-    
-    # Test that DELTA VS PRIOR BEST header is present and has content
-    assert "DELTA VS PRIOR BEST:" in diffusion_output
-    delta_line = [line for line in diffusion_output.split('\n') if line.startswith("DELTA VS PRIOR BEST:")][0]
-    assert len(delta_line) > len("DELTA VS PRIOR BEST:") + 1  # Must have descriptive text
+    match = _STRICT_RE.search("SCORE: 8.1 with additional text")
+    assert match is not None
+    assert match.group(1) == "8.1"
 
 
 def test_extract_structured_feedback():
