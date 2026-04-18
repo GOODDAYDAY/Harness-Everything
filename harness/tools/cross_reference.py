@@ -155,7 +155,10 @@ class CrossReferenceTool(Tool):
                         if class_name:
                             # Looking for ClassName.method_name
                             expected = f"{class_name}.{func_name}"
-                            match = cname == expected
+                            # Match either:
+                            # 1. Direct class method call: MyClass.method_name
+                            # 2. Instance method call: *.method_name (where * is any attribute chain)
+                            match = cname == expected or cname.endswith(f".{func_name}")
                         else:
                             # Looking for standalone function
                             # Use exact match to avoid false positives like "test" matching "test_function"
