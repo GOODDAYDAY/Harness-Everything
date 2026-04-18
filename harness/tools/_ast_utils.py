@@ -18,46 +18,49 @@ def _read_file_atomically(path: Path | str, allowed_paths: list[Path] | None = N
     Args:
         path: Path to the file to read.
         allowed_paths: Optional list of allowed directory paths for security containment.
-        
+            
     Returns:
         File content as string, or None if the file cannot be read securely.
     """
     import os
+    fd = None
     try:
-        # Open file descriptor without following symlinks
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        # 1. RESOLVE and VALIDATE path security FIRST
+        abs_path = Path(path).resolve()
+        
+        # Check if the resolved path is within allowed paths (if provided)
+        if allowed_paths is not None:
+            if not any(abs_path.is_relative_to(allowed_path) 
+                      for allowed_path in allowed_paths):
+                return None
+        
+        # 2. Open file descriptor (with O_NOFOLLOW)
+        open_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        fd = os.open(str(abs_path), open_flags)
+        
+        # 3. FINAL VERIFICATION: Ensure opened fd matches the resolved path
+        fd_stat = os.fstat(fd)
         try:
-            # Get file stats from the descriptor
-            fd_stat = os.fstat(fd)
-            
-            # Re-resolve the original path and check if it's still the same file
-            try:
-                path_stat = Path(path).stat()
-            except OSError:
-                return None
-            
-            # Compare device and inode numbers to ensure we're reading the same file
-            if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
-                return None
-            
-            # Check if the resolved path is within allowed paths (if provided)
-            if allowed_paths is not None:
-                abs_path = Path(path).resolve()
-                if not any(abs_path.is_relative_to(allowed_path) 
-                          for allowed_path in allowed_paths):
-                    return None
-            
-            # Read content from the file descriptor
-            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-                return f.read()
-        finally:
-            # Ensure file descriptor is closed even if errors occur above
+            path_stat = abs_path.stat()
+        except OSError:
+            return None
+        
+        if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
+            return None  # File was swapped after resolution but before open
+        
+        # 4. Read content
+        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+            fd = None
+            return f.read()
+    except (OSError, PermissionError, UnicodeDecodeError):
+        return None
+    finally:
+        # Only close the file descriptor if os.fdopen didn't take ownership
+        if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
-    except (OSError, PermissionError, UnicodeDecodeError):
-        return None
 
 
 def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
@@ -95,8 +98,6 @@ def build_parent_map(tree: ast.AST) -> dict[int, ast.AST]:
         for child in ast.iter_child_nodes(node):
             parent_map[id(child)] = node
     return parent_map
-
-
 
 
 
