@@ -328,7 +328,7 @@ class TestSecurity:
             tool.validate_symbol("   ")
         
         # Test symbol exceeding maximum depth
-        with pytest.raises(ValueError, match="Invalid symbol format"):
+        with pytest.raises(ValueError, match="exceeds maximum depth"):
             tool.validate_symbol("a.b.c.d.e.f.g.h.i.j.k")  # 11 identifiers
         
         # Test symbol with leading dot

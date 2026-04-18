@@ -51,12 +51,10 @@ def some_function():
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
     
-    # Verify the error contains the exact phrase about invalid symbol format
-    # Note: The regex validation happens first, so we get "Invalid symbol format" 
-    # instead of "exceeds maximum identifier count" - this is correct defense-in-depth
-    # The error should contain either "Invalid symbol format" or "exceeds maximum depth"
-    assert "Invalid symbol format" in result.error or "exceeds maximum depth" in result.error, \
-        f"Error should contain validation failure message. Got: {result.error}"
+    # Verify the error contains the exact phrase about exceeding maximum depth
+    # The explicit depth check happens first now, so we should get "exceeds maximum depth"
+    assert "exceeds maximum depth" in result.error, \
+        f"Error should contain 'exceeds maximum depth'. Got: {result.error}"
     assert "a.b.c.d.e.f.g.h.i.j.k" in result.error, \
         f"Error should mention the invalid symbol. Got: {result.error}"
     
@@ -167,6 +165,10 @@ def some_function():
     assert result.is_error, f"Symbol exceeding maximum depth should trigger error: {overly_deep_symbol}"
     assert "Symbol validation failed" in result.error, \
         f"Error should contain 'Symbol validation failed'. Got: {result.error}"
+    assert "exceeds maximum depth" in result.error, \
+        f"Error should contain 'exceeds maximum depth'. Got: {result.error}"
+    assert overly_deep_symbol in result.error, \
+        f"Error should mention the invalid symbol. Got: {result.error}"
     
     # Test 4: Valid symbol should not trigger validation error
     valid_symbol = "some_function"
