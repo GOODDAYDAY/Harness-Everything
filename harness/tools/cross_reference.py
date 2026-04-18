@@ -55,18 +55,15 @@ class CrossReferenceTool(Tool):
         Returns a tuple (is_valid, error_message).
         If is_valid is True, error_message is empty string.
         """
-        if not symbol:
-            return False, "Symbol cannot be empty"
-
-        # Check for empty/whitespace symbols
-        if not symbol.strip():
-            # For whitespace-only symbols, show them in quotes for clarity
+        # Combined check for empty or whitespace-only symbols
+        if not symbol or not symbol.strip():
             return False, f"Symbol cannot be empty or whitespace-only: {repr(symbol)}"
 
         # Explicit depth check first for clearer error messages
         identifiers = symbol.split('.')
         if len(identifiers) > self._MAX_SYMBOL_DEPTH:
-            return False, f"Symbol exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers: {symbol}"
+            # Enhanced error message for security auditing
+            return False, f"Symbol '{symbol}' exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers (found {len(identifiers)})."
 
         # Defense-in-depth: regex validation
         if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
@@ -179,11 +176,13 @@ class CrossReferenceTool(Tool):
             return err_result
         
         # Validate symbol format, depth, and security using consolidated validation
-        symbol = symbol.strip()
-        is_valid, error_msg = self._validate_symbol_format(symbol)
-        if not is_valid:
-            return ToolResult(error=f"Symbol validation failed: {error_msg}", is_error=True)
-        logging.getLogger(__name__).debug(f"Validated symbol: {symbol}")
+        try:
+            validated_symbol = self.validate_symbol(symbol)
+        except ValueError as e:
+            return ToolResult(error=f"Symbol validation failed: {str(e)}", is_error=True)
+        logging.getLogger(__name__).debug(f"Validated symbol: {validated_symbol}")
+        
+        symbol = validated_symbol
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
