@@ -107,12 +107,20 @@ def parent_class(tree: ast.AST, target: ast.AST) -> str | None:
     return None
 
 
-def call_name(node: ast.Call) -> str | None:
+def call_name(node: ast.Call, context: dict[str, str] | None = None) -> str | None:
     """Extract a string representation of a call node.
+    
+    Args:
+        node: The call AST node
+        context: Optional mapping from variable names to class names for
+                 resolving instance method calls (e.g., {"self": "MyClass"})
     
     Returns:
     - "func_name" for ast.Name nodes
+    - "ClassName.method_name" for ast.Attribute nodes where value is a Name
+      and context maps the variable name to a class name
     - "obj.method_name" for ast.Attribute nodes where value is a Name
+      (when no context mapping available)
     - "b.method_name" for nested attributes like a.b.method_name (keep last two)
     - "method_name" for other ast.Attribute nodes
     - None for other call types
@@ -121,8 +129,13 @@ def call_name(node: ast.Call) -> str | None:
         return node.func.id
     if isinstance(node.func, ast.Attribute):
         attr = node.func.attr
-        if isinstance(node.func.value, ast.Name):
-            return f"{node.func.value.id}.{attr}"
+        # Try to resolve instance variable to class name using context
+        if isinstance(node.func.value, ast.Name) and context:
+            var_name = node.func.value.id
+            class_name = context.get(var_name)
+            if class_name:
+                return f"{class_name}.{attr}"
+            return f"{var_name}.{attr}"
         # Nested attribute like a.b.c → keep b.c for readability
         if isinstance(node.func.value, ast.Attribute):
             return f"{node.func.value.attr}.{attr}"
