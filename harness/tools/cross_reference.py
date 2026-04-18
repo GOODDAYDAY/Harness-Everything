@@ -40,8 +40,8 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    # Maximum qualification depth of 10 (0-10 repetitions of dot+identifier)
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,10}$', re.ASCII)
+    # Maximum qualification depth of 10 (0-9 repetitions of dot+identifier for total of 10)
+    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,9}$', re.ASCII)
     
     # Maximum depth for symbol qualification to prevent denial-of-service attacks
     # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
@@ -122,17 +122,31 @@ class CrossReferenceTool(Tool):
         
         return False
 
-    def _validate_symbol_depth(self, symbol: str) -> None:
-        """Validate that symbol qualification depth doesn't exceed maximum.
+    def _validate_symbol(self, symbol: str) -> None:
+        """Validate symbol format and depth.
+        
+        Performs comprehensive validation:
+        1. Checks depth against _MAX_SYMBOL_DEPTH
+        2. Validates format against _VALID_SYMBOL_PATTERN
+        3. Additional security checks
         
         Raises:
-            ValueError: If symbol depth exceeds _MAX_SYMBOL_DEPTH
+            ValueError: If symbol validation fails
         """
+        # 1. Depth validation
         depth = symbol.count('.') + 1  # Count dots to get depth
         if depth > self._MAX_SYMBOL_DEPTH:
             raise ValueError(
                 f"Symbol qualification depth {depth} exceeds maximum of {self._MAX_SYMBOL_DEPTH}"
             )
+        
+        # 2. Format validation
+        if not re.match(self._VALID_SYMBOL_PATTERN, symbol):
+            raise ValueError(f"Invalid symbol format: {symbol}")
+        
+        # 3. Additional security checks
+        if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
+            raise ValueError(f"Potentially malicious symbol: '{symbol}'")
 
     async def execute(
         self,
@@ -146,23 +160,12 @@ class CrossReferenceTool(Tool):
         if err_result:
             return err_result
         
-        # Validate symbol format to prevent injection of malicious characters
+        # Validate symbol format, depth, and security
         symbol = symbol.strip()
-        if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol):
-            return ToolResult(error=f"Invalid symbol format: '{symbol}'", is_error=True)
-        
-        # Security assertion to ensure regex validation is working
-        assert re.match(self._VALID_SYMBOL_PATTERN, symbol), f"Invalid or overly deep symbol: {symbol}"
-        
-        # Validate symbol depth to prevent denial-of-service attacks
         try:
-            self._validate_symbol_depth(symbol)
+            self._validate_symbol(symbol)
         except ValueError as e:
             return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
-        
-        # Additional security validation (defense-in-depth)
-        if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
-            return ToolResult(error=f"Potentially malicious symbol: '{symbol}'", is_error=True)
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
