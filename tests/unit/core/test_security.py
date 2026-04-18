@@ -35,7 +35,7 @@ class TestSecurity:
         """Test that read_file_atomically prevents TOCTOU symlink swap attacks.
         
         The security fix validates symlinks properly to prevent TOCTOU attacks.
-        Both files are in the allowed directory, so both reads should succeed.
+        After a symlink swap, the second read must fail to prevent TOCTOU attacks.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -57,10 +57,10 @@ class TestSecurity:
             link_path.unlink()
             link_path.symlink_to(malicious_file)
 
-            # Second read: Both files are in allowed directory,
-            # so reading through symlink should succeed
+            # Second read: After symlink swap, TOCTOU protection should detect
+            # the change and return None to prevent the attack
             content = read_file_atomically(link_path, allowed_paths=allowed)
-            assert content == "stolen data"
+            assert content is None
 
     def test_validate_path_security_order(self):
         """Validate that checks execute in security-critical order: null bytes first."""
@@ -131,9 +131,8 @@ class TestSecurity:
             # point to 'disallowed'. The validation step will check if the real
             # path of 'disallowed' is within allowed_paths ([allowed]), which it is not.
             content = read_file_atomically(file_via_link, allowed_paths=[allowed])
-            # The fix ensures this returns a permission error
-            assert content is not None
-            assert "PERMISSION ERROR" in content
+            # The fix ensures this returns None on permission error
+            assert content is None
 
     def test_validate_path_no_control_chars_del(self):
         """Test that DEL character (U+007F) and whitespace control characters are properly rejected."""
