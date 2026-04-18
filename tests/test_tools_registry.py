@@ -7,7 +7,6 @@ that breaks all modes on every import when a tool is added or removed.
 """
 
 import asyncio
-import tempfile
 from unittest.mock import Mock, AsyncMock
 
 # Import core.config first to resolve the shim circular-import ordering issue.
