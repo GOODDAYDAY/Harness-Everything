@@ -124,32 +124,28 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
     """
     fd = None
     try:
-        # Open file descriptor without following symlinks
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-        
-        # Get file stats from the descriptor
+        # 1. RESOLVE and VALIDATE path security FIRST
+        abs_path = path.resolve()
+        if not any(abs_path.is_relative_to(allowed) for allowed in allowed_paths):
+            return None
+
+        # 2. Open file descriptor (with O_NOFOLLOW)
+        open_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        fd = os.open(str(abs_path), open_flags)
+
+        # 3. FINAL VERIFICATION: Ensure opened fd matches the resolved path
         fd_stat = os.fstat(fd)
-        
-        # Re-resolve the original path and check if it's still the same file
         try:
-            path_stat = path.stat()
+            path_stat = abs_path.stat()
         except OSError:
             return None
-        
-        # Compare device and inode numbers to ensure we're reading the same file
+
         if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
-            return None
-        
-        # Check if the resolved path is within allowed paths
-        abs_path = path.resolve()
-        if not any(abs_path.is_relative_to(allowed_path) 
-                  for allowed_path in allowed_paths):
-            return None
-        
-        # Read content from the file descriptor
-        # os.fdopen takes ownership of the file descriptor
+            return None  # File was swapped after resolution but before open
+
+        # 4. Read content
         with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-            fd = None  # fdopen took ownership, don't close in finally
+            fd = None
             return f.read()
     except (OSError, PermissionError, UnicodeDecodeError):
         return None
