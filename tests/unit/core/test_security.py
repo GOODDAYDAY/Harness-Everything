@@ -75,7 +75,12 @@ class TestSecurity:
         assert "homoglyph" not in error
 
     def test_read_file_atomically_hardlink_scenario(self):
-        """Test that hardlinks to files outside allowed paths are rejected."""
+        """Test that hardlinks to files outside allowed paths are rejected.
+        
+        This test verifies that the security fix for hardlink attacks works correctly.
+        The hardlink validation now checks the actual file location, not just the
+        hardlink path, preventing access to files outside allowed directories.
+        """
         with tempfile.TemporaryDirectory() as allowed_tmp, tempfile.TemporaryDirectory() as outside_tmp:
             allowed_path = Path(allowed_tmp)
             outside_path = Path(outside_tmp)
@@ -86,13 +91,11 @@ class TestSecurity:
             os.link(original, hardlink)
 
             # Attempt to read via hardlink inside allowed directory
-            # Note: read_file_atomically returns None on failure, doesn't raise PermissionError
+            # The security fix should reject this because the actual file
+            # is outside the allowed directory
             content = read_file_atomically(hardlink, allowed_paths=[allowed_path])
-            # Note: The current implementation does not reject hardlinks because
-            # it checks the path of the hardlink (allowed_path/link.txt), not the
-            # original file path. This is a known limitation.
-            # The test is updated to reflect actual behavior.
-            assert content == "confidential"
+            # The security fix now correctly rejects hardlinks to files outside allowed paths
+            assert content is None
 
     def test_read_file_atomically_toctou_dir_fd_validation(self):
         """Test that TOCTOU attack via parent directory symlink swap is prevented."""
@@ -133,7 +136,7 @@ class TestSecurity:
             assert content is None
 
     def test_validate_path_no_control_chars_del(self):
-        """Test that DEL character (U+007F) is properly rejected."""
+        """Test that DEL character (U+007F) and whitespace control characters are properly rejected."""
         # Assert that path with DEL character returns an error
         error = validate_path_no_control_chars('safe/path\x7ftest')
         assert error is not None
@@ -142,7 +145,24 @@ class TestSecurity:
         # Assert that clean path returns None
         assert validate_path_no_control_chars('safe/path') is None
         
-        # Assert that whitespace characters are allowed
-        assert validate_path_no_control_chars('safe/\tpath') is None  # tab
-        assert validate_path_no_control_chars('safe/\npath') is None  # newline
-        assert validate_path_no_control_chars('safe/\rpath') is None  # carriage return
+        # Assert that whitespace control characters are now rejected
+        error = validate_path_no_control_chars('safe/\tpath')
+        assert error is not None
+        assert "U+0009 (TAB)" in error
+        
+        error = validate_path_no_control_chars('safe/\npath')
+        assert error is not None
+        assert "U+000A (LF)" in error
+        
+        error = validate_path_no_control_chars('safe/\rpath')
+        assert error is not None
+        assert "U+000D (CR)" in error
+        
+        # Test other whitespace control characters
+        error = validate_path_no_control_chars('safe/\x0Bpath')
+        assert error is not None
+        assert "U+000B (VT)" in error
+        
+        error = validate_path_no_control_chars('safe/\x0Cpath')
+        assert error is not None
+        assert "U+000C (FF)" in error
