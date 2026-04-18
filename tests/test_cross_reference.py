@@ -188,21 +188,20 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     # Verify the definition is found
     assert data["definition"] is not None, "Definition should be found"
     assert data["definition"]["file"] == "test_module.py"
-    # Method definition is at line 3 (1-based) in the test content
-    # Line 1: (empty line from triple quotes)
-    # Line 2: class MyClass:
-    # Line 3:     def my_method(self):
-    assert data["definition"]["line"] == 3  # Line number of method definition
+    # Method definition is at line 2 (1-based) in the test content
+    # Line 1: class MyClass:
+    # Line 2:     def my_method(self):
+    assert data["definition"]["line"] == 2  # Line number of method definition
     
     # Verify callers are found - should find 2 calls:
-    # 1. obj.my_method() at line 17
-    # 2. MyClass.my_method(obj) at line 19
-    # The standalone_function() call at line 22 should NOT be included
+    # 1. obj.my_method() at line 16
+    # 2. MyClass.my_method(obj) at line 18
+    # The standalone_function() call at line 21 should NOT be included
     assert len(data["callers"]) == 2, f"Expected 2 callers, found {len(data['callers'])}"
     
     # Verify the callers are at the correct lines
     caller_lines = sorted([caller["line"] for caller in data["callers"]])
-    assert caller_lines == [17, 19], f"Callers should be at lines 17 and 19, found at {caller_lines}"
+    assert caller_lines == [16, 18], f"Callers should be at lines 16 and 18, found at {caller_lines}"
     
     # Verify snippets contain the method call
     for caller in data["callers"]:
@@ -221,4 +220,4 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     
     # Should find 1 caller for standalone_function
     assert len(data2["callers"]) == 1, f"Expected 1 caller for standalone_function, found {len(data2['callers'])}"
-    assert data2["callers"][0]["line"] == 22, f"Standalone function call should be at line 22, found at {data2['callers'][0]['line']}"
+    assert data2["callers"][0]["line"] == 21, f"Standalone function call should be at line 21, found at {data2['callers'][0]['line']}"
