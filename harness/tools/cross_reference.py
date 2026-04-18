@@ -245,14 +245,17 @@ class CrossReferenceTool(Tool):
                             # Match direct class method calls
                             if cname == expected:
                                 match = True
-                            # Match instance method calls where call_name returned "ClassName.method_name"
-                            elif cname == func_name and isinstance(node.func, ast.Attribute):
-                                # Additional check: ensure it's called on 'self' or instance variable
-                                if isinstance(node.func.value, ast.Name) and node.func.value.id in (context or {}):
-                                    match = True
+                            # Match instance method calls where call_name returned "var_name.method_name"
+                            # and we need to check if it's actually our target method
+                            elif cname.endswith(f".{func_name}") and isinstance(node.func, ast.Attribute):
+                                # This could be an instance method call like obj.my_method()
+                                # We need to check if the attribute name matches
+                                if node.func.attr == func_name:
+                                    # Use the helper method to check if it's an instance of our class
+                                    match = self._is_instance_method_call(node, class_name, func_name, context)
                                 else:
                                     match = False
-                            # Match instance method calls using the helper method
+                            # Match instance method calls using the helper method (for other cases)
                             elif self._is_instance_method_call(node, class_name, func_name, context):
                                 match = True
                             else:
