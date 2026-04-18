@@ -68,9 +68,10 @@ def validate_path_no_null_bytes(path: str) -> str | None:
 
 
 def validate_path_no_control_chars(path: str) -> str | None:
-    """Check if path contains control characters (except whitespace).
+    """Check if path contains control characters.
     
-    Rejects control characters from \x01-\x1F (excluding \t, \n, \r) and \x7F (DEL).
+    Rejects all control characters including whitespace control characters
+    that could cause unexpected behavior in path handling.
     
     Args:
         path: The path string to validate
@@ -78,14 +79,47 @@ def validate_path_no_control_chars(path: str) -> str | None:
     Returns:
         Error message if control character found, None if path is clean
     """
-    for i in range(1, 0x20):
-        if i in (0x09, 0x0A, 0x0D):  # \t, \n, \r are allowed
-            continue
-        if chr(i) in path:
-            return f"PERMISSION ERROR: path contains control character U+{i:04X}"
-    # Also check for DEL character (0x7f)
-    if "\x7f" in path:
-        return "PERMISSION ERROR: path contains control character U+007F (DEL)"
+    # Dictionary of control characters with descriptions
+    control_chars = {
+        '\x00': 'U+0000 (NULL)',
+        '\x01': 'U+0001 (SOH)',
+        '\x02': 'U+0002 (STX)',
+        '\x03': 'U+0003 (ETX)',
+        '\x04': 'U+0004 (EOT)',
+        '\x05': 'U+0005 (ENQ)',
+        '\x06': 'U+0006 (ACK)',
+        '\x07': 'U+0007 (BEL)',
+        '\x08': 'U+0008 (BS)',
+        '\x09': 'U+0009 (TAB)',
+        '\x0A': 'U+000A (LF)',
+        '\x0B': 'U+000B (VT)',
+        '\x0C': 'U+000C (FF)',
+        '\x0D': 'U+000D (CR)',
+        '\x0E': 'U+000E (SO)',
+        '\x0F': 'U+000F (SI)',
+        '\x10': 'U+0010 (DLE)',
+        '\x11': 'U+0011 (DC1)',
+        '\x12': 'U+0012 (DC2)',
+        '\x13': 'U+0013 (DC3)',
+        '\x14': 'U+0014 (DC4)',
+        '\x15': 'U+0015 (NAK)',
+        '\x16': 'U+0016 (SYN)',
+        '\x17': 'U+0017 (ETB)',
+        '\x18': 'U+0018 (CAN)',
+        '\x19': 'U+0019 (EM)',
+        '\x1A': 'U+001A (SUB)',
+        '\x1B': 'U+001B (ESC)',
+        '\x1C': 'U+001C (FS)',
+        '\x1D': 'U+001D (GS)',
+        '\x1E': 'U+001E (RS)',
+        '\x1F': 'U+001F (US)',
+        '\x7F': 'U+007F (DEL)',
+    }
+    
+    for char, description in control_chars.items():
+        if char in path:
+            return f"PERMISSION ERROR: Path contains disallowed control character: {description}"
+    
     return None
 
 
@@ -112,6 +146,65 @@ def validate_path_security(path: str, config: HarnessConfig | None = None) -> st
     if error := validate_path_no_homoglyphs(path, config):
         return error
     return None
+
+
+def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path]) -> bool:
+    """Validate that a file descriptor points to a file within allowed paths.
+    
+    Implements a three-tier validation strategy:
+    1. Linux-specific: Use /proc/self/fd/{file_fd} to resolve the real path
+    2. Cross-platform fallback: Compare device/inode with all files under allowed_paths
+    3. Deny by default: Return False if validation cannot be performed
+    
+    Args:
+        file_fd: Open file descriptor to validate
+        allowed_paths: List of allowed directory paths
+        
+    Returns:
+        True if the file is within allowed_paths, False otherwise
+    """
+    # Tier 1: Linux-specific /proc resolution (fastest and most accurate)
+    try:
+        # Read the symlink from /proc/self/fd/{file_fd}
+        proc_path = Path(f"/proc/self/fd/{file_fd}")
+        if proc_path.exists():
+            target = proc_path.readlink()
+            # Get the real path (resolve any symlinks in the target path)
+            real_path = Path(os.path.realpath(str(target)))
+            # Check if the real path is within any allowed path
+            return any(real_path.is_relative_to(allowed) for allowed in allowed_paths)
+    except (OSError, ValueError):
+        # /proc not available or other error, fall through to Tier 2
+        pass
+    
+    # Tier 2: Cross-platform device/inode comparison
+    try:
+        # Get device/inode of the opened file
+        file_stat = os.fstat(file_fd)
+        file_dev = file_stat.st_dev
+        file_ino = file_stat.st_ino
+        
+        # Iterate through all files under allowed paths
+        for allowed in allowed_paths:
+            if not allowed.exists():
+                continue
+            # Recursively walk through all files
+            for root, dirs, files in os.walk(str(allowed)):
+                for filename in files:
+                    file_path = Path(root) / filename
+                    try:
+                        stat_result = os.stat(str(file_path))
+                        if stat_result.st_dev == file_dev and stat_result.st_ino == file_ino:
+                            return True
+                    except OSError:
+                        # File may have been deleted or permissions changed
+                        continue
+    except OSError:
+        # Cannot stat file or walk directories
+        pass
+    
+    # Tier 3: Deny by default
+    return False
 
 
 def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
@@ -212,7 +305,14 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         except OSError:
             return None
         
-        # 6. Verify the opened file matches the expected file
+        # 6. CRITICAL SECURITY FIX: Validate the opened file is within allowed paths
+        # This prevents hardlink attacks where a hardlink inside allowed directory
+        # points to a file outside allowed directory
+        if not _validate_file_within_allowed_paths(file_fd, allowed_paths):
+            os.close(file_fd)
+            return None
+        
+        # 7. Verify the opened file matches the expected file
         file_stat = os.fstat(file_fd)
         try:
             expected_stat = (parent_real / filename).stat()
@@ -223,7 +323,7 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             file_stat.st_ino != expected_stat.st_ino):
             return None
         
-        # 7. Read content
+        # 8. Read content
         with os.fdopen(file_fd, 'r', encoding='utf-8', errors='replace') as f:
             file_fd = None
             return f.read()
