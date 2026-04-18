@@ -244,3 +244,21 @@ class TestSecurity:
             # Test 3: Clean filename (should succeed)
             content = read_file_atomically(safe_file, allowed_paths=[allowed_dir])
             assert content == "legitimate content"
+
+    def test_read_file_atomically_replaces_deprecated_function(self):
+        """Test that the deprecated _read_file_atomically function has been removed.
+        
+        This test verifies that the dead code removal criterion was met by
+        ensuring the deprecated function cannot be imported.
+        """
+        # Attempt to import the deprecated function - should raise ImportError
+        try:
+            from harness.tools._ast_utils import _read_file_atomically
+            # If we get here, the function still exists (test should fail)
+            pytest.fail("_read_file_atomically still exists - dead code not removed")
+        except ImportError as e:
+            # Expected behavior - function has been removed
+            assert "_read_file_atomically" in str(e) or "cannot import name" in str(e)
+            # Also verify that the secure alternative is available
+            from harness.core.security import read_file_atomically
+            assert callable(read_file_atomically)
