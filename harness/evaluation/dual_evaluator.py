@@ -267,8 +267,10 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic", contex
         
         # Extract numbered items with multiple formats
         item_patterns = [
-            r"^\s*(\d+)\.\s+(.+)$",  # 1. item
-            r"^\s*[-*]\s+(.+)$",     # - item or * item
+            r"^\s*(\d+)\.\s+(.+)$",      # 1. item
+            r"^\s*(\d+)\)\s+(.+)$",      # 1) item
+            r"^\s*\((\d+)\)\s+(.+)$",    # (1) item
+            r"^\s*[-*•]\s+(.+)$",        # - item, * item, or • item
         ]
         
         structured_feedback = []
@@ -280,16 +282,21 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic", contex
             priority = None
             feedback_text = line
             
-            # Try numbered format first
-            match = re.match(r"^\s*(\d+)\.\s+(.+)$", line)
-            if match:
-                priority = int(match.group(1))
-                feedback_text = match.group(2)
+            # Try numbered formats
+            numbered_match = None
+            for pattern in [r"^\s*(\d+)\.\s+(.+)$", r"^\s*(\d+)\)\s+(.+)$", r"^\s*\((\d+)\)\s+(.+)$"]:
+                numbered_match = re.match(pattern, line)
+                if numbered_match:
+                    break
+            
+            if numbered_match:
+                priority = int(numbered_match.group(1))
+                feedback_text = numbered_match.group(2)
             else:
                 # Try bullet format
-                match = re.match(r"^\s*[-*]\s+(.+)$", line)
-                if match:
-                    feedback_text = match.group(1)
+                bullet_match = re.match(r"^\s*[-*•]\s+(.+)$", line)
+                if bullet_match:
+                    feedback_text = bullet_match.group(1)
             
             # Parse file::function — change pattern
             file = None
@@ -599,7 +606,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             score_match = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)', score_line)
             if score_match:
                 score = float(score_match.group(1))
-                calibration_warnings = validate_score_calibration(score, evaluator_type)
+                calibration_warnings = validate_score_calibration(score, evaluator_type, mode)
                 for warning in calibration_warnings:
                     issues.append(f"WARNING: {warning}")
         except (ValueError, AttributeError):
@@ -670,10 +677,20 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             # Debate mode should mention text proposals or planning
             if "text proposal" not in text.lower() and "planning round" not in text.lower():
                 issues.append("Debate mode output should mention 'text proposal' or 'planning round'")
+            # Debate mode should focus on reasoning quality, not execution
+            if "executed code" in text.lower() or "tool calls" in text.lower():
+                issues.append("WARNING: Debate mode should focus on reasoning quality, not execution details")
         elif mode == "implement":
             # Implement mode should mention executed code or code state
             if "executed code" not in text.lower() and "code state" not in text.lower():
                 issues.append("Implement mode output should mention 'executed code' or 'code state'")
+            # Implement mode should reference specific file changes
+            if "file::" not in text and "function::" not in text:
+                issues.append("WARNING: Implement mode should reference specific file/function changes")
+    
+    # Enhanced calibration validation
+    calibration_issues = validate_calibration_anchors(text, evaluator_type, mode)
+    issues.extend(calibration_issues)
     
     # Token budget check (warning only)
     if len(text) > 8000:  # Rough estimate: ~2000 tokens

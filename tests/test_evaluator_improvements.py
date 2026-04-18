@@ -126,6 +126,41 @@ SCORE: 7.8"""
     assert feedback["delta"] == "Better error handling"
 
 
+def test_extract_structured_feedback_improved_parsing():
+    """Test improved parsing of structured feedback with various formats."""
+    from harness.evaluation.dual_evaluator import extract_structured_feedback
+    
+    # Test various feedback item formats
+    test_output = """DELTA VS PRIOR BEST: Improved parsing
+ANALYSIS:
+A. Correctness: 9.0 — Excellent logic
+B. Completeness: 8.5 — Good coverage
+TOP DEFECT: parser.py::parse_feedback — missing validation
+ACTIONABLE FEEDBACK:
+- Fix validation in parser.py::parse_feedback
+* Add test cases for edge conditions
+1) Improve error messages
+2. Handle empty input gracefully
+3. Add logging for debugging
+WHAT WOULD MAKE THIS 10/10: Add comprehensive validation
+SCORE: 8.7"""
+    
+    feedback = extract_structured_feedback(test_output, "basic")
+    assert feedback["score"] == 8.7
+    assert feedback["analysis"]["Correctness"] == 9.0
+    assert feedback["analysis"]["Completeness"] == 8.5
+    assert feedback["defect"] == "parser.py::parse_feedback — missing validation"
+    
+    # Should parse all feedback items regardless of bullet format
+    assert len(feedback["feedback_items"]) >= 4
+    assert "Fix validation in parser.py::parse_feedback" in feedback["feedback_items"]
+    assert "Add test cases for edge conditions" in feedback["feedback_items"]
+    assert "Improve error messages" in feedback["feedback_items"]
+    assert "Handle empty input gracefully" in feedback["feedback_items"]
+    assert feedback["improvement_suggestion"] == "Add comprehensive validation"
+    assert feedback["delta"] == "Improved parsing"
+
+
 def test_parse_score_with_markdown():
     """Test score parsing with markdown code blocks."""
     from harness.evaluation.dual_evaluator import parse_score
