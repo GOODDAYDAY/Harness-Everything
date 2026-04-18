@@ -134,8 +134,12 @@ def test_cross_reference_finds_instance_method_calls(tmp_path):
     making the comparison cname == f"{class_name}.{func_name}" always fail 
     for instance method calls.
     """
+    # Create workspace directory
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    
     # Create a test Python file with class definition and instance method calls
-    test_file = tmp_path / "test_module.py"
+    test_file = workspace / "test_module.py"
     test_file.write_text("""
 class MyClass:
     def my_method(self):
@@ -159,10 +163,6 @@ MyClass.my_method(obj)   # Class-style call - should be found
 # Call standalone function
 standalone_function()    # Should NOT be found for "MyClass.my_method"
 """)
-    
-    # Create workspace directory
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
     
     # Create config
     config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
