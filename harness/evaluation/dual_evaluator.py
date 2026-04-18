@@ -126,15 +126,29 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic", contex
     result = {
         "score": None,
         "score_confidence": 0.0,
+        "score_breakdown": {
+            "base_score": None,
+            "calibration_bonus": 0.0,
+            "structure_bonus": 0.0,
+            "mode_adaptation_bonus": 0.0,
+        },
         "analysis": {},
         "defect": None,
         "feedback_items": [],
         "structured_feedback": {},
         "improvement_suggestion": None,
         "mode_adaptation_score": 0.0,
+        "mode_specific_insights": [],
         "warnings": [],
         "calibration_anchors_used": False,
+        "calibration_anchor_details": [],
         "critique_structure_score": 0.0,
+        "critique_structure_breakdown": {
+            "analysis_structure": 0.0,
+            "defect_structure": 0.0,
+            "feedback_structure": 0.0,
+            "improvement_structure": 0.0,
+        },
         "validation_errors": [],
     }
     
