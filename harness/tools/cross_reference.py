@@ -138,7 +138,7 @@ class CrossReferenceTool(Tool):
         depth = symbol.count('.') + 1  # Count dots to get depth
         if depth > self._MAX_SYMBOL_DEPTH:
             raise ValueError(
-                f"Symbol qualification depth {depth} exceeds maximum of {self._MAX_SYMBOL_DEPTH}"
+                f"Symbol qualification depth {depth} exceeds maximum depth of {self._MAX_SYMBOL_DEPTH}"
             )
         
         # 2. Format validation
