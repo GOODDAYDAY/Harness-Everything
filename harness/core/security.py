@@ -153,16 +153,6 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         except OSError:
             return None
         
-        # 4. Verify parent directory is within allowed paths using the directory fd
-        try:
-            # Use os.path.realpath with dir_fd to get canonical path
-            parent_realpath = os.path.realpath(str(parent_dir), dir_fd=dir_fd)
-            parent_realpath_path = Path(parent_realpath)
-            if not any(parent_realpath_path.is_relative_to(allowed) for allowed in allowed_paths):
-                return None
-        except OSError:
-            return None
-        
         # 5. Open the target file relative to the directory fd with O_NOFOLLOW
         # This ensures we open the actual file, not a symlink
         file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)

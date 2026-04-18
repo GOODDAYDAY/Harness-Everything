@@ -544,8 +544,11 @@ class PipelineLoop:
                         log.warning(warning_msg)
                         # Store warning for inclusion in summary
                         self.score_trend_warnings.append({
-                            "round": outer + 1,
-                            "decline_streak": _decline_streak,
+                            "round_start": outer + 2 - _decline_streak,  # +1 for 1-indexed, +1 because streak starts one before current
+                            "round_end": outer + 1,
+                            "score_start": streak_scores[0],
+                            "score_end": streak_scores[-1],
+                            "decline_percent": round(((streak_scores[0] - streak_scores[-1]) / streak_scores[0]) * 100, 2) if streak_scores[0] > 0 else 0.0,
                             "message": warning_msg,
                             "scores": streak_scores,
                             "type": "decline"
@@ -570,8 +573,11 @@ class PipelineLoop:
                     log.warning(flatline_msg)
                     # Store warning for inclusion in summary
                     self.score_trend_warnings.append({
-                        "round": outer + 1,
-                        "flatline_streak": _flatline_streak,
+                        "round_start": outer + 2 - _flatline_streak,  # +1 for 1-indexed, +1 because streak starts one before current
+                        "round_end": outer + 1,
+                        "score_start": flatline_scores[0],
+                        "score_end": flatline_scores[-1],
+                        "decline_percent": 0.0,  # No decline, just flatline
                         "message": flatline_msg,
                         "scores": flatline_scores,
                         "type": "flatline"
