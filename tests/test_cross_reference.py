@@ -226,3 +226,24 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     # Should find 1 caller for standalone_function
     assert len(data2["callers"]) == 1, f"Expected 1 caller for standalone_function, found {len(data2['callers'])}"
     assert data2["callers"][0]["line"] == 21, f"Standalone function call should be at line 21, found at {data2['callers'][0]['line']}"
+    
+    # Additional test: directly verify the _is_instance_method_call helper
+    # Parse a simple AST to test the helper method
+    import ast
+    test_code = "obj.my_method()"
+    tree = ast.parse(test_code)
+    call_node = tree.body[0].value  # Get the Call node
+    
+    # Test that the helper correctly identifies instance method calls
+    # The helper should return True for this call when looking for "MyClass.my_method"
+    assert tool._is_instance_method_call(call_node, "MyClass", "my_method", {}) is True, \
+        "_is_instance_method_call should return True for obj.my_method()"
+    
+    # Test negative case: different method name
+    assert tool._is_instance_method_call(call_node, "MyClass", "other_method", {}) is False, \
+        "_is_instance_method_call should return False for wrong method name"
+    
+    # Test negative case: different class name (should still match since it's checking method name)
+    # The helper checks if the method name matches, not the class name for instance calls
+    assert tool._is_instance_method_call(call_node, "OtherClass", "my_method", {}) is True, \
+        "_is_instance_method_call should return True for correct method name even with different class"
