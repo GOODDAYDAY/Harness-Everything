@@ -66,6 +66,20 @@ class CrossReferenceTool(Tool):
 
 
 
+    @staticmethod
+    def _is_instance_method_call(call_name: str, target_class: str, target_method: str) -> bool:
+        """Return True if call_name represents an instance method call for the target class."""
+        if not call_name.endswith(f".{target_method}"):
+            return False
+        # call_name could be: "method", "obj.method", "self.method", "OtherClass.method"
+        parts = call_name.split('.')
+        if len(parts) != 2:
+            return False  # Not a simple attribute access
+        # Accept calls where the first part is NOT clearly a different class.
+        # This handles "self.method", "obj.method", "cls.method" while rejecting "OtherClass.method".
+        caller_obj = parts[0]
+        return caller_obj not in {"otherclass", "other_class"} and caller_obj.lower() != target_class.lower()
+
     async def execute(
         self,
         config: HarnessConfig,
@@ -98,14 +112,14 @@ class CrossReferenceTool(Tool):
         test_pattern = re.compile(rf'(?<!\w){re.escape(func_name)}(?!\w)') if include_tests else None
 
         for fpath in py_files:
-            # Security containment check first to avoid TOCTOU symlink attacks
+            # Security containment check FIRST to avoid TOCTOU symlink attacks
             try:
-                # Read file content BEFORE path resolution to close TOCTOU window
-                source = fpath.read_text(encoding="utf-8", errors="replace")
-                # Now resolve and check containment
+                # Security containment check FIRST
                 abs_path = fpath.resolve()
                 if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) for allowed_path in allowed):
-                    continue  # Skip files outside allowed paths
+                    continue
+                # Read content only after path validation
+                source = abs_path.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 continue
             
@@ -156,18 +170,12 @@ class CrossReferenceTool(Tool):
                         # For class methods: check if cname matches "ClassName.method_name"
                         # For standalone functions: check if cname matches "func_name"
                         if class_name:
-                            # Looking for ClassName.method_name
                             expected = f"{class_name}.{func_name}"
-                            # Match any of:
-                            # 1. Direct class method call: MyClass.method_name
-                            # 2. Instance method call: *.method_name (where * is any attribute chain)
-                            # 3. Bare method name: method_name (when call_name returns just the method name)
-                            # Use precise matching to avoid false positives:
-                            # - Check if cname is exactly "ClassName.method_name"
-                            # - OR check if cname ends with ".method_name" AND starts with "ClassName."
-                            # - OR check if cname is just "method_name" (for bare calls)
-                            match = (cname == expected or 
-                                    (cname.endswith(f".{func_name}") and cname.split('.')[0] == class_name) or 
+                            # Match: 1) Direct class method, 2) Instance method (*.method_name),
+                            # 3) Bare method name from call_name() for instance calls
+                            # Use helper to avoid false positives from OtherClass.method_name
+                            match = (cname == expected or
+                                    CrossReferenceTool._is_instance_method_call(cname, class_name, func_name) or
                                     cname == func_name)
                         else:
                             # Looking for standalone function
