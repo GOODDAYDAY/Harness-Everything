@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.core.security import read_file_atomically
 from harness.tools._ast_utils import (
     parent_class,
     function_signature,
@@ -41,54 +42,7 @@ class CrossReferenceTool(Tool):
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
     _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$')
 
-    def _read_file_atomically(self, path: Path, allowed_paths: list[Path]) -> str | None:
-        """Read a file atomically to prevent TOCTOU symlink attacks.
-        
-        Args:
-            path: Path to the file to read.
-            allowed_paths: List of allowed directory paths for security containment.
-            
-        Returns:
-            File content as string, or None if the file cannot be read securely.
-        """
-        fd = None
-        try:
-            # Open file descriptor without following symlinks
-            fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
-            
-            # Get file stats from the descriptor
-            fd_stat = os.fstat(fd)
-            
-            # Re-resolve the original path and check if it's still the same file
-            try:
-                path_stat = path.stat()
-            except OSError:
-                return None
-            
-            # Compare device and inode numbers to ensure we're reading the same file
-            if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
-                return None
-            
-            # Check if the resolved path is within allowed paths
-            abs_path = path.resolve()
-            if not any(abs_path.is_relative_to(allowed_path) 
-                      for allowed_path in allowed_paths):
-                return None
-            
-            # Read content from the file descriptor
-            # os.fdopen takes ownership of the file descriptor
-            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-                fd = None  # fdopen took ownership, don't close in finally
-                return f.read()
-        except (OSError, PermissionError, UnicodeDecodeError):
-            return None
-        finally:
-            # Only close the file descriptor if os.fdopen didn't take ownership
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+
 
     def input_schema(self) -> dict[str, Any]:
         return {
