@@ -184,6 +184,16 @@ class CrossReferenceTool(Tool):
         except ValueError as e:
             return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
 
+        # Explicit depth validation as secondary security check (defense-in-depth)
+        # _MAX_SYMBOL_DEPTH counts dots; identifier count is depth + 1
+        max_identifiers = self._MAX_SYMBOL_DEPTH + 1
+        identifier_count = len(symbol.split('.'))
+        if identifier_count > max_identifiers:
+            raise ValueError(
+                f"Symbol '{symbol}' exceeds maximum identifier count of "
+                f"{max_identifiers} (got {identifier_count})"
+            )
+
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
         func_name = parts[1] if len(parts) == 2 else parts[0]
