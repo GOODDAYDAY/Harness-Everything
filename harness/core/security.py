@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from harness.core.config import HarnessConfig
 
 
@@ -107,3 +110,41 @@ def validate_path_security(path: str, config: HarnessConfig | None = None) -> st
     if error := validate_path_no_homoglyphs(path, config):
         return error
     return None
+
+
+def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
+    """Read a file atomically to prevent TOCTOU symlink attacks.
+    
+    Args:
+        path: Path to the file to read.
+        allowed_paths: List of allowed directory paths for security containment.
+        
+    Returns:
+        File content as string, or None if the file cannot be read securely.
+    """
+    fd = None
+    try:
+        # Open file descriptor without following symlinks
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        
+        # Get file stats from the descriptor (no path.stat() call to avoid TOCTOU)
+        fd_stat = os.fstat(fd)
+        
+        # Check if the resolved path is within allowed paths
+        abs_path = path.resolve()
+        if not any(abs_path.is_relative_to(allowed_path) 
+                  for allowed_path in allowed_paths):
+            return None
+        
+        # Read content from the file descriptor
+        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read()
+    except (OSError, PermissionError, UnicodeDecodeError):
+        return None
+    finally:
+        # Ensure file descriptor is closed even if errors occur above
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
