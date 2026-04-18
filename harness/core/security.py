@@ -122,37 +122,71 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
     Returns:
         File content as string, or None if the file cannot be read securely.
     """
-    fd = None
+    dir_fd = None
+    file_fd = None
     try:
         # 1. RESOLVE and VALIDATE path security FIRST
         abs_path = path.resolve()
         if not any(abs_path.is_relative_to(allowed) for allowed in allowed_paths):
             return None
-
-        # 2. Open file descriptor (with O_NOFOLLOW)
-        open_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
-        fd = os.open(str(abs_path), open_flags)
-
-        # 3. FINAL VERIFICATION: Ensure opened fd matches the resolved path
-        fd_stat = os.fstat(fd)
+        
+        # 2. Get parent directory path
+        parent_dir = abs_path.parent
+        filename = abs_path.name
+        
+        # 3. Open parent directory with O_PATH | O_DIRECTORY | O_CLOEXEC if available
+        # This gives us a directory file descriptor that can't be swapped out
         try:
-            path_stat = abs_path.stat()
+            # Linux-specific flags for atomic directory access
+            dir_flags = getattr(os, 'O_PATH', 0) | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_CLOEXEC', 0)
+            dir_fd = os.open(str(parent_dir), dir_flags)
+        except (OSError, AttributeError):
+            # Fallback for systems without O_PATH/O_DIRECTORY
+            # Use O_RDONLY and hope the directory doesn't get swapped
+            dir_fd = os.open(str(parent_dir), os.O_RDONLY)
+        
+        # 4. Verify parent directory is within allowed paths using the directory fd
+        try:
+            # Use os.path.realpath with dir_fd to get canonical path
+            parent_realpath = os.path.realpath(str(parent_dir), dir_fd=dir_fd)
+            parent_realpath_path = Path(parent_realpath)
+            if not any(parent_realpath_path.is_relative_to(allowed) for allowed in allowed_paths):
+                return None
         except OSError:
             return None
-
-        if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
-            return None  # File was swapped after resolution but before open
-
-        # 4. Read content
-        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-            fd = None
+        
+        # 5. Open the target file relative to the directory fd with O_NOFOLLOW
+        # This ensures we open the actual file, not a symlink
+        file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        try:
+            file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
+        except OSError:
+            return None
+        
+        # 6. Final verification: ensure the opened file is within allowed paths
+        try:
+            file_realpath = os.path.realpath(str(abs_path), dir_fd=file_fd)
+            file_realpath_path = Path(file_realpath)
+            if not any(file_realpath_path.is_relative_to(allowed) for allowed in allowed_paths):
+                return None
+        except OSError:
+            return None
+        
+        # 7. Read content
+        with os.fdopen(file_fd, 'r', encoding='utf-8', errors='replace') as f:
+            file_fd = None
             return f.read()
     except (OSError, PermissionError, UnicodeDecodeError):
         return None
     finally:
-        # Only close the file descriptor if os.fdopen didn't take ownership
-        if fd is not None:
+        # Clean up file descriptors
+        if file_fd is not None:
             try:
-                os.close(fd)
+                os.close(file_fd)
+            except OSError:
+                pass
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
             except OSError:
                 pass

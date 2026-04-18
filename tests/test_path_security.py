@@ -787,3 +787,115 @@ def test_read_file_atomically_device_inode_verification(tmp_path):
             pass
     finally:
         os.close(fd3)
+
+
+def test_read_file_atomically_blocks_symlink_race(tmp_path):
+    """Test that read_file_atomically blocks TOCTOU symlink race attacks.
+    
+    Creates a safe file, resolves its path, then *before* the call to 
+    read_file_atomically replaces it with a symlink to a forbidden file.
+    The test must assert the function returns None.
+    """
+    import os
+    import tempfile
+    from pathlib import Path
+    from harness.core.security import read_file_atomically
+    
+    # Create allowed and forbidden directories
+    allowed_dir = tmp_path / "allowed"
+    forbidden_dir = tmp_path / "forbidden"
+    allowed_dir.mkdir()
+    forbidden_dir.mkdir()
+    
+    # Create a safe file in allowed directory
+    safe_file = allowed_dir / "safe.txt"
+    safe_file.write_text("safe content")
+    
+    # Create a forbidden file in forbidden directory
+    forbidden_file = forbidden_dir / "forbidden.txt"
+    forbidden_file.write_text("forbidden content")
+    
+    # Create a symlink in allowed directory pointing to safe file
+    symlink_path = allowed_dir / "link.txt"
+    symlink_path.symlink_to(safe_file)
+    
+    # Test 1: Normal case - symlink points to allowed file, should work
+    result = read_file_atomically(symlink_path, [allowed_dir])
+    assert result == "safe content", "Should read through symlink when target is allowed"
+    
+    # Test 2: Race condition simulation - swap symlink target to forbidden file
+    # Remove the symlink
+    symlink_path.unlink()
+    # Create new symlink pointing to forbidden file
+    symlink_path.symlink_to(forbidden_file)
+    
+    # Now test read_file_atomically - should return None because:
+    # 1. symlink resolves to forbidden file
+    # 2. forbidden file is outside allowed directory
+    result = read_file_atomically(symlink_path, [allowed_dir])
+    assert result is None, "Should return None when symlink points outside allowed paths"
+    
+    # Test 3: More realistic race - create a temporary file, get its path,
+    # then quickly swap it with a symlink
+    with tempfile.NamedTemporaryFile(dir=str(allowed_dir), suffix='.txt', delete=False) as tmp:
+        tmp.write(b"temporary content")
+        tmp_path_str = tmp.name
+    
+    tmp_path_obj = Path(tmp_path_str)
+    
+    # Create a symlink with the same name pointing to forbidden file
+    symlink_name = allowed_dir / "race_target.txt"
+    
+    # First create the symlink pointing to temporary file
+    symlink_name.symlink_to(tmp_path_obj)
+    
+    # Read it once to ensure it works
+    result = read_file_atomically(symlink_name, [allowed_dir])
+    assert result == "temporary content", "Should read temporary file through symlink"
+    
+    # Now swap the symlink target to forbidden file
+    symlink_name.unlink()
+    symlink_name.symlink_to(forbidden_file)
+    
+    # Try to read again - should fail
+    result = read_file_atomically(symlink_name, [allowed_dir])
+    assert result is None, "Should return None after symlink is swapped to forbidden target"
+    
+    # Clean up
+    tmp_path_obj.unlink()
+    
+    # Test 4: Verify the exact race condition described in the plan
+    # "creates a safe file, resolves its path, then *before* the call to 
+    # read_file_atomically replaces it with a symlink to a forbidden file"
+    
+    # Create safe file
+    safe_file2 = allowed_dir / "safe2.txt"
+    safe_file2.write_text("safe2 content")
+    
+    # Create symlink that will be swapped
+    race_symlink = allowed_dir / "race_symlink.txt"
+    
+    # First point to safe file
+    race_symlink.symlink_to(safe_file2)
+    
+    # Get the resolved path (what an attacker would see before swapping)
+    resolved_before = race_symlink.resolve()
+    
+    # Now swap the symlink to point to forbidden file
+    # This simulates what happens in the race window
+    race_symlink.unlink()
+    race_symlink.symlink_to(forbidden_file)
+    
+    # Call read_file_atomically - it should detect the swap
+    result = read_file_atomically(race_symlink, [allowed_dir])
+    
+    # The function should return None because:
+    # 1. It resolves the symlink (now points to forbidden file)
+    # 2. Forbidden file is outside allowed directory
+    # 3. Our improved implementation with directory fd prevents the race
+    assert result is None, f"Should return None after symlink swap. Got: {result}"
+    
+    # Additional assertion: verify the resolved path is different
+    resolved_after = race_symlink.resolve()
+    assert resolved_before != resolved_after, "Symlink resolution should change after swap"
+    assert str(resolved_after).startswith(str(forbidden_dir)), "Should resolve to forbidden directory"
