@@ -1011,6 +1011,19 @@ class PipelineLoop:
             round(total_tool_errors / total_tool_calls, 3)
             if total_tool_calls > 0 else 0.0
         )
+        # Calculate round metrics
+        round_metrics = {
+            "total": rounds_completed,
+            "completed": rounds_completed,
+            "avg_score": round(sum(s["score"] for s in score_history) / len(score_history), 2) if score_history else 0.0,
+            "best_score": round(best_score, 2),
+            "worst_score": round(min(s["score"] for s in score_history), 2) if score_history else 0.0,
+            "total_phases": self.total_phases_run,
+            "total_errors": total_tool_errors,
+            "total_duration": round(total_elapsed, 2),
+            "total_tool_calls": total_tool_calls,
+        }
+        
         payload: dict = {
             "total_rounds": rounds_completed,
             "best_score": round(best_score, 2),
@@ -1027,6 +1040,7 @@ class PipelineLoop:
             "meta_review_count": self.meta_review_count,
             "auto_push_count": self.auto_push_count,
             "health_metrics": self.health_monitor.metrics_dict if self.health_monitor else None,
+            "round_metrics": round_metrics,
         }
         payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
         try:
