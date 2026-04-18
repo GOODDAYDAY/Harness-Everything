@@ -49,7 +49,24 @@ class CrossReferenceTool(Tool):
     # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
     _MAX_SYMBOL_DEPTH = 10
 
+    def _validate_symbol_format(self, symbol: str) -> str:
+        """
+        Validate symbol format against security constraints.
+        Returns the normalized symbol if valid, otherwise raises ValueError.
+        """
+        if not symbol:
+            raise ValueError("Symbol cannot be empty")
 
+        # Defense-in-depth: regex validation first
+        if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
+            raise ValueError(f"Invalid symbol format: {symbol}. Must be ASCII, start with a letter/underscore, and contain at most 10 identifiers.")
+
+        # Explicit depth check for clarity (redundant with regex but provides better error)
+        identifiers = symbol.split('.')
+        if len(identifiers) > self._MAX_SYMBOL_DEPTH:
+            raise ValueError(f"Symbol exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers: {symbol}")
+
+        return symbol
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -135,29 +152,11 @@ class CrossReferenceTool(Tool):
         Raises:
             ValueError: If symbol validation fails
         """
-        # 1. Check for None or empty string
-        if symbol is None:
-            raise ValueError("Symbol cannot be None")
-        
-        symbol = symbol.strip()
-        if not symbol:
-            raise ValueError("Symbol cannot be empty or whitespace only")
-        
-        # 2. Format validation (includes ASCII check via re.ASCII flag)
-        if not re.match(self._VALID_SYMBOL_PATTERN, symbol):
-            raise ValueError(f"Invalid symbol format: {symbol}")
-        
-        # 3. Depth validation - explicit check for defense in depth
-        # Count identifiers by splitting on '.'
-        identifier_count = len(symbol.split('.'))
-        if identifier_count > self._MAX_SYMBOL_DEPTH:
-            raise ValueError(
-                f"Symbol '{symbol}' exceeds maximum identifier count of "
-                f"{self._MAX_SYMBOL_DEPTH} (got {identifier_count})"
-            )
-        
-        # Note: The regex pattern already rejects consecutive dots, leading dots,
-        # trailing dots, and non-ASCII characters, providing defense-in-depth security.
+        try:
+            self._validate_symbol_format(symbol)
+        except ValueError as e:
+            # Re-raise with context for this public method
+            raise ValueError(f"Symbol validation failed: {e}")
     
     def validate_symbol(self, symbol: str) -> str:
         """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
