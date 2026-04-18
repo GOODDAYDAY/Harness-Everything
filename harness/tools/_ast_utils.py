@@ -12,6 +12,46 @@ import ast
 from pathlib import Path
 
 
+def _read_file_atomically(path: Path | str) -> str | None:
+    """Read a file atomically to prevent TOCTOU symlink attacks.
+    
+    Args:
+        path: Path to the file to read.
+        
+    Returns:
+        File content as string, or None if the file cannot be read securely.
+    """
+    import os
+    try:
+        # Open file descriptor without following symlinks
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        try:
+            # Get file stats from the descriptor
+            fd_stat = os.fstat(fd)
+            
+            # Re-resolve the original path and check if it's still the same file
+            try:
+                path_stat = Path(path).stat()
+            except OSError:
+                return None
+            
+            # Compare device and inode numbers to ensure we're reading the same file
+            if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
+                return None
+            
+            # Read content from the file descriptor
+            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                return f.read()
+        finally:
+            # Ensure file descriptor is closed even if errors occur above
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    except (OSError, PermissionError, UnicodeDecodeError):
+        return None
+
+
 def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
     """Read *path* and return a parsed ``ast.Module`` with error message.
 
@@ -21,7 +61,9 @@ def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
     and log diagnostic information instead of silently skipping.
     """
     try:
-        source = Path(path).read_text(encoding="utf-8", errors="replace")
+        source = _read_file_atomically(path)
+        if source is None:
+            return None, f"OSError reading {path}: cannot read file securely"
         return ast.parse(source, filename=str(path)), None
     except SyntaxError as exc:
         return None, f"SyntaxError in {path}: {exc}"
