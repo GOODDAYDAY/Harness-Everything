@@ -39,7 +39,7 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$')
+    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]+)*$')
 
     def _read_file_atomically(self, path: Path, allowed_paths: list[Path]) -> str | None:
         """Read a file atomically to prevent TOCTOU symlink attacks.
