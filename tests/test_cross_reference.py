@@ -655,9 +655,9 @@ def some_function():
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
     
-    # Verify the error contains the exact phrase "exceeds maximum identifier count"
-    assert "exceeds maximum identifier count" in result.error, \
-        f"Error should contain 'exceeds maximum identifier count'. Got: {result.error}"
+    # Verify the error contains the exact phrase "exceeds maximum depth of 10 identifiers"
+    assert "exceeds maximum depth of 10 identifiers" in result.error, \
+        f"Error should contain 'exceeds maximum depth of 10 identifiers'. Got: {result.error}"
     assert "11" in result.error and "10" in result.error, \
         f"Error should mention actual and limit values. Got: {result.error}"
     
@@ -703,3 +703,16 @@ def some_function():
     assert identifier_count == 11, f"Expected 11 identifiers, got {identifier_count}"
     assert identifier_count > tool._MAX_SYMBOL_DEPTH, \
         f"Symbol should exceed depth limit: {identifier_count} > {tool._MAX_SYMBOL_DEPTH}"
+
+
+def test_regex_depth_boundary_consistency():
+    """Verify regex pattern and explicit depth check are consistent."""
+    tool = CrossReferenceTool()
+    # Regex should reject 11 identifiers
+    symbol_11 = "a.b.c.d.e.f.g.h.i.j.k"
+    match = tool._VALID_SYMBOL_PATTERN.fullmatch(symbol_11)
+    assert match is None, f"Regex incorrectly accepted 11-identifier symbol: {symbol_11}"
+    # Explicit check should also reject
+    is_valid, msg = tool._validate_symbol_format(symbol_11)
+    assert not is_valid
+    assert "exceeds maximum depth" in msg
