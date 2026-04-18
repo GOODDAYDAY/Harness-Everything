@@ -128,12 +128,8 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # 1. Convert path to absolute (but don't resolve symlinks yet)
         abs_path = path.absolute()
         
-        # 2. Check if the original path is within allowed paths
-        # This is a preliminary check; final validation happens after opening
-        if not any(abs_path.is_relative_to(allowed) for allowed in allowed_paths):
-            return None
-        
-        # 3. Open parent directory
+        # 2. Open parent directory FIRST - before any path validation
+        # This is critical to eliminate TOCTOU race window
         parent_dir = abs_path.parent
         filename = abs_path.name
         
@@ -145,7 +141,7 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             # Fallback for systems without O_PATH/O_DIRECTORY
             dir_fd = os.open(str(parent_dir), os.O_RDONLY)
         
-        # 4. Open the target file relative to the directory fd with O_NOFOLLOW
+        # 3. Open the target file relative to the directory fd with O_NOFOLLOW
         # This ensures we open the actual file, not a symlink
         file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
         try:
@@ -153,17 +149,26 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         except OSError:
             return None
         
-        # 5. Get device and inode of the opened file
+        # 4. Get device and inode of the opened file
         file_stat = os.fstat(file_fd)
         
-        # 6. Resolve the original path to get expected real path
-        # Note: There's a TOCTOU race here, but we'll verify using device/inode
+        # 5. Now we need to verify the opened file is within allowed paths
+        # We'll do this by checking the parent directory path
+        # First, get the real path of the parent directory we opened
         try:
-            expected_real_path = abs_path.resolve()
-        except OSError:
-            return None
+            # Use os.path.realpath with dir_fd to get the real parent path
+            parent_real = Path(os.path.realpath(str(parent_dir), dir_fd=dir_fd))
+        except (OSError, AttributeError):
+            # Fallback if realpath doesn't support dir_fd
+            try:
+                parent_real = Path(os.path.realpath(str(parent_dir)))
+            except OSError:
+                return None
         
-        # 7. Verify the expected path is within allowed paths
+        # 6. Construct the expected real path
+        expected_real_path = parent_real / filename
+        
+        # 7. Verify the expected real path is within allowed paths
         if not any(expected_real_path.is_relative_to(allowed) for allowed in allowed_paths):
             return None
         
