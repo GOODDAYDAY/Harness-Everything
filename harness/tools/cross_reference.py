@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.core.security import read_file_atomically, validate_path_security
+from harness.core.security import read_file_atomically
 from harness.tools._ast_utils import (
     parent_class,
     function_signature,
