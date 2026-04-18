@@ -203,38 +203,7 @@ class CrossReferenceTool(Tool):
             lines = source.splitlines()
 
             # Collect context for variable types if looking for a class method
-            class VariableCollector(ast.NodeVisitor):
-                def __init__(self):
-                    self.context = {}
-                    self.current_class = None
-
-                def visit_ClassDef(self, node):
-                    old_class = self.current_class
-                    self.current_class = node.name
-                    self.generic_visit(node)
-                    self.current_class = old_class
-
-                def visit_FunctionDef(self, node):
-                    # Map 'self' parameter to current class in instance methods
-                    if self.current_class and node.args.args:
-                        first_arg = node.args.args[0]
-                        if isinstance(first_arg, ast.arg) and first_arg.arg == 'self':
-                            self.context['self'] = self.current_class
-                            self.context['self_class'] = self.current_class
-                    self.generic_visit(node)
-
-                def visit_Assign(self, node):
-                    # Simple type inference for: var = ClassName()
-                    if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and
-                        isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)):
-                        var_name = node.targets[0].id
-                        class_name = node.value.func.id
-                        self.context[var_name] = class_name
-                    self.generic_visit(node)
-
-            collector = VariableCollector()
-            collector.visit(tree)
-            context = collector.context if class_name else {}
+            context = collect_variable_context(tree) if class_name else {}
 
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

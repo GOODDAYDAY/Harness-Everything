@@ -610,3 +610,93 @@ def test_symbol_validation_rejects_unicode_homoglyphs():
     assert pattern.match("Class.mеthod") is None  # Cyrillic 'е' (U+0435) in method name
     assert pattern.match("Clаss.method") is None  # Cyrillic 'а' in class name
     assert pattern.match("Class.method") is not None  # Pure ASCII should match
+
+
+def test_execute_rejects_symbol_exceeding_max_depth(tmp_path):
+    """Test that CrossReferenceTool.execute() rejects symbols exceeding _MAX_SYMBOL_DEPTH.
+    
+    This validates the falsifiable criterion: the _MAX_SYMBOL_DEPTH constant 
+    must be enforced at runtime, not just by the regex pattern.
+    """
+    import asyncio
+    from harness.tools.cross_reference import CrossReferenceTool
+    from harness.core.config import HarnessConfig
+    
+    # Create a temporary workspace
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    workspace = str(workspace_path)
+    
+    # Create a simple Python file to search
+    test_file = workspace_path / "test.py"
+    test_file.write_text("""
+def some_function():
+    pass
+""")
+    
+    # Create config
+    config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+    
+    # Create the tool
+    tool = CrossReferenceTool()
+    
+    # Test 1: Symbol at maximum depth (10 dots, 11 identifiers)
+    # This should be accepted by the regex pattern but should be rejected by depth validation
+    max_depth_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 10 dots, 11 identifiers
+    
+    result = asyncio.run(tool.execute(
+        config,
+        symbol=max_depth_symbol,
+        root=workspace
+    ))
+    
+    # The result should be an error because it exceeds _MAX_SYMBOL_DEPTH
+    assert result.is_error, f"Symbol at maximum depth should trigger error: {max_depth_symbol}"
+    assert "Symbol validation failed" in result.error, \
+        f"Error should mention symbol validation. Got: {result.error}"
+    
+    # Verify the error references the depth limit
+    error_lower = result.error.lower()
+    assert any(word in error_lower for word in ["depth", "limit", "maximum", "exceed"]), \
+        f"Error should mention depth/limit. Got: {result.error}"
+    assert "11" in result.error and "10" in result.error, \
+        f"Error should mention actual and limit values. Got: {result.error}"
+    
+    # Test 2: Symbol just below maximum depth (9 dots, 10 identifiers)
+    # This should be accepted by both regex and depth validation
+    valid_deep_symbol = "a.b.c.d.e.f.g.h.i.j"  # 9 dots, 10 identifiers
+    
+    result = asyncio.run(tool.execute(
+        config,
+        symbol=valid_deep_symbol,
+        root=workspace
+    ))
+    
+    # This should not error on validation (may error for other reasons like no files found)
+    if result.is_error:
+        assert "Symbol validation failed" not in result.error, \
+            f"Valid deep symbol '{valid_deep_symbol}' incorrectly rejected: {result.error}"
+    
+    # Test 3: Verify the _validate_symbol method directly
+    # Create a symbol with 11 dots (12 identifiers) - should definitely exceed limit
+    overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k.l"  # 11 dots, 12 identifiers
+    
+    # Call the private validation method
+    validation_result = tool._validate_symbol(overly_deep_symbol)
+    assert validation_result is not None, \
+        f"_validate_symbol should reject symbol exceeding depth limit: {overly_deep_symbol}"
+    assert "depth" in validation_result.lower() or "limit" in validation_result.lower(), \
+        f"Validation error should mention depth/limit. Got: {validation_result}"
+    
+    # Test 4: Verify the constant value matches what we're testing
+    assert tool._MAX_SYMBOL_DEPTH == 10, \
+        f"_MAX_SYMBOL_DEPTH should be 10, got {tool._MAX_SYMBOL_DEPTH}"
+    
+    # Test 5: Verify depth calculation is correct
+    # Symbol with 10 dots has 11 identifiers, which exceeds _MAX_SYMBOL_DEPTH=10
+    test_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 10 dots
+    dot_count = test_symbol.count('.')
+    identifier_count = dot_count + 1
+    assert identifier_count == 11, f"Expected 11 identifiers, got {identifier_count}"
+    assert identifier_count > tool._MAX_SYMBOL_DEPTH, \
+        f"Symbol should exceed depth limit: {identifier_count} > {tool._MAX_SYMBOL_DEPTH}"
