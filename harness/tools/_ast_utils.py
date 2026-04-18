@@ -11,6 +11,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from harness.core.security import read_file_atomically
+
 
 def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
     """Read *path* and return a parsed ``ast.Module`` with error message.
@@ -21,7 +23,9 @@ def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
     and log diagnostic information instead of silently skipping.
     """
     try:
-        source = Path(path).read_text(encoding="utf-8", errors="replace")
+        source = read_file_atomically(path)
+        if source is None:
+            return None, f"OSError reading {path}: cannot read file securely"
         return ast.parse(source, filename=str(path)), None
     except SyntaxError as exc:
         return None, f"SyntaxError in {path}: {exc}"
@@ -45,8 +49,6 @@ def build_parent_map(tree: ast.AST) -> dict[int, ast.AST]:
         for child in ast.iter_child_nodes(node):
             parent_map[id(child)] = node
     return parent_map
-
-
 
 
 
@@ -295,3 +297,51 @@ def find_symbol_references(
                     result["references"].append((node.lineno, node.col_offset))
     
     return result
+
+
+def collect_variable_context(tree: ast.AST) -> dict[str, str]:
+    """Collect variable-to-class mapping context from an AST tree.
+    
+    Walks the AST and builds a context dictionary that maps variable names
+    to class names for type inference. This is useful for resolving instance
+    method calls like `obj.method()` when `obj` is known to be an instance
+    of a specific class.
+    
+    Args:
+        tree: AST tree to analyze
+        
+    Returns:
+        Dictionary mapping variable names to class names
+    """
+    class VariableCollector(ast.NodeVisitor):
+        def __init__(self):
+            self.context = {}
+            self.current_class = None
+
+        def visit_ClassDef(self, node):
+            old_class = self.current_class
+            self.current_class = node.name
+            self.generic_visit(node)
+            self.current_class = old_class
+
+        def visit_FunctionDef(self, node):
+            # Map 'self' parameter to current class in instance methods
+            if self.current_class and node.args.args:
+                first_arg = node.args.args[0]
+                if isinstance(first_arg, ast.arg) and first_arg.arg == 'self':
+                    self.context['self'] = self.current_class
+                    self.context['self_class'] = self.current_class
+            self.generic_visit(node)
+
+        def visit_Assign(self, node):
+            # Simple type inference for: var = ClassName()
+            if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and
+                isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)):
+                var_name = node.targets[0].id
+                class_name = node.value.func.id
+                self.context[var_name] = class_name
+            self.generic_visit(node)
+
+    collector = VariableCollector()
+    collector.visit(tree)
+    return collector.context

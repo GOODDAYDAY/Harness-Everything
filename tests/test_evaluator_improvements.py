@@ -1,7 +1,8 @@
 """Test evaluator improvements: structured output, mode adaptation, critique structure."""
 
 import pytest
-from harness.evaluation.dual_evaluator import parse_score
+import re
+from harness.evaluation.dual_evaluator import parse_score, _STRICT_RE
 
 
 def test_parse_score_strict():
@@ -67,51 +68,36 @@ def test_evaluator_mode_headers():
 
 def test_structured_output_format():
     """Test that evaluator output follows structured format."""
-    from harness.evaluation.dual_evaluator import validate_evaluator_output
+    from harness.evaluation.dual_evaluator import _STRICT_RE
     
-    # Test basic evaluator structure
-    basic_output = """DELTA VS PRIOR BEST: More specific file references
-ANALYSIS:
-A. Correctness: 8.5 — Logic is sound
-B. Completeness: 7.0 — Missing edge cases
-C. Specificity: 9.0 — Names concrete functions
-D. Architecture fit: 8.0 — Fits existing patterns
-TOP DEFECT: dual_evaluator.py::parse_score — doesn't handle markdown code blocks
-ACTIONABLE FEEDBACK:
-1. Update parse_score to strip markdown code blocks
-2. Add test for markdown parsing edge case
-WHAT WOULD MAKE THIS 10/10: Add validation for structured output format
-SCORE: 8.1"""
+    # Test the _STRICT_RE regex directly as specified in the plan
+    # Test cases from the plan
+    assert _STRICT_RE.search("SCORE: 7.5") is not None
+    assert _STRICT_RE.search("SCORE: 7.5 with notes") is not None
+    assert _STRICT_RE.search("SCORE: invalid") is None
     
-    is_valid, issues = validate_evaluator_output(basic_output, "basic")
-    assert is_valid, f"Basic evaluator output should be valid, issues: {issues}"
+    # Additional test cases for robustness
+    assert _STRICT_RE.search("SCORE: 8.1") is not None
+    assert _STRICT_RE.search("  SCORE: 9.0  ") is not None  # With whitespace
+    assert _STRICT_RE.search("SCORE: 10") is not None
+    assert _STRICT_RE.search("SCORE: 0.5") is not None
+    assert _STRICT_RE.search("SCORE: 7.5\n") is not None  # With newline
+    assert _STRICT_RE.search("\nSCORE: 7.5\n") is not None  # With surrounding newlines
     
-    # Test that DELTA VS PRIOR BEST header is present and has content
-    assert "DELTA VS PRIOR BEST:" in basic_output
-    delta_line = [line for line in basic_output.split('\n') if line.startswith("DELTA VS PRIOR BEST:")][0]
-    assert len(delta_line) > len("DELTA VS PRIOR BEST:") + 1  # Must have descriptive text
+    # Negative test cases
+    assert _STRICT_RE.search("SCORE: abc") is None  # Not a number
+    assert _STRICT_RE.search("SCORE: ") is None  # Missing number
+    assert _STRICT_RE.search("SCORE:7.5") is None  # Missing space after colon
+    assert _STRICT_RE.search("SCORE: 7.5.5") is None  # Invalid number format
     
-    # Test diffusion evaluator structure
-    diffusion_output = """DELTA VS PRIOR BEST: Better risk assessment
-ANALYSIS:
-A. Caller impact: 7.0 — 2 callers need updates
-B. Maintenance debt: 8.0 — Minimal new complexity
-C. Emergent behaviour: 9.0 — No unexpected side effects
-D. Rollback safety: 8.5 — Easy to revert
-KEY RISK: cross_reference.py::execute — may exceed output limit
-ACTIONABLE MITIGATIONS:
-1. Add output truncation in cross_reference tool
-2. Validate JSON size before serialization
-WHAT WOULD MAKE THIS 10/10: Already perfect
-SCORE: 8.1"""
+    # Verify the regex captures the score correctly
+    match = _STRICT_RE.search("SCORE: 7.5")
+    assert match is not None
+    assert match.group(1) == "7.5"
     
-    is_valid, issues = validate_evaluator_output(diffusion_output, "diffusion")
-    assert is_valid, f"Diffusion evaluator output should be valid, issues: {issues}"
-    
-    # Test that DELTA VS PRIOR BEST header is present and has content
-    assert "DELTA VS PRIOR BEST:" in diffusion_output
-    delta_line = [line for line in diffusion_output.split('\n') if line.startswith("DELTA VS PRIOR BEST:")][0]
-    assert len(delta_line) > len("DELTA VS PRIOR BEST:") + 1  # Must have descriptive text
+    match = _STRICT_RE.search("SCORE: 8.1 with additional text")
+    assert match is not None
+    assert match.group(1) == "8.1"
 
 
 def test_extract_structured_feedback():
@@ -138,6 +124,41 @@ SCORE: 7.8"""
     assert "Add try/except in test.py::function" in feedback["feedback_items"]
     assert feedback["improvement_suggestion"] == "Add unit tests"
     assert feedback["delta"] == "Better error handling"
+
+
+def test_extract_structured_feedback_improved_parsing():
+    """Test improved parsing of structured feedback with various formats."""
+    from harness.evaluation.dual_evaluator import extract_structured_feedback
+    
+    # Test various feedback item formats
+    test_output = """DELTA VS PRIOR BEST: Improved parsing
+ANALYSIS:
+A. Correctness: 9.0 — Excellent logic
+B. Completeness: 8.5 — Good coverage
+TOP DEFECT: parser.py::parse_feedback — missing validation
+ACTIONABLE FEEDBACK:
+- Fix validation in parser.py::parse_feedback
+* Add test cases for edge conditions
+1) Improve error messages
+2. Handle empty input gracefully
+3. Add logging for debugging
+WHAT WOULD MAKE THIS 10/10: Add comprehensive validation
+SCORE: 8.7"""
+    
+    feedback = extract_structured_feedback(test_output, "basic")
+    assert feedback["score"] == 8.7
+    assert feedback["analysis"]["Correctness"] == 9.0
+    assert feedback["analysis"]["Completeness"] == 8.5
+    assert feedback["defect"] == "parser.py::parse_feedback — missing validation"
+    
+    # Should parse all feedback items regardless of bullet format
+    assert len(feedback["feedback_items"]) >= 4
+    assert "Fix validation in parser.py::parse_feedback" in feedback["feedback_items"]
+    assert "Add test cases for edge conditions" in feedback["feedback_items"]
+    assert "Improve error messages" in feedback["feedback_items"]
+    assert "Handle empty input gracefully" in feedback["feedback_items"]
+    assert feedback["improvement_suggestion"] == "Add comprehensive validation"
+    assert feedback["delta"] == "Improved parsing"
 
 
 def test_parse_score_with_markdown():
@@ -464,7 +485,7 @@ def test_syntax_error_triggers_fail_with_context():
         from harness.evaluation.static_analysis import run_static_checks
         
         # Run static checks on the invalid file
-        result = run_static_checks(changed_files)
+        result = run_static_checks(changed_files, workspace="/tmp")
         
         # Verify that syntax error is detected
         assert "syntax" in str(result).lower() or "invalid" in str(result).lower(), \
@@ -487,6 +508,36 @@ def test_syntax_error_triggers_fail_with_context():
     finally:
         # Clean up
         temp_path.unlink(missing_ok=True)
+
+
+def test_score_regex_allows_trailing_text():
+    """Test that the _STRICT_RE regex pattern correctly allows trailing text after scores."""
+    # Test cases that should match
+    test_cases = [
+        "SCORE: 7.5 with trailing text",
+        "SCORE: 8",
+        "  SCORE: 9.0   with spaces and text",
+        "SCORE: 10.0 `inline code` more text",
+    ]
+    
+    for test_str in test_cases:
+        match = _STRICT_RE.match(test_str)
+        assert match is not None, f"Regex should match: {test_str}"
+        # Extract the score
+        score_str = match.group(1)
+        # Verify it's a valid number
+        assert re.match(r'^\d+(?:\.\d+)?$', score_str), f"Invalid score extracted: {score_str}"
+    
+    # Negative test cases that should NOT match
+    negative_cases = [
+        "SCORE: invalid",
+        "SCORE: ",
+        "SCORE: abc123",
+    ]
+    
+    for test_str in negative_cases:
+        match = _STRICT_RE.match(test_str)
+        assert match is None, f"Regex should NOT match: {test_str}"
 
 
 if __name__ == "__main__":

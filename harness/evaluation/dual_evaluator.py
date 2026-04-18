@@ -21,13 +21,22 @@ log = logging.getLogger(__name__)
 _SCORE_MIN: float = 0.0
 _SCORE_MAX: float = 10.0
 
-# Strict pattern: "SCORE: N" on its own line (anchored).  Preferred over loose
-# because evaluators are instructed to place the authoritative score last on
-# its own line.  The loose fallback handles older/custom prompts that don't
-# follow the anchored format.
-_STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+# Structured score patterns with improved validation
+# 1. Strict anchored: "SCORE: N" on its own line (preferred format)
+_STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)(?:\s+.*)?$", re.MULTILINE)
+# 2. Strict unanchored: "SCORE: N" anywhere (case-insensitive)
 _STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
-_LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# 3. Loose pattern: "SCORE N" or "SCORE=N" variations
+_LOOSE_RE = re.compile(r"SCORE[:\s=]+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# 4. Enhanced pattern with score range validation: "SCORE: 7.5/10" or "SCORE: 8 (out of 10)"
+_ENHANCED_RE = re.compile(
+    r"(?:SCORE|Score|score)[:\s=]+"
+    r"(\d+(?:\.\d+)?)"
+    r"(?:\s*/\s*10|\s*\(out of\s*10\)|\s*of\s*10)?",
+    re.IGNORECASE
+)
+# 5. Final score pattern: "FINAL SCORE: N" (explicit final score)
+_FINAL_SCORE_RE = re.compile(r"FINAL\s+SCORE[:\s=]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
 # Mode header injected into the evaluation user message so evaluators know
 # whether they are reviewing a text proposal or an implement-mode code change.
@@ -258,8 +267,10 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic", contex
         
         # Extract numbered items with multiple formats
         item_patterns = [
-            r"^\s*(\d+)\.\s+(.+)$",  # 1. item
-            r"^\s*[-*]\s+(.+)$",     # - item or * item
+            r"^\s*(\d+)\.\s+(.+)$",      # 1. item
+            r"^\s*(\d+)\)\s+(.+)$",      # 1) item
+            r"^\s*\((\d+)\)\s+(.+)$",    # (1) item
+            r"^\s*[-*•]\s+(.+)$",        # - item, * item, or • item
         ]
         
         structured_feedback = []
@@ -271,16 +282,21 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic", contex
             priority = None
             feedback_text = line
             
-            # Try numbered format first
-            match = re.match(r"^\s*(\d+)\.\s+(.+)$", line)
-            if match:
-                priority = int(match.group(1))
-                feedback_text = match.group(2)
+            # Try numbered formats
+            numbered_match = None
+            for pattern in [r"^\s*(\d+)\.\s+(.+)$", r"^\s*(\d+)\)\s+(.+)$", r"^\s*\((\d+)\)\s+(.+)$"]:
+                numbered_match = re.match(pattern, line)
+                if numbered_match:
+                    break
+            
+            if numbered_match:
+                priority = int(numbered_match.group(1))
+                feedback_text = numbered_match.group(2)
             else:
                 # Try bullet format
-                match = re.match(r"^\s*[-*]\s+(.+)$", line)
-                if match:
-                    feedback_text = match.group(1)
+                bullet_match = re.match(r"^\s*[-*•]\s+(.+)$", line)
+                if bullet_match:
+                    feedback_text = bullet_match.group(1)
             
             # Parse file::function — change pattern
             file = None
@@ -571,15 +587,18 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
                 issues.append(f"SCORE: found inside markdown code block at line {line_num}")
                 # Don't break - continue checking all lines to report all violations
     
-    # Check for SCORE format - must be on its own line
+    # Check for SCORE format - can have trailing text after the score
     score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
     if score_lines:
         score_line = score_lines[-1].strip()
-        # Check for proper SCORE: X.X format
+        # Check for proper SCORE: X.X format (allows trailing text)
         if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\b', score_line):
-            issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X'")
+            issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X' with optional trailing text")
         # Check that score is the last thing in the output (most reliable)
-        if not text.strip().endswith(score_line):
+        # Allow for trailing whitespace after the score line
+        text_stripped = text.strip()
+        score_line_stripped = score_line.strip()
+        if not text_stripped.endswith(score_line_stripped) and not text_stripped.endswith(score_line_stripped + '\n'):
             issues.append("SCORE should be the last line of the output for reliable parsing")
         
         # Extract and validate score calibration
@@ -587,7 +606,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             score_match = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)', score_line)
             if score_match:
                 score = float(score_match.group(1))
-                calibration_warnings = validate_score_calibration(score, evaluator_type)
+                calibration_warnings = validate_score_calibration(score, evaluator_type, mode)
                 for warning in calibration_warnings:
                     issues.append(f"WARNING: {warning}")
         except (ValueError, AttributeError):
@@ -658,10 +677,20 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             # Debate mode should mention text proposals or planning
             if "text proposal" not in text.lower() and "planning round" not in text.lower():
                 issues.append("Debate mode output should mention 'text proposal' or 'planning round'")
+            # Debate mode should focus on reasoning quality, not execution
+            if "executed code" in text.lower() or "tool calls" in text.lower():
+                issues.append("WARNING: Debate mode should focus on reasoning quality, not execution details")
         elif mode == "implement":
             # Implement mode should mention executed code or code state
             if "executed code" not in text.lower() and "code state" not in text.lower():
                 issues.append("Implement mode output should mention 'executed code' or 'code state'")
+            # Implement mode should reference specific file changes
+            if "file::" not in text and "function::" not in text:
+                issues.append("WARNING: Implement mode should reference specific file/function changes")
+    
+    # Enhanced calibration validation
+    calibration_issues = validate_calibration_anchors(text, evaluator_type, mode)
+    issues.extend(calibration_issues)
     
     # Token budget check (warning only)
     if len(text) > 8000:  # Rough estimate: ~2000 tokens

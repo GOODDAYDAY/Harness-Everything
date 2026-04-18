@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import ast
+import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
+from harness.core.security import read_file_atomically
 from harness.tools._ast_utils import (
     parent_class,
     function_signature,
     call_name,
     extract_callees,
     safe_parse,
+    collect_variable_context,
 )
 from harness.tools.base import Tool, ToolResult
 
@@ -22,6 +26,9 @@ from harness.tools.base import Tool, ToolResult
 
 
 _MAX_OUTPUT_BYTES = 8_192
+
+# Core identifier pattern for Python symbols (ASCII only for security)
+_SYMBOL_IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$', re.ASCII)
 
 
 class CrossReferenceTool(Tool):
@@ -37,7 +44,38 @@ class CrossReferenceTool(Tool):
     
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$')
+    # REJECTS: consecutive dots, leading/trailing dots, directory traversal
+    # Allows 1-10 identifiers (0-9 dots), matching _MAX_SYMBOL_IDENTIFIERS=10
+    # Note: We need to extract just the core pattern without ^ and $ anchors
+    _CORE_IDENTIFIER_PATTERN = r'[a-zA-Z_][a-zA-Z0-9_]*'
+    _VALID_SYMBOL_PATTERN = re.compile(r'^' + _CORE_IDENTIFIER_PATTERN + r'(?:\.' + _CORE_IDENTIFIER_PATTERN + r'){0,9}$', re.ASCII)
+    
+    # Maximum total identifiers (e.g., "a.b.c" has 3 identifiers) to prevent
+    # denial-of-service attacks via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
+    # Matches regex pattern {0,9} (1-10 identifiers total).
+    _MAX_SYMBOL_IDENTIFIERS = 10
+
+    def _validate_symbol_format(self, symbol: str) -> tuple[bool, str]:
+        """
+        Validate symbol format against security constraints.
+        Returns a tuple (is_valid, error_message).
+        If is_valid is True, error_message is empty string.
+        """
+        # Combined check for empty or whitespace-only symbols
+        if not symbol or not symbol.strip():
+            return False, f"Symbol cannot be empty or whitespace-only: {repr(symbol)}"
+
+        # Explicit depth check first for clearer error messages
+        identifiers = symbol.split('.')
+        if len(identifiers) > self._MAX_SYMBOL_IDENTIFIERS:
+            # Enhanced error message for security auditing
+            return False, f"Symbol '{symbol}' exceeds maximum depth of {self._MAX_SYMBOL_IDENTIFIERS} identifiers (found {len(identifiers)})."
+
+        # Defense-in-depth: regex validation
+        if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
+            return False, f"Invalid symbol format: {symbol}. Must be ASCII, start with a letter/underscore, and contain at most 10 identifiers."
+
+        return True, ""
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -47,7 +85,8 @@ class CrossReferenceTool(Tool):
                     "type": "string",
                     "description": (
                         "Symbol to look up. Supports 'func_name' and "
-                        "'ClassName.method_name' forms."
+                        "'ClassName.method_name' forms. Maximum qualification depth "
+                        f"is {self._MAX_SYMBOL_IDENTIFIERS} (e.g., 'a.b.c.d.e.f.g.h.i.j' is 10)."
                     ),
                 },
                 "root": {
@@ -71,41 +110,64 @@ class CrossReferenceTool(Tool):
         func_name: str,
         context: dict[str, str] | None
     ) -> bool:
-        """Check if a call node is an instance method call for the given class.
-        
-        Args:
-            call_node: AST call node to check
-            class_name: Name of the class
-            func_name: Name of the method
-            context: Mapping from variable names to class names
-            
-        Returns:
-            True if the call is an instance method call for the target class
-        """
-        # Must be an attribute call like obj.method()
+        """Check if a Call node represents an instance method call of target class."""
         if not isinstance(call_node.func, ast.Attribute):
             return False
-        
-        # The attribute name must match the method name
         if call_node.func.attr != func_name:
             return False
-        
-        # If the value is a Name node (like obj in obj.method())
-        if isinstance(call_node.func.value, ast.Name):
-            var_name = call_node.func.value.id
-            # Check if we have context mapping for this variable
-            if context and var_name in context:
-                return context[var_name] == class_name
-            # Without context, we can't be sure, but for test compatibility
-            # we'll accept it as a potential instance method call
-            # This is a simplification - real implementation would track assignments
+
+        # Helper function to extract the base variable name from an expression
+        def extract_base_name(node: ast.AST) -> str | None:
+            """Extract the base variable name from an expression.
+            
+            For example:
+            - `obj` -> "obj"
+            - `obj.attr` -> "obj"
+            - `obj.attr.method()` -> "obj"
+            - `self.helper` -> "self"
+            """
+            if isinstance(node, ast.Name):
+                return node.id
+            elif isinstance(node, ast.Attribute):
+                return extract_base_name(node.value)
+            elif isinstance(node, ast.Call):
+                # For method calls like obj.method(), check the base of the method
+                if isinstance(node.func, ast.Attribute):
+                    return extract_base_name(node.func.value)
+            return None
+
+        # Extract the base variable name from the function call
+        base_name = extract_base_name(call_node.func.value)
+        if not base_name:
+            return False
+
+        # Check if variable type matches target class
+        if context and base_name in context and context[base_name] == class_name:
+            return True
+        # Special case: 'self' in instance methods
+        if base_name == 'self' and context and context.get('self_class') == class_name:
             return True
         
         return False
 
-
-
-
+    def validate_symbol(self, symbol: str) -> str:
+        """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
+        
+        Args:
+            symbol: The symbol string to validate
+            
+        Returns:
+            The validated and stripped symbol string
+            
+        Raises:
+            ValueError: If symbol validation fails with detailed error message
+        """
+        # Make a copy to strip and validate
+        symbol_to_validate = symbol.strip()
+        is_valid, error_msg = self._validate_symbol_format(symbol_to_validate)
+        if not is_valid:
+            raise ValueError(f"Symbol validation failed: {error_msg}")
+        return symbol_to_validate
 
     async def execute(
         self,
@@ -119,9 +181,14 @@ class CrossReferenceTool(Tool):
         if err_result:
             return err_result
         
-        # Validate symbol format to prevent injection of malicious characters
-        if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol.strip()):
-            return ToolResult(error=f"Invalid symbol format: '{symbol}'", is_error=True)
+        # Validate symbol format, depth, and security using consolidated validation
+        try:
+            validated_symbol = self.validate_symbol(symbol)
+        except ValueError as e:
+            return ToolResult(error=f"Symbol validation failed: {str(e)}", is_error=True)
+        logging.getLogger(__name__).debug(f"Validated symbol: {validated_symbol}")
+        
+        symbol = validated_symbol
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
@@ -139,15 +206,9 @@ class CrossReferenceTool(Tool):
         test_pattern = re.compile(rf'(?<!\w){re.escape(func_name)}(?!\w)') if include_tests else None
 
         for fpath in py_files:
-            # Security containment check FIRST to avoid TOCTOU symlink attacks
-            try:
-                # Security containment check FIRST
-                abs_path = fpath.resolve()
-                if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) for allowed_path in allowed):
-                    continue
-                # Read content only after path validation
-                source = abs_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
+            # Use atomic file reading to prevent TOCTOU symlink attacks
+            source = read_file_atomically(fpath, allowed_paths=allowed)
+            if source is None:
                 continue
             
             try:
@@ -162,6 +223,9 @@ class CrossReferenceTool(Tool):
             except ValueError:
                 rel = str(fpath)
             lines = source.splitlines()
+
+            # Collect context for variable types if looking for a class method
+            context = collect_variable_context(tree) if class_name else {}
 
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -192,42 +256,30 @@ class CrossReferenceTool(Tool):
 
                 # Caller detection
                 if isinstance(node, ast.Call) and len(callers) < 50:
-                    # Create context for instance method resolution
-                    context = {"self": class_name} if class_name else None
                     cname = call_name(node, context)
-                    if cname:
-                        # For class methods: check if cname matches "ClassName.method_name"
-                        # For standalone functions: check if cname matches "func_name"
-                        if class_name:
-                            expected = f"{class_name}.{func_name}"
-                            # Match direct class method calls
-                            if cname == expected:
-                                match = True
-                            # Match instance method calls where call_name returned "ClassName.method_name"
-                            elif cname == func_name and isinstance(node.func, ast.Attribute):
-                                # Additional check: ensure it's called on 'self' or instance variable
-                                if isinstance(node.func.value, ast.Name) and node.func.value.id in (context or {}):
-                                    match = True
-                                else:
-                                    match = False
-                            # Match instance method calls using the helper method
-                            elif self._is_instance_method_call(node, class_name, func_name, context):
-                                match = True
-                            else:
-                                match = False
-                        else:
-                            match = cname == func_name
-                        
-                        if match:
-                            lineno = getattr(node, "lineno", 0)
-                            snippet = (
-                                lines[lineno - 1].strip()
-                                if lines and lineno > 0
-                                else ""
-                            )
-                            callers.append(
-                                {"file": rel, "line": lineno, "snippet": snippet}
-                            )
+                    match = False
+
+                    if class_name:
+                        expected = f"{class_name}.{func_name}"
+                        # 1. Direct class method call
+                        if cname == expected:
+                            match = True
+                        # 2. Instance method call via the new helper
+                        elif self._is_instance_method_call(node, class_name, func_name, context):
+                            match = True
+                    else:
+                        match = cname == func_name
+                    
+                    if match:
+                        lineno = getattr(node, "lineno", 0)
+                        snippet = (
+                            lines[lineno - 1].strip()
+                            if lines and lineno > 0
+                            else ""
+                        )
+                        callers.append(
+                            {"file": rel, "line": lineno, "snippet": snippet}
+                        )
 
             # Test file detection
             if include_tests and len(test_files) < 20:
@@ -242,6 +294,13 @@ class CrossReferenceTool(Tool):
                 if is_test_file and test_pattern and test_pattern.search(source):
                     test_files.append(rel)
 
+        # Proactive snippet truncation to prevent _safe_json truncation from corrupting output
+        MAX_SNIPPET_LENGTH = 200
+        for caller in callers:
+            snippet = caller.get("snippet", "")
+            if len(snippet) > MAX_SNIPPET_LENGTH:
+                caller["snippet"] = snippet[:MAX_SNIPPET_LENGTH] + "..."
+
         result: dict[str, Any] = {
             "symbol": symbol,
             "definition": definition,
@@ -255,3 +314,7 @@ class CrossReferenceTool(Tool):
         # Use the base class's safe JSON serialization
         output = self._safe_json(result, max_bytes=_MAX_OUTPUT_BYTES)
         return ToolResult(output=output)
+
+
+# Verify the refactored regex pattern works correctly
+assert CrossReferenceTool._VALID_SYMBOL_PATTERN.fullmatch("my.valid.symbol") is not None
