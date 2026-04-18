@@ -25,7 +25,7 @@ _SCORE_MAX: float = 10.0
 # because evaluators are instructed to place the authoritative score last on
 # its own line.  The loose fallback handles older/custom prompts that don't
 # follow the anchored format.
-_STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)\s*$", re.MULTILINE)
+_STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)(?:\s+.*)?$", re.MULTILINE)
 _STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 _LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
@@ -571,15 +571,18 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
                 issues.append(f"SCORE: found inside markdown code block at line {line_num}")
                 # Don't break - continue checking all lines to report all violations
     
-    # Check for SCORE format - must be on its own line
+    # Check for SCORE format - can have trailing text after the score
     score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
     if score_lines:
         score_line = score_lines[-1].strip()
-        # Check for proper SCORE: X.X format
+        # Check for proper SCORE: X.X format (allows trailing text)
         if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\b', score_line):
-            issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X'")
+            issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X' with optional trailing text")
         # Check that score is the last thing in the output (most reliable)
-        if not text.strip().endswith(score_line):
+        # Allow for trailing whitespace after the score line
+        text_stripped = text.strip()
+        score_line_stripped = score_line.strip()
+        if not text_stripped.endswith(score_line_stripped) and not text_stripped.endswith(score_line_stripped + '\n'):
             issues.append("SCORE should be the last line of the output for reliable parsing")
         
         # Extract and validate score calibration
