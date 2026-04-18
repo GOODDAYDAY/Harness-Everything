@@ -686,8 +686,8 @@ def some_function():
         assert False, f"_validate_symbol should raise ValueError for symbol exceeding depth limit: {overly_deep_symbol}"
     except ValueError as e:
         validation_result = str(e)
-        assert "exceeds maximum depth" in validation_result, \
-            f"Validation error should contain 'exceeds maximum depth'. Got: {validation_result}"
+        assert "exceeds maximum identifier count" in validation_result, \
+            f"Validation error should contain 'exceeds maximum identifier count'. Got: {validation_result}"
         assert "12" in validation_result and "10" in validation_result, \
             f"Validation error should mention actual and limit values. Got: {validation_result}"
     
