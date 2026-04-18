@@ -30,6 +30,12 @@ log = logging.getLogger(__name__)
 # warning and is logged for operators.
 _DECLINE_WARN_STREAK: int = 3
 
+# Number of consecutive rounds without improvement (i.e. round_score <= prev)
+# that triggers a "flatline" warning. The trend-detection block at line ~551
+# references this threshold; it was used without being defined when the
+# flatline check was introduced in commit fc3d99c (R4 traceability).
+_FLATLINE_WARN_STREAK: int = 4
+
 # Matches the "**Best**: 7.5" line written by PhaseRunner._write_phase_summary.
 _BEST_SCORE_RE = re.compile(r"^\*\*Best\*\*:\s*(\d+(?:\.\d+)?)", re.MULTILINE)
 
