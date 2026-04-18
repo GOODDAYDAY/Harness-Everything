@@ -125,17 +125,14 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
     dir_fd = None
     file_fd = None
     try:
-        # 1. RESOLVE and VALIDATE path security FIRST
-        abs_path = path.resolve()
-        if not any(abs_path.is_relative_to(allowed) for allowed in allowed_paths):
-            return None
+        # 1. Convert path to absolute (but don't resolve symlinks yet)
+        abs_path = path.absolute()
         
-        # 2. Get parent directory path
+        # 2. Open parent directory with O_PATH | O_DIRECTORY | O_CLOEXEC if available
+        # This gives us a directory file descriptor that can't be swapped out
         parent_dir = abs_path.parent
         filename = abs_path.name
         
-        # 3. Open parent directory with O_PATH | O_DIRECTORY | O_CLOEXEC if available
-        # This gives us a directory file descriptor that can't be swapped out
         try:
             # Linux-specific flags for atomic directory access
             dir_flags = getattr(os, 'O_PATH', 0) | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_CLOEXEC', 0)
@@ -144,6 +141,17 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             # Fallback for systems without O_PATH/O_DIRECTORY
             # Use O_RDONLY and hope the directory doesn't get swapped
             dir_fd = os.open(str(parent_dir), os.O_RDONLY)
+        
+        # 3. Verify parent directory is within allowed paths using the directory fd
+        # This resolves symlinks atomically using the directory file descriptor
+        try:
+            # Use os.path.realpath with dir_fd to get canonical path
+            parent_realpath = os.path.realpath(str(parent_dir), dir_fd=dir_fd)
+            parent_realpath_path = Path(parent_realpath)
+            if not any(parent_realpath_path.is_relative_to(allowed) for allowed in allowed_paths):
+                return None
+        except OSError:
+            return None
         
         # 4. Verify parent directory is within allowed paths using the directory fd
         try:
@@ -168,9 +176,14 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         try:
             # Get file stats for the opened file descriptor
             file_stat = os.fstat(file_fd)
-            # Get file stats for the original path (should match if no symlink swap)
+            
+            # Construct the resolved file path using the resolved parent directory
+            # and the filename we used to open the file
+            resolved_file_path = parent_realpath_path / filename
+            
+            # Get file stats for the resolved path
             try:
-                target_stat = abs_path.stat()
+                target_stat = resolved_file_path.stat()
             except OSError:
                 return None
             
@@ -179,9 +192,8 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
                 file_stat.st_ino != target_stat.st_ino):
                 return None
             
-            # Also verify the file is within allowed paths using the original path
-            # (which we already validated, but double-check for safety)
-            if not any(abs_path.is_relative_to(allowed) for allowed in allowed_paths):
+            # Also verify the file is within allowed paths using the resolved path
+            if not any(resolved_file_path.is_relative_to(allowed) for allowed in allowed_paths):
                 return None
         except OSError:
             return None
