@@ -34,9 +34,8 @@ class TestSecurity:
     def test_read_file_atomically_symlink_attack(self):
         """Test that read_file_atomically prevents TOCTOU symlink swap attacks.
         
-        Note: This test verifies basic symlink handling. The current implementation
-        allows symlink swaps within the same directory as a known limitation.
-        Directory symlink swaps are prevented by test_read_file_atomically_toctou_dir_fd_validation.
+        The security fix now rejects symlinks entirely to prevent TOCTOU attacks.
+        This is a stricter security policy that eliminates the race condition.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -49,7 +48,7 @@ class TestSecurity:
             link_path = tmpdir_path / "link"
             link_path.symlink_to(safe_file)
 
-            # First read should succeed
+            # First read should succeed (symlink to allowed file)
             allowed = [tmpdir_path]
             content = read_file_atomically(link_path, allowed_paths=allowed)
             assert content == "legitimate content"
@@ -58,11 +57,10 @@ class TestSecurity:
             link_path.unlink()
             link_path.symlink_to(malicious_file)
 
-            # Second read: Both files are in the same allowed directory,
-            # so access is allowed. This is a known limitation of the
-            # current implementation for file symlinks within the same directory.
+            # Second read: With the security fix, symlinks are now rejected
+            # to prevent TOCTOU attacks. The read should fail.
             content = read_file_atomically(link_path, allowed_paths=allowed)
-            assert content == "stolen data"
+            assert content is None  # Security fix rejects symlinks
 
     def test_validate_path_security_order(self):
         """Validate that checks execute in security-critical order: null bytes first."""

@@ -210,6 +210,33 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
     return False
 
 
+def _validate_dir_fd_consistent(dir_fd: int, parent_dir: Path) -> bool:
+    """Validate that a directory file descriptor matches the expected path.
+    
+    Implements device/inode validation to prevent TOCTOU attacks where
+    a symlink could be swapped between checking and opening.
+    
+    Args:
+        dir_fd: Open directory file descriptor
+        parent_dir: Expected parent directory path
+        
+    Returns:
+        True if the descriptor matches the path, False otherwise
+    """
+    try:
+        # Get device/inode of the opened descriptor
+        dir_stat = os.fstat(dir_fd)
+        
+        # Get device/inode of the expected path
+        expected_stat = os.stat(str(parent_dir))
+        
+        # Compare device and inode
+        return (dir_stat.st_dev == expected_stat.st_dev and 
+                dir_stat.st_ino == expected_stat.st_ino)
+    except OSError:
+        return False
+
+
 def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
     """Read a file atomically to prevent TOCTOU symlink attacks.
     
@@ -231,6 +258,11 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         parent_dir = abs_path.parent
         filename = abs_path.name
         
+        # Step 1: Check if parent directory is a symlink before opening
+        # This prevents TOCTOU attacks where a symlink could be swapped
+        if os.path.islink(str(parent_dir)):
+            return None  # Parent directory is a symlink - reject for security
+        
         try:
             # Try to open directory with secure flags if available
             # O_PATH allows opening symlinks without following them
@@ -247,46 +279,11 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
                 # but we lose TOCTOU protection for symlink swaps
                 dir_fd = os.open(str(parent_dir), os.O_RDONLY)
         
-        # 3. Get device/inode of the opened directory descriptor
-        dir_stat = os.fstat(dir_fd)
-        
-        # 4. Check if what we opened matches what we expected
-        # Get stats of the original path (without following symlinks)
-        try:
-            original_stat = os.lstat(str(parent_dir))
-        except OSError:
-            return None
-        
-        # CRITICAL FIX: Always verify the opened directory descriptor matches the original path
-        # This prevents TOCTOU attacks where a symlink is swapped after we open it
-        if not (dir_stat.st_dev == original_stat.st_dev and dir_stat.st_ino == original_stat.st_ino):
-            # What we opened doesn't match the original path
-            # This could mean:
-            # 1. The path was a symlink and we opened its target (O_RDONLY fallback)
-            # 2. The symlink was swapped after we opened it
-            # 3. A race condition occurred
-            # In all cases, we must fail securely
-            
-            # Special case: If the original path is a symlink and we opened its target,
-            # we need to check if the symlink still points to what we opened
-            if os.path.islink(str(parent_dir)):
-                try:
-                    # Get current symlink target
-                    current_target = Path(os.readlink(str(parent_dir)))
-                    if not current_target.is_absolute():
-                        current_target = (parent_dir.parent / current_target).resolve()
-                    
-                    # Get stats of current target
-                    target_stat = current_target.stat()
-                    
-                    # Check if what we opened matches the current target
-                    if not (dir_stat.st_dev == target_stat.st_dev and dir_stat.st_ino == target_stat.st_ino):
-                        return None  # Symlink points elsewhere now
-                except OSError:
-                    return None
-            else:
-                # Not a symlink - this is definitely a race condition or attack
-                return None
+        # Step 2: Validate that the opened directory descriptor matches the expected path
+        # This implements device/inode validation to prevent TOCTOU attacks
+        if not _validate_dir_fd_consistent(dir_fd, parent_dir):
+            os.close(dir_fd)
+            return None  # Directory descriptor mismatch - possible TOCTOU attack
         
         # 5. Validate the *real* parent directory is within allowed_paths
         # Get the real path of the parent directory for containment check
@@ -300,9 +297,9 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             return None
         
         # 5. Open target file relative to dir_fd
-        # Note: We don't use O_NOFOLLOW because we need to allow symlinks,
-        # but we validate the opened file matches the expected file
-        file_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+        # Use O_NOFOLLOW to prevent following symlinks - this fixes TOCTOU attacks
+        # where a symlink could be swapped between opening and validation
+        file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
         try:
             file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
         except OSError:
