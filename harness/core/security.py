@@ -152,18 +152,13 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # 4. Get device and inode of the opened file
         file_stat = os.fstat(file_fd)
         
-        # 5. Now we need to verify the opened file is within allowed paths
-        # We'll do this by checking the parent directory path
-        # First, get the real path of the parent directory we opened
+        # 5. Construct the expected absolute path for validation
+        # We need to get the real path of the parent directory
         try:
-            # Use os.path.realpath with dir_fd to get the real parent path
-            parent_real = Path(os.path.realpath(str(parent_dir), dir_fd=dir_fd))
-        except (OSError, AttributeError):
-            # Fallback if realpath doesn't support dir_fd
-            try:
-                parent_real = Path(os.path.realpath(str(parent_dir)))
-            except OSError:
-                return None
+            # Get real path of parent directory (without dir_fd parameter)
+            parent_real = Path(os.path.realpath(str(parent_dir)))
+        except OSError:
+            return None
         
         # 6. Construct the expected real path
         expected_real_path = parent_real / filename
