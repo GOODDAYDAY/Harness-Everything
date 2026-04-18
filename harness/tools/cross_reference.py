@@ -38,7 +38,8 @@ class CrossReferenceTool(Tool):
     
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$')
+    # REJECTS: consecutive dots, leading/trailing dots, directory traversal
+    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$')
 
     def _read_file_atomically(self, path: Path, allowed_paths: list[Path]) -> str | None:
         """Read a file atomically to prevent TOCTOU symlink attacks.
@@ -178,8 +179,13 @@ class CrossReferenceTool(Tool):
             return err_result
         
         # Validate symbol format to prevent injection of malicious characters
-        if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol.strip()):
+        symbol = symbol.strip()
+        if not self._VALID_SYMBOL_PATTERN.fullmatch(symbol):
             return ToolResult(error=f"Invalid symbol format: '{symbol}'", is_error=True)
+        
+        # Additional security validation (defense-in-depth)
+        if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
+            return ToolResult(error=f"Potentially malicious symbol: '{symbol}'", is_error=True)
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
