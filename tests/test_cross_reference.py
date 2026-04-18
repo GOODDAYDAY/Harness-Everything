@@ -243,7 +243,6 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     assert tool._is_instance_method_call(call_node, "MyClass", "other_method", {}) is False, \
         "_is_instance_method_call should return False for wrong method name"
     
-    # Test negative case: different class name (should still match since it's checking method name)
-    # The helper checks if the method name matches, not the class name for instance calls
-    assert tool._is_instance_method_call(call_node, "OtherClass", "my_method", {}) is True, \
-        "_is_instance_method_call should return True for correct method name even with different class"
+    # Test negative case: different class name (should NOT match without context)
+    assert tool._is_instance_method_call(call_node, "OtherClass", "my_method", {}) is False, \
+        "_is_instance_method_call should return False for different class without context"

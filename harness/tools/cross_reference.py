@@ -50,40 +50,44 @@ class CrossReferenceTool(Tool):
         Returns:
             File content as string, or None if the file cannot be read securely.
         """
+        fd = None
         try:
             # Open file descriptor without following symlinks
             fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+            
+            # Get file stats from the descriptor
+            fd_stat = os.fstat(fd)
+            
+            # Re-resolve the original path and check if it's still the same file
             try:
-                # Get file stats from the descriptor
-                fd_stat = os.fstat(fd)
-                
-                # Re-resolve the original path and check if it's still the same file
-                try:
-                    path_stat = path.stat()
-                except OSError:
-                    return None
-                
-                # Compare device and inode numbers to ensure we're reading the same file
-                if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
-                    return None
-                
-                # Check if the resolved path is within allowed paths
-                abs_path = path.resolve()
-                if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) 
-                          for allowed_path in allowed_paths):
-                    return None
-                
-                # Read content from the file descriptor
-                with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-                    return f.read()
-            finally:
-                # Ensure file descriptor is closed even if errors occur above
+                path_stat = path.stat()
+            except OSError:
+                return None
+            
+            # Compare device and inode numbers to ensure we're reading the same file
+            if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
+                return None
+            
+            # Check if the resolved path is within allowed paths
+            abs_path = path.resolve()
+            if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) 
+                      for allowed_path in allowed_paths):
+                return None
+            
+            # Read content from the file descriptor
+            # os.fdopen takes ownership of the file descriptor
+            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                fd = None  # fdopen took ownership, don't close in finally
+                return f.read()
+        except (OSError, PermissionError, UnicodeDecodeError):
+            return None
+        finally:
+            # Only close the file descriptor if os.fdopen didn't take ownership
+            if fd is not None:
                 try:
                     os.close(fd)
                 except OSError:
                     pass
-        except (OSError, PermissionError, UnicodeDecodeError):
-            return None
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -142,10 +146,8 @@ class CrossReferenceTool(Tool):
             # Check if we have context mapping for this variable
             if context and var_name in context:
                 return context[var_name] == class_name
-            # Without context, we can't be sure, but for test compatibility
-            # we'll accept it as a potential instance method call
-            # This is a simplification - real implementation would track assignments
-            return True
+            # Without context, we can't be sure - return False
+            return False
         
         return False
 
