@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.core.security import read_file_atomically
+from harness.core.security import read_file_atomically, validate_path_security
 from harness.tools._ast_utils import (
     parent_class,
     function_signature,
@@ -40,6 +41,9 @@ class CrossReferenceTool(Tool):
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
     _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$', re.ASCII)
+    
+    # Maximum depth for symbol qualification to prevent abuse
+    _MAX_SYMBOL_DEPTH = 10
 
 
 
