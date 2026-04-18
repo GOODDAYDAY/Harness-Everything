@@ -681,12 +681,14 @@ def some_function():
     # Create a symbol with 11 dots (12 identifiers) - should definitely exceed limit
     overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k.l"  # 11 dots, 12 identifiers
     
-    # Call the private validation method
-    validation_result = tool._validate_symbol(overly_deep_symbol)
-    assert validation_result is not None, \
-        f"_validate_symbol should reject symbol exceeding depth limit: {overly_deep_symbol}"
-    assert "depth" in validation_result.lower() or "limit" in validation_result.lower(), \
-        f"Validation error should mention depth/limit. Got: {validation_result}"
+    # Call the private validation method - should raise ValueError
+    try:
+        tool._validate_symbol(overly_deep_symbol)
+        assert False, f"_validate_symbol should raise ValueError for symbol exceeding depth limit: {overly_deep_symbol}"
+    except ValueError as e:
+        validation_result = str(e)
+        assert "depth" in validation_result.lower() or "limit" in validation_result.lower(), \
+            f"Validation error should mention depth/limit. Got: {validation_result}"
     
     # Test 4: Verify the constant value matches what we're testing
     assert tool._MAX_SYMBOL_DEPTH == 10, \
