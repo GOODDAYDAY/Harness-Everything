@@ -427,3 +427,54 @@ obj.run()
     # This should work if context is provided
     if not is_instance_call2:
         print("WARNING: _is_instance_method_call doesn't handle obj.attr.method() with context")
+
+
+def test_cross_reference_still_works(tmp_path):
+    """Test that cross_reference tool functions correctly after security consolidation."""
+    tool = CrossReferenceTool()
+    
+    # Create a temporary workspace with a Python file containing a known symbol
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    workspace = str(workspace_path)
+    
+    # Create a Python file with a function to find
+    test_file = workspace_path / "test_module.py"
+    test_file.write_text("""
+def find_me_function():
+    '''This function should be found by cross_reference.'''
+    return "found"
+
+class TestClass:
+    def method_to_find(self):
+        '''This method should also be findable.'''
+        return "method found"
+""")
+    
+    config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+    
+    # Test finding a function
+    result = asyncio.run(tool.execute(config, symbol="find_me_function"))
+    assert not result.is_error, f"Tool execution failed: {result.error}"
+    
+    # Parse the result
+    result_data = json.loads(result.output)
+    
+    # Verify the symbol was found
+    assert result_data["symbol"] == "find_me_function"
+    assert result_data["definition"] is not None
+    assert result_data["definition"]["file"] == "test_module.py"
+    assert "find_me_function" in result_data["definition"]["signature"]
+    
+    # Test finding a class method
+    result2 = asyncio.run(tool.execute(config, symbol="TestClass.method_to_find"))
+    assert not result2.is_error, f"Tool execution failed: {result2.error}"
+    
+    result_data2 = json.loads(result2.output)
+    assert result_data2["symbol"] == "TestClass.method_to_find"
+    assert result_data2["definition"] is not None
+    assert result_data2["definition"]["file"] == "test_module.py"
+    
+    # Verify the tool is using the correct security function (no deprecation warnings in output)
+    assert "deprecated" not in result.output.lower()
+    assert "deprecated" not in result2.output.lower()

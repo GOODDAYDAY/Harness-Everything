@@ -15,6 +15,8 @@ from pathlib import Path
 def _read_file_atomically(path: Path | str, allowed_paths: list[Path] | None = None) -> str | None:
     """Read a file atomically to prevent TOCTOU symlink attacks.
     
+    DEPRECATED: Use read_file_atomically from harness.core.security instead.
+    
     Args:
         path: Path to the file to read.
         allowed_paths: Optional list of allowed directory paths for security containment.
@@ -22,6 +24,12 @@ def _read_file_atomically(path: Path | str, allowed_paths: list[Path] | None = N
     Returns:
         File content as string, or None if the file cannot be read securely.
     """
+    import warnings
+    warnings.warn(
+        "_read_file_atomically is deprecated; import read_file_atomically from harness.core.security",
+        DeprecationWarning,
+        stacklevel=2
+    )
     import os
     fd = None
     try:
