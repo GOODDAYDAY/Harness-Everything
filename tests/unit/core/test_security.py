@@ -206,3 +206,40 @@ class TestSecurity:
             
             # Should return None for non-existent files
             assert content is None
+
+    def test_read_file_atomically_filename_traversal(self, caplog):
+        """Test that read_file_atomically prevents path traversal via filename.
+        
+        This tests the new filename validation that checks for '/' and '..' 
+        in filename components.
+        """
+        # Set log level to capture warnings
+        caplog.set_level(logging.WARNING)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            allowed_dir = tmpdir_path / "allowed"
+            allowed_dir.mkdir()
+            
+            # Create a legitimate file
+            safe_file = allowed_dir / "data.txt"
+            safe_file.write_text("legitimate content")
+            
+            # Test 1: Filename with path separator (should be rejected)
+            malicious_path1 = allowed_dir / "../outside.txt"
+            content = read_file_atomically(malicious_path1, allowed_paths=[allowed_dir])
+            assert content is None
+            assert "PERMISSION ERROR: Path traversal detected in filename" in caplog.text
+            
+            # Clear logs for next test
+            caplog.clear()
+            
+            # Test 2: Filename with '..' component (should be rejected)
+            malicious_path2 = allowed_dir / ".."
+            content = read_file_atomically(malicious_path2, allowed_paths=[allowed_dir])
+            assert content is None
+            assert "PERMISSION ERROR: Path traversal detected in filename" in caplog.text
+            
+            # Test 3: Clean filename (should succeed)
+            content = read_file_atomically(safe_file, allowed_paths=[allowed_dir])
+            assert content == "legitimate content"

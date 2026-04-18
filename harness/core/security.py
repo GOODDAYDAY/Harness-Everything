@@ -328,6 +328,31 @@ def _is_parent_directory_symlink(dir_fd: int, child_name: str) -> bool:
         return True
 
 
+def _validate_filename_component(filename: str) -> str | None:
+    """Validate that a filename component doesn't contain path traversal sequences.
+    
+    Args:
+        filename: The filename component to validate.
+        
+    Returns:
+        Error message if path traversal detected, None if filename is clean.
+    """
+    # Check for path separators in filename
+    if '/' in filename or '\\' in filename:
+        log.warning("PERMISSION ERROR: Path traversal detected in filename")
+        return "PERMISSION ERROR: Path traversal detected in filename"
+    
+    # Check for traversal sequences in any component
+    # Split by any path separator to check each component
+    components = filename.replace('\\', '/').split('/')
+    for component in components:
+        if component == '..':
+            log.warning("PERMISSION ERROR: Path traversal detected in filename")
+            return "PERMISSION ERROR: Path traversal detected in filename"
+    
+    return None
+
+
 def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
     """Read a file atomically to prevent TOCTOU symlink attacks.
     
@@ -348,6 +373,10 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # This is critical to eliminate TOCTOU race window
         parent_dir = abs_path.parent
         filename = abs_path.name
+        
+        # Validate filename component for path traversal
+        if error := _validate_filename_component(filename):
+            return None
         
         # Step 1: Check if parent directory is a symlink before opening
         # This prevents TOCTOU attacks where a symlink could be swapped
