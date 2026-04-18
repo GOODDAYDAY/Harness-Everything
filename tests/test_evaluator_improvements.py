@@ -464,7 +464,7 @@ def test_syntax_error_triggers_fail_with_context():
         from harness.evaluation.static_analysis import run_static_checks
         
         # Run static checks on the invalid file
-        result = run_static_checks(changed_files)
+        result = run_static_checks(changed_files, workspace="/tmp")
         
         # Verify that syntax error is detected
         assert "syntax" in str(result).lower() or "invalid" in str(result).lower(), \
