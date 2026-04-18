@@ -273,6 +273,9 @@ class TestSecurity:
         from harness.tools.cross_reference import CrossReferenceTool
         import re
         
+        # Create an instance to test the validation method
+        tool = CrossReferenceTool()
+        
         # Get the pattern from the class
         pattern = CrossReferenceTool._VALID_SYMBOL_PATTERN
         
@@ -281,13 +284,13 @@ class TestSecurity:
         assert pattern.fullmatch("ClassName.method_name") is not None
         assert pattern.fullmatch("simple_function") is not None
         
-        # Test valid symbol with maximum depth (11 identifiers, 10 dots)
-        # a.b.c.d.e.f.g.h.i.j.k has 10 dots, which is the maximum allowed
-        valid_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"
+        # Test valid symbol with maximum depth (10 identifiers, 9 dots)
+        # a.b.c.d.e.f.g.h.i.j has 9 dots, 10 identifiers - maximum allowed
+        valid_deep_symbol = "a.b.c.d.e.f.g.h.i.j"
         assert pattern.fullmatch(valid_deep_symbol) is not None
         
-        # Test overly deep symbol (12 identifiers, 11 dots) - should be rejected
-        overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k.l"
+        # Test overly deep symbol (11 identifiers, 10 dots) - should be rejected
+        overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"
         assert pattern.fullmatch(overly_deep_symbol) is None
         
         # Test invalid symbols
@@ -300,3 +303,40 @@ class TestSecurity:
         # Test that the pattern is ASCII-only (security requirement)
         assert pattern.flags & re.ASCII
         assert pattern.fullmatch("unicode_symbol_α") is None  # Non-ASCII character
+        
+        # Test the _validate_symbol method directly
+        # Valid symbols should not raise
+        tool._validate_symbol("simple_function")
+        tool._validate_symbol("ClassName.method_name")
+        tool._validate_symbol("a.b.c.d.e.f.g.h.i.j")  # 10 identifiers, should pass
+        
+        # Test invalid cases using pytest.raises
+        import pytest
+        
+        # Test empty string
+        with pytest.raises(ValueError, match="Symbol cannot be empty"):
+            tool._validate_symbol("")
+        
+        # Test whitespace only
+        with pytest.raises(ValueError, match="Symbol cannot be empty"):
+            tool._validate_symbol("   ")
+        
+        # Test symbol exceeding maximum depth
+        with pytest.raises(ValueError, match="Invalid symbol format"):
+            tool._validate_symbol("a.b.c.d.e.f.g.h.i.j.k")  # 11 identifiers
+        
+        # Test symbol with leading dot
+        with pytest.raises(ValueError, match="Invalid symbol format"):
+            tool._validate_symbol(".start")
+        
+        # Test symbol with trailing dot
+        with pytest.raises(ValueError, match="Potentially malicious symbol"):
+            tool._validate_symbol("end.")
+        
+        # Test symbol with consecutive dots
+        with pytest.raises(ValueError, match="Potentially malicious symbol"):
+            tool._validate_symbol("double..dots")
+        
+        # Test symbol with Unicode character
+        with pytest.raises(ValueError, match="Invalid symbol format"):
+            tool._validate_symbol("func©")
