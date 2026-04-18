@@ -131,7 +131,6 @@ class CrossReferenceTool(Tool):
         1. Checks for None or empty string
         2. Validates format against _VALID_SYMBOL_PATTERN (includes ASCII check)
         3. Checks depth against _MAX_SYMBOL_DEPTH
-        4. Additional security checks
         
         Raises:
             ValueError: If symbol validation fails
@@ -157,9 +156,8 @@ class CrossReferenceTool(Tool):
                 f"{self._MAX_SYMBOL_DEPTH} (got {identifier_count})"
             )
         
-        # 4. Additional security checks (redundant but explicit)
-        if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
-            raise ValueError(f"Potentially malicious symbol: '{symbol}'")
+        # Note: The regex pattern already rejects consecutive dots, leading dots,
+        # trailing dots, and non-ASCII characters, providing defense-in-depth security.
     
     def validate_symbol(self, symbol: str) -> str:
         """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
