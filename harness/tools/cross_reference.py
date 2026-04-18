@@ -288,6 +288,13 @@ class CrossReferenceTool(Tool):
                 if is_test_file and test_pattern and test_pattern.search(source):
                     test_files.append(rel)
 
+        # Proactive snippet truncation to prevent _safe_json truncation from corrupting output
+        MAX_SNIPPET_LENGTH = 200
+        for caller in callers:
+            snippet = caller.get("snippet", "")
+            if len(snippet) > MAX_SNIPPET_LENGTH:
+                caller["snippet"] = snippet[:MAX_SNIPPET_LENGTH] + "..."
+
         result: dict[str, Any] = {
             "symbol": symbol,
             "definition": definition,
