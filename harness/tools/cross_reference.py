@@ -42,11 +42,12 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    # Allows 1-10 identifiers (0-9 dots), matching _MAX_SYMBOL_DEPTH
+    # Allows 1-10 identifiers (0-9 dots), matching _MAX_SYMBOL_DEPTH=10
     _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,9}$', re.ASCII)
     
     # Maximum depth for symbol qualification to prevent denial-of-service attacks
     # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
+    # Matches regex pattern {0,9} (1-10 identifiers total).
     _MAX_SYMBOL_DEPTH = 10
 
     def _validate_symbol_format(self, symbol: str) -> tuple[bool, str]:

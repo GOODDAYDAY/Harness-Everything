@@ -294,6 +294,12 @@ def test_symbol_depth_boundary_consistency():
     is_valid, _ = tool._validate_symbol_format(symbol_10)
     assert is_valid, f"Validation should pass for symbol with 10 identifiers: {symbol_10}"
     
+    # Specific assertion for 10-identifier symbol (a.b.c.d.e.f.g.h.i.j) returns (True, "")
+    max_valid_symbol = "a.b.c.d.e.f.g.h.i.j"  # 10 identifiers, 9 dots
+    is_valid, error_msg = tool._validate_symbol_format(max_valid_symbol)
+    assert is_valid, f"_validate_symbol_format should return True for 10-identifier symbol: {max_valid_symbol}"
+    assert error_msg == "", f"_validate_symbol_format should return empty error string for valid symbol. Got: {error_msg}"
+    
     # Test 2: Symbol exceeding maximum depth (11 identifiers, 10 dots)
     # With regex {0,9}, the pattern should reject 11 identifiers
     too_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 11 identifiers, 10 dots
