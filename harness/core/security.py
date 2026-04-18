@@ -145,8 +145,20 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # 3. Verify parent directory is within allowed paths using the directory fd
         # This resolves symlinks atomically using the directory file descriptor
         try:
-            # Use os.path.realpath with dir_fd to get canonical path
-            parent_realpath = os.path.realpath(str(parent_dir), dir_fd=dir_fd)
+            # Get the real path of the parent directory
+            # On Linux, we can use /proc/self/fd/{dir_fd} to get the real path
+            parent_realpath = None
+            if hasattr(os, 'readlink'):
+                try:
+                    fd_path = f"/proc/self/fd/{dir_fd}"
+                    parent_realpath = os.readlink(fd_path)
+                except (OSError, FileNotFoundError):
+                    pass
+            
+            # Fallback: use os.path.realpath without dir_fd (less secure)
+            if parent_realpath is None:
+                parent_realpath = os.path.realpath(str(parent_dir))
+            
             parent_realpath_path = Path(parent_realpath)
             if not any(parent_realpath_path.is_relative_to(allowed) for allowed in allowed_paths):
                 return None
