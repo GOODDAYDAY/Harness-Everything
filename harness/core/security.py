@@ -3,38 +3,9 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
 from pathlib import Path
-from collections import OrderedDict
 
 from harness.core.config import HarnessConfig
-
-
-class LRUCache:
-    """Simple LRU cache implementation."""
-    
-    def __init__(self, maxsize: int = 128):
-        self.maxsize = maxsize
-        self.cache = OrderedDict()
-    
-    def get(self, key):
-        """Get value from cache, moving it to the end (most recently used)."""
-        if key in self.cache:
-            self.cache.move_to_end(key)
-            return self.cache[key]
-        return None
-    
-    def put(self, key, value):
-        """Put value in cache, evicting least recently used item if full."""
-        if key in self.cache:
-            self.cache.move_to_end(key)
-        self.cache[key] = value
-        if len(self.cache) > self.maxsize:
-            self.cache.popitem(last=False)
-
-
-# Global LRU cache for file validation results
-_file_validation_cache = LRUCache(maxsize=128)
 
 
 def validate_path_no_homoglyphs(path: str, config: HarnessConfig | None = None) -> str | None:
@@ -175,26 +146,6 @@ def validate_path_security(path: str, config: HarnessConfig | None = None) -> st
     if error := validate_path_no_homoglyphs(path, config):
         return error
     return None
-
-
-@lru_cache(maxsize=128)
-def _validate_file_within_allowed_paths_cached(file_dev: int, file_ino: int, allowed_paths_hash: int) -> bool:
-    """Cached version of device/inode validation.
-    
-    Args:
-        file_dev: Device ID from os.fstat()
-        file_ino: Inode number from os.fstat()
-        allowed_paths_hash: Hash of the allowed_paths list for cache key
-        
-    Returns:
-        True if a file with matching device/inode is found under allowed paths
-    """
-    # This function only handles the cached device/inode lookup
-    # The actual allowed_paths list is not available here, only its hash
-    # The real validation happens in the wrapper function below
-    # This is a placeholder that always returns False - the real work
-    # is done in the non-cached wrapper
-    return False
 
 
 def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path]) -> bool:
