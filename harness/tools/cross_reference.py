@@ -16,6 +16,7 @@ from harness.tools._ast_utils import (
     call_name,
     extract_callees,
     safe_parse,
+    collect_variable_context,
 )
 from harness.tools.base import Tool, ToolResult
 
