@@ -336,7 +336,7 @@ class TestSecurity:
             tool._validate_symbol("end.")
         
         # Test symbol with consecutive dots
-        with pytest.raises(ValueError, match="Potentially malicious symbol"):
+        with pytest.raises(ValueError, match="Invalid symbol format"):
             tool._validate_symbol("double..dots")
         
         # Test symbol with Unicode character
