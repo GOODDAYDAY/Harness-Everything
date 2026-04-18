@@ -332,7 +332,7 @@ class TestSecurity:
             tool._validate_symbol(".start")
         
         # Test symbol with trailing dot
-        with pytest.raises(ValueError, match="Potentially malicious symbol"):
+        with pytest.raises(ValueError, match="Invalid symbol format"):
             tool._validate_symbol("end.")
         
         # Test symbol with consecutive dots
