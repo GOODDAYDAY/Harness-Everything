@@ -134,6 +134,30 @@ class TestSecurity:
             # The fix ensures this returns None on permission error
             assert content is None
 
+    def test_validate_path_no_null_bytes(self):
+        """Test that null bytes in paths are properly rejected."""
+        # Assert that clean path returns None
+        assert validate_path_no_null_bytes("/safe/path") is None
+        
+        # Assert that path with null byte returns an error
+        error = validate_path_no_null_bytes("bad/\x00path")
+        assert error is not None
+        assert "null byte" in error
+        assert "PERMISSION ERROR" in error
+        
+        # Test null byte at different positions
+        error = validate_path_no_null_bytes("\x00start")
+        assert error is not None
+        assert "null byte" in error
+        
+        error = validate_path_no_null_bytes("end\x00")
+        assert error is not None
+        assert "null byte" in error
+        
+        error = validate_path_no_null_bytes("middle\x00null")
+        assert error is not None
+        assert "null byte" in error
+
     def test_validate_path_no_control_chars_del(self):
         """Test that DEL character (U+007F) and whitespace control characters are properly rejected."""
         # Assert that path with DEL character returns an error
@@ -165,3 +189,20 @@ class TestSecurity:
         error = validate_path_no_control_chars('safe/\x0Cpath')
         assert error is not None
         assert "U+000C (FF)" in error
+
+    def test_read_file_atomically_file_not_found(self):
+        """Test that read_file_atomically returns None for non-existent files.
+        
+        This tests error-handling behavior when a file doesn't exist, which is
+        a critical path for security functions.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            # Create a path to a non-existent file
+            nonexistent_path = tmpdir_path / "does_not_exist.txt"
+            
+            # Attempt to read non-existent file
+            content = read_file_atomically(nonexistent_path, allowed_paths=[tmpdir_path])
+            
+            # Should return None for non-existent files
+            assert content is None
