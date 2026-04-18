@@ -70,7 +70,7 @@ class CrossReferenceTool(Tool):
             
             # Check if the resolved path is within allowed paths
             abs_path = path.resolve()
-            if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) 
+            if not any(abs_path.is_relative_to(allowed_path) 
                       for allowed_path in allowed_paths):
                 return None
             

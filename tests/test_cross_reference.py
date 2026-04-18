@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from pathlib import Path
 from harness.tools.cross_reference import CrossReferenceTool
 from harness.core.config import HarnessConfig
 
@@ -255,3 +256,54 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     # Test negative case: different class name (should NOT match without context)
     assert tool._is_instance_method_call(call_node, "OtherClass", "my_method", {}) is False, \
         "_is_instance_method_call should return False for different class without context"
+
+
+def test_cross_reference_rejects_symlink_outside_allowed_path(tmp_path):
+    """Test that _read_file_atomically rejects symlinks pointing outside allowed paths.
+    
+    This validates the security fix that removes the equality check (abs_path == allowed_path)
+    which could be bypassed by symlinks pointing exactly to allowed paths.
+    """
+    tool = CrossReferenceTool()
+    
+    # Create a workspace directory
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    
+    # Create a directory outside the allowed paths
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create a file outside the allowed paths
+    outside_file = outside_dir / "secret.py"
+    outside_file.write_text("secret = 'should not be readable'")
+    
+    # Create a symlink inside workspace pointing to the outside file
+    symlink_path = workspace / "link_to_secret.py"
+    symlink_path.symlink_to(outside_file)
+    
+    # Convert paths to Path objects for the method
+    allowed_paths = [Path(workspace)]
+    
+    # Test that _read_file_atomically rejects the symlink
+    # The method should return None when the symlink points outside allowed paths
+    content = tool._read_file_atomically(symlink_path, allowed_paths)
+    assert content is None, f"Symlink to outside file should be rejected, got content: {content}"
+    
+    # Also test that a legitimate file inside the workspace can be read
+    legit_file = workspace / "legit.py"
+    legit_file.write_text("legit = 'should be readable'")
+    legit_content = tool._read_file_atomically(legit_file, allowed_paths)
+    assert legit_content == "legit = 'should be readable'", f"Legitimate file should be readable, got: {legit_content}"
+    
+    # Test edge case: symlink pointing to a subdirectory of workspace (should be allowed)
+    subdir = workspace / "subdir"
+    subdir.mkdir(parents=True, exist_ok=True)
+    subfile = subdir / "subfile.py"
+    subfile.write_text("subfile = 'in subdirectory'")
+    
+    symlink_to_subfile = workspace / "link_to_subfile.py"
+    symlink_to_subfile.symlink_to(subfile)
+    
+    subfile_content = tool._read_file_atomically(symlink_to_subfile, allowed_paths)
+    assert subfile_content == "subfile = 'in subdirectory'", f"Symlink to allowed subdirectory should be readable, got: {subfile_content}"
