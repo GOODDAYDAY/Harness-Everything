@@ -252,16 +252,16 @@ class TestSecurity:
         ensuring the deprecated function cannot be imported.
         """
         # Attempt to import the deprecated function - should raise ImportError
-        try:
+        with pytest.raises(ImportError) as exc_info:
             from harness.tools._ast_utils import _read_file_atomically
-            # If we get here, the function still exists (test should fail)
-            pytest.fail("_read_file_atomically still exists - dead code not removed")
-        except ImportError as e:
-            # Expected behavior - function has been removed
-            assert "_read_file_atomically" in str(e) or "cannot import name" in str(e)
-            # Also verify that the secure alternative is available
-            from harness.core.security import read_file_atomically
-            assert callable(read_file_atomically)
+        
+        # Verify the error message indicates the function doesn't exist
+        error_msg = str(exc_info.value)
+        assert "_read_file_atomically" in error_msg or "cannot import name" in error_msg
+        
+        # Also verify that the secure alternative is available
+        from harness.core.security import read_file_atomically
+        assert callable(read_file_atomically)
 
     def test_cross_reference_symbol_depth_validation(self):
         """Test that cross-reference tool properly validates symbol depth.
