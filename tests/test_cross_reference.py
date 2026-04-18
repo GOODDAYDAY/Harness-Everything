@@ -124,3 +124,100 @@ def test_cross_reference_rejects_invalid_symbol(tmp_path):
         # Check that the error is NOT about invalid symbol format
         if result.is_error:
             assert "Invalid symbol format" not in result.error, f"Valid symbol '{valid_symbol}' incorrectly rejected: {result.error}"
+
+
+def test_cross_reference_finds_instance_method_calls(tmp_path):
+    """Test that cross_reference correctly finds instance method calls.
+    
+    This validates the fix for the falsifiable criterion: the tool's core 
+    functionality is broken as call_name() never returns a fully-qualified name,
+    making the comparison cname == f"{class_name}.{func_name}" always fail 
+    for instance method calls.
+    """
+    # Create a test Python file with class definition and instance method calls
+    test_file = tmp_path / "test_module.py"
+    test_file.write_text("""
+class MyClass:
+    def my_method(self):
+        '''Instance method.'''
+        return "hello"
+    
+    def another_method(self):
+        '''Another instance method.'''
+        return "world"
+
+def standalone_function():
+    '''A standalone function.'''
+    return 42
+
+# Create instance and call methods
+obj = MyClass()
+obj.my_method()          # Instance method call - should be found
+obj.another_method()     # Another instance method call - should NOT be found for "MyClass.my_method"
+MyClass.my_method(obj)   # Class-style call - should be found
+
+# Call standalone function
+standalone_function()    # Should NOT be found for "MyClass.my_method"
+""")
+    
+    # Create workspace directory
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    
+    # Create config
+    config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
+    
+    # Create tool instance
+    tool = CrossReferenceTool()
+    
+    # Test searching for "MyClass.my_method"
+    result = asyncio.run(tool.execute(
+        config,
+        symbol="MyClass.my_method",
+        root=str(workspace),
+        include_tests=False
+    ))
+    
+    # Should not be an error
+    assert not result.is_error, f"Tool returned error: {result.error}"
+    
+    # Parse JSON output
+    import json
+    data = json.loads(result.output)
+    
+    # Verify the definition is found
+    assert data["definition"] is not None, "Definition should be found"
+    assert data["definition"]["file"] == "test_module.py"
+    # Method definition is at line 3 (1-based) in the test content
+    # class MyClass: (line 1)
+    #     def my_method(self): (line 2)
+    assert data["definition"]["line"] == 2  # Line number of method definition
+    
+    # Verify callers are found - should find 2 calls:
+    # 1. obj.my_method() at line 17
+    # 2. MyClass.my_method(obj) at line 19
+    # The standalone_function() call at line 22 should NOT be included
+    assert len(data["callers"]) == 2, f"Expected 2 callers, found {len(data['callers'])}"
+    
+    # Verify the callers are at the correct lines
+    caller_lines = sorted([caller["line"] for caller in data["callers"]])
+    assert caller_lines == [17, 19], f"Callers should be at lines 17 and 19, found at {caller_lines}"
+    
+    # Verify snippets contain the method call
+    for caller in data["callers"]:
+        assert "my_method" in caller["snippet"], f"Snippet should contain 'my_method': {caller['snippet']}"
+    
+    # Test that searching for standalone function works correctly
+    result2 = asyncio.run(tool.execute(
+        config,
+        symbol="standalone_function",
+        root=str(workspace),
+        include_tests=False
+    ))
+    
+    assert not result2.is_error, f"Tool returned error: {result2.error}"
+    data2 = json.loads(result2.output)
+    
+    # Should find 1 caller for standalone_function
+    assert len(data2["callers"]) == 1, f"Expected 1 caller for standalone_function, found {len(data2['callers'])}"
+    assert data2["callers"][0]["line"] == 22, f"Standalone function call should be at line 22, found at {data2['callers'][0]['line']}"
