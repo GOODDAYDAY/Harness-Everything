@@ -100,15 +100,12 @@ class CrossReferenceTool(Tool):
         for fpath in py_files:
             # Security containment check first to avoid TOCTOU symlink attacks
             try:
+                # Read file content BEFORE path resolution to close TOCTOU window
+                source = fpath.read_text(encoding="utf-8", errors="replace")
+                # Now resolve and check containment
                 abs_path = fpath.resolve()
                 if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) for allowed_path in allowed):
                     continue  # Skip files outside allowed paths
-            except Exception:
-                continue
-            
-            # Read file content after security check
-            try:
-                source = fpath.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 continue
             
@@ -165,8 +162,12 @@ class CrossReferenceTool(Tool):
                             # 1. Direct class method call: MyClass.method_name
                             # 2. Instance method call: *.method_name (where * is any attribute chain)
                             # 3. Bare method name: method_name (when call_name returns just the method name)
+                            # Use precise matching to avoid false positives:
+                            # - Check if cname is exactly "ClassName.method_name"
+                            # - OR check if cname ends with ".method_name" AND starts with "ClassName."
+                            # - OR check if cname is just "method_name" (for bare calls)
                             match = (cname == expected or 
-                                    cname.endswith(f".{func_name}") or 
+                                    (cname.endswith(f".{func_name}") and cname.split('.')[0] == class_name) or 
                                     cname == func_name)
                         else:
                             # Looking for standalone function
