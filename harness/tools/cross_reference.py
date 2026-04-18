@@ -148,6 +148,21 @@ class CrossReferenceTool(Tool):
         # 3. Additional security checks
         if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
             raise ValueError(f"Potentially malicious symbol: '{symbol}'")
+    
+    def validate_symbol(self, symbol: str) -> str:
+        """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
+        
+        Args:
+            symbol: The symbol string to validate
+            
+        Returns:
+            The validated symbol string
+            
+        Raises:
+            ValueError: If symbol validation fails with detailed error message
+        """
+        self._validate_symbol(symbol)
+        return symbol
 
     async def execute(
         self,
@@ -164,7 +179,7 @@ class CrossReferenceTool(Tool):
         # Validate symbol format, depth, and security
         symbol = symbol.strip()
         try:
-            self._validate_symbol(symbol)
+            symbol = self.validate_symbol(symbol)
         except ValueError as e:
             return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
 
