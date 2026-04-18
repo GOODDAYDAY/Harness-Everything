@@ -135,10 +135,11 @@ class CrossReferenceTool(Tool):
             ValueError: If symbol validation fails
         """
         # 1. Depth validation
-        depth = symbol.count('.') + 1  # Count dots to get depth
+        depth = symbol.count('.') + 1  # Count dots to get depth (identifier count)
         if depth > self._MAX_SYMBOL_DEPTH:
             raise ValueError(
-                f"Symbol qualification depth {depth} exceeds maximum depth of {self._MAX_SYMBOL_DEPTH}"
+                f"Symbol '{symbol}' exceeds maximum identifier count of "
+                f"{self._MAX_SYMBOL_DEPTH} (got {depth})"
             )
         
         # 2. Format validation
