@@ -105,7 +105,7 @@ def test_cross_reference_rejects_invalid_symbol(tmp_path):
     for invalid_symbol in invalid_symbols:
         result = asyncio.run(tool.execute(config, invalid_symbol, root=""))
         assert result.is_error is True, f"Expected error for symbol: '{invalid_symbol}'"
-        assert "Invalid symbol format" in result.error, f"Wrong error message for '{invalid_symbol}': {result.error}"
+        assert "Invalid symbol format" in result.error or "Potentially malicious symbol" in result.error, f"Wrong error message for '{invalid_symbol}': {result.error}"
     
     # Test valid symbols that should NOT return an error
     # (They may not find anything, but shouldn't error on validation)
@@ -126,6 +126,28 @@ def test_cross_reference_rejects_invalid_symbol(tmp_path):
         # Check that the error is NOT about invalid symbol format
         if result.is_error:
             assert "Invalid symbol format" not in result.error, f"Valid symbol '{valid_symbol}' incorrectly rejected: {result.error}"
+
+
+def test_cross_reference_rejects_malicious_symbols(tmp_path):
+    """Test that symbols with path traversal patterns are rejected."""
+    tool = CrossReferenceTool()
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    workspace = str(workspace_path)
+    config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+    
+    malicious_symbols = [
+        "../../../etc/passwd",
+        "a..b",
+        ".startswith_dot",
+        "endswithdot.",
+        "normal.but..consecutive"
+    ]
+    
+    for symbol in malicious_symbols:
+        result = asyncio.run(tool.execute(config, symbol=symbol, root=""))
+        assert result.is_error
+        assert "Potentially malicious symbol" in result.error or "Invalid symbol format" in result.error
 
 
 def test_cross_reference_finds_instance_method_calls(tmp_path):
