@@ -755,6 +755,69 @@ def _extract_structured_feedback(verdict_text: str, phase_mode: str = "implement
     return result
 
 
+def _extract_score_from_verdict(verdict_text: str) -> float | None:
+    """Extract a numeric score from verdict text when structured feedback fails.
+    
+    This is a fallback function that tries to extract a score from various
+    patterns in the verdict text when the structured feedback extraction
+    doesn't find a score.
+    
+    Args:
+        verdict_text: The evaluator output text
+        
+    Returns:
+        Extracted score (0-10) or None if no score found
+    """
+    import re
+    
+    # Patterns to search for scores in the verdict text
+    score_patterns = [
+        # Final score patterns
+        r"FINAL\s+SCORE\s*:\s*(\d+(?:\.\d+)?)",
+        r"COMBINED_SCORE\s*:\s*(\d+(?:\.\d+)?)",
+        r"SCORE\s*:\s*(\d+(?:\.\d+)?)",
+        # Score at end of line patterns
+        r"(\d+(?:\.\d+)?)\s*/\s*10\b",
+        r"(\d+(?:\.\d+)?)\s*out\s*of\s*10\b",
+        r"(\d+(?:\.\d+)?)\s*\(?score\)?",
+        # Simple numeric patterns that might be scores
+        r"\b(\d+(?:\.\d+)?)\b(?=\s*(?:points?|pts?|score))",
+    ]
+    
+    all_matches = []
+    for pattern in score_patterns:
+        matches = re.findall(pattern, verdict_text, re.IGNORECASE)
+        all_matches.extend(matches)
+    
+    if all_matches:
+        # Prefer the last match (most likely to be the final score)
+        try:
+            score = float(all_matches[-1])
+            # Validate score is within reasonable range (0-10)
+            if 0 <= score <= 10:
+                return score
+        except (ValueError, TypeError):
+            pass
+    
+    # If no score found in patterns, try to extract from context
+    # Look for lines that might contain scores
+    lines = verdict_text.split('\n')
+    for line in lines:
+        line_lower = line.lower()
+        if any(keyword in line_lower for keyword in ['score', 'rating', 'grade']):
+            # Try to extract a number from this line
+            numbers = re.findall(r'\b(\d+(?:\.\d+)?)\b', line)
+            if numbers:
+                try:
+                    score = float(numbers[-1])
+                    if 0 <= score <= 10:
+                        return score
+                except (ValueError, TypeError):
+                    continue
+    
+    return None
+
+
 def _validate_evaluator_output(verdict_text: str) -> tuple[bool, list[str]]:
     """Validate evaluator output structure and return (is_valid, warnings).
     
