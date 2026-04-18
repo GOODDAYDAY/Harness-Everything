@@ -21,13 +21,22 @@ log = logging.getLogger(__name__)
 _SCORE_MIN: float = 0.0
 _SCORE_MAX: float = 10.0
 
-# Strict pattern: "SCORE: N" on its own line (anchored).  Preferred over loose
-# because evaluators are instructed to place the authoritative score last on
-# its own line.  The loose fallback handles older/custom prompts that don't
-# follow the anchored format.
+# Structured score patterns with improved validation
+# 1. Strict anchored: "SCORE: N" on its own line (preferred format)
 _STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)(?:\s+.*)?$", re.MULTILINE)
+# 2. Strict unanchored: "SCORE: N" anywhere (case-insensitive)
 _STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
-_LOOSE_RE  = re.compile(r"SCORE[:\s]+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# 3. Loose pattern: "SCORE N" or "SCORE=N" variations
+_LOOSE_RE = re.compile(r"SCORE[:\s=]+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# 4. Enhanced pattern with score range validation: "SCORE: 7.5/10" or "SCORE: 8 (out of 10)"
+_ENHANCED_RE = re.compile(
+    r"(?:SCORE|Score|score)[:\s=]+"
+    r"(\d+(?:\.\d+)?)"
+    r"(?:\s*/\s*10|\s*\(out of\s*10\)|\s*of\s*10)?",
+    re.IGNORECASE
+)
+# 5. Final score pattern: "FINAL SCORE: N" (explicit final score)
+_FINAL_SCORE_RE = re.compile(r"FINAL\s+SCORE[:\s=]+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
 # Mode header injected into the evaluation user message so evaluators know
 # whether they are reviewing a text proposal or an implement-mode code change.

@@ -103,3 +103,79 @@ def test_symbol_validation_regex_alignment():
     # Verify the pattern is ASCII-only (security requirement)
     assert tool._VALID_SYMBOL_PATTERN.flags & re.ASCII, \
         "Regex pattern must be ASCII-only to prevent homoglyph attacks"
+    
+    # Verify regex rejects empty string (defense-in-depth)
+    assert tool._VALID_SYMBOL_PATTERN.fullmatch("") is None, \
+        "Regex should reject empty string"
+
+
+def test_execute_validation_error_integration(tmp_path):
+    """Test that execute() properly returns validation errors for invalid symbols.
+    
+    This test validates the falsifiable criterion by ensuring the tool produces
+    measurable error artifacts when given invalid symbols.
+    """
+    # Create a temporary workspace
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    workspace = str(workspace_path)
+    
+    # Create a simple Python file to search
+    test_file = workspace_path / "test.py"
+    test_file.write_text("""
+def some_function():
+    pass
+""")
+    
+    # Create config
+    config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+    
+    # Create the tool
+    tool = CrossReferenceTool()
+    
+    # Test 1: Empty string symbol
+    result = asyncio.run(tool.execute(
+        config,
+        symbol="",
+        root=workspace
+    ))
+    
+    assert result.is_error, "Empty symbol should trigger error"
+    assert "Symbol validation failed" in result.error, \
+        f"Error should contain 'Symbol validation failed'. Got: {result.error}"
+    
+    # Test 2: Whitespace-only symbol
+    result = asyncio.run(tool.execute(
+        config,
+        symbol="   ",
+        root=workspace
+    ))
+    
+    assert result.is_error, "Whitespace-only symbol should trigger error"
+    assert "Symbol validation failed" in result.error, \
+        f"Error should contain 'Symbol validation failed'. Got: {result.error}"
+    
+    # Test 3: Symbol exceeding maximum depth
+    overly_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 11 identifiers
+    result = asyncio.run(tool.execute(
+        config,
+        symbol=overly_deep_symbol,
+        root=workspace
+    ))
+    
+    assert result.is_error, f"Symbol exceeding maximum depth should trigger error: {overly_deep_symbol}"
+    assert "Symbol validation failed" in result.error, \
+        f"Error should contain 'Symbol validation failed'. Got: {result.error}"
+    
+    # Test 4: Valid symbol should not trigger validation error
+    valid_symbol = "some_function"
+    result = asyncio.run(tool.execute(
+        config,
+        symbol=valid_symbol,
+        root=workspace
+    ))
+    
+    # Valid symbol may not be found, but should not be a validation error
+    if result.is_error:
+        assert "Symbol validation failed" not in result.error, \
+            f"Valid symbol should not trigger validation error. Got: {result.error}"
