@@ -282,6 +282,18 @@ def test_symbol_depth_boundary_consistency():
     assert validated == max_valid_symbol, \
         f"validate_symbol() should return the validated symbol unchanged. Got: {validated}"
     
+    # Additional test cases from implementation plan
+    # Test regex rejects 11 identifiers (10 dots)
+    symbol_11 = "a" + ".a" * 10  # Constructs "a.a.a.a.a.a.a.a.a.a.a"
+    assert tool._VALID_SYMBOL_PATTERN.fullmatch(symbol_11) is None, \
+        f"Regex should reject symbol with 11 identifiers: {symbol_11}"
+    # Test regex accepts 10 identifiers (9 dots) and validation passes
+    symbol_10 = "a" + ".a" * 9
+    assert tool._VALID_SYMBOL_PATTERN.fullmatch(symbol_10) is not None, \
+        f"Regex should accept symbol with 10 identifiers: {symbol_10}"
+    is_valid, _ = tool._validate_symbol_format(symbol_10)
+    assert is_valid, f"Validation should pass for symbol with 10 identifiers: {symbol_10}"
+    
     # Test 2: Symbol exceeding maximum depth (11 identifiers, 10 dots)
     # With regex {0,9}, the pattern should reject 11 identifiers
     too_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 11 identifiers, 10 dots
