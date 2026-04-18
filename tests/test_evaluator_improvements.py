@@ -1,7 +1,8 @@
 """Test evaluator improvements: structured output, mode adaptation, critique structure."""
 
 import pytest
-from harness.evaluation.dual_evaluator import parse_score
+import re
+from harness.evaluation.dual_evaluator import parse_score, _STRICT_RE
 
 
 def test_parse_score_strict():
@@ -487,6 +488,36 @@ def test_syntax_error_triggers_fail_with_context():
     finally:
         # Clean up
         temp_path.unlink(missing_ok=True)
+
+
+def test_score_regex_allows_trailing_text():
+    """Test that the _STRICT_RE regex pattern correctly allows trailing text after scores."""
+    # Test cases that should match
+    test_cases = [
+        "SCORE: 7.5 with trailing text",
+        "SCORE: 8",
+        "  SCORE: 9.0   with spaces and text",
+        "SCORE: 10.0 `inline code` more text",
+    ]
+    
+    for test_str in test_cases:
+        match = _STRICT_RE.match(test_str)
+        assert match is not None, f"Regex should match: {test_str}"
+        # Extract the score
+        score_str = match.group(1)
+        # Verify it's a valid number
+        assert re.match(r'^\d+(?:\.\d+)?$', score_str), f"Invalid score extracted: {score_str}"
+    
+    # Negative test cases that should NOT match
+    negative_cases = [
+        "SCORE: invalid",
+        "SCORE: ",
+        "SCORE: abc123",
+    ]
+    
+    for test_str in negative_cases:
+        match = _STRICT_RE.match(test_str)
+        assert match is None, f"Regex should NOT match: {test_str}"
 
 
 if __name__ == "__main__":
