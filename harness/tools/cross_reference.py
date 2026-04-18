@@ -127,26 +127,36 @@ class CrossReferenceTool(Tool):
         """Validate symbol format and depth.
         
         Performs comprehensive validation:
-        1. Checks depth against _MAX_SYMBOL_DEPTH
-        2. Validates format against _VALID_SYMBOL_PATTERN
-        3. Additional security checks
+        1. Checks for None or empty string
+        2. Validates format against _VALID_SYMBOL_PATTERN (includes ASCII check)
+        3. Checks depth against _MAX_SYMBOL_DEPTH
+        4. Additional security checks
         
         Raises:
             ValueError: If symbol validation fails
         """
-        # 1. Depth validation
-        depth = symbol.count('.') + 1  # Count dots to get depth (identifier count)
-        if depth > self._MAX_SYMBOL_DEPTH:
-            raise ValueError(
-                f"Symbol '{symbol}' exceeds maximum identifier count of "
-                f"{self._MAX_SYMBOL_DEPTH} (got {depth})"
-            )
+        # 1. Check for None or empty string
+        if symbol is None:
+            raise ValueError("Symbol cannot be None")
         
-        # 2. Format validation
+        symbol = symbol.strip()
+        if not symbol:
+            raise ValueError("Symbol cannot be empty or whitespace only")
+        
+        # 2. Format validation (includes ASCII check via re.ASCII flag)
         if not re.match(self._VALID_SYMBOL_PATTERN, symbol):
             raise ValueError(f"Invalid symbol format: {symbol}")
         
-        # 3. Additional security checks
+        # 3. Depth validation - explicit check for defense in depth
+        # Count identifiers by splitting on '.'
+        identifier_count = len(symbol.split('.'))
+        if identifier_count > self._MAX_SYMBOL_DEPTH:
+            raise ValueError(
+                f"Symbol '{symbol}' exceeds maximum identifier count of "
+                f"{self._MAX_SYMBOL_DEPTH} (got {identifier_count})"
+            )
+        
+        # 4. Additional security checks (redundant but explicit)
         if '..' in symbol or symbol.startswith('.') or symbol.endswith('.'):
             raise ValueError(f"Potentially malicious symbol: '{symbol}'")
     
@@ -183,16 +193,6 @@ class CrossReferenceTool(Tool):
             symbol = self.validate_symbol(symbol)
         except ValueError as e:
             return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
-
-        # Explicit depth validation as secondary security check (defense-in-depth)
-        # _MAX_SYMBOL_DEPTH counts dots; identifier count is depth + 1
-        max_identifiers = self._MAX_SYMBOL_DEPTH + 1
-        identifier_count = len(symbol.split('.'))
-        if identifier_count > max_identifiers:
-            raise ValueError(
-                f"Symbol '{symbol}' exceeds maximum identifier count of "
-                f"{max_identifiers} (got {identifier_count})"
-            )
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None
