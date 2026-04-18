@@ -94,7 +94,8 @@ class CrossReferenceTool(Tool):
         test_files: list[str] = []
         
         # Compile regex pattern once for efficiency
-        test_pattern = re.compile(rf'\b{re.escape(func_name)}\b') if include_tests else None
+        # Use negative lookbehind/lookahead instead of \b to handle underscores correctly
+        test_pattern = re.compile(rf'(?<!\w){re.escape(func_name)}(?!\w)') if include_tests else None
 
         for fpath in py_files:
             # Explicit containment check as defense-in-depth against symlink attacks
@@ -155,10 +156,13 @@ class CrossReferenceTool(Tool):
                         if class_name:
                             # Looking for ClassName.method_name
                             expected = f"{class_name}.{func_name}"
-                            # Match either:
+                            # Match any of:
                             # 1. Direct class method call: MyClass.method_name
                             # 2. Instance method call: *.method_name (where * is any attribute chain)
-                            match = cname == expected or cname.endswith(f".{func_name}")
+                            # 3. Bare method name: method_name (when call_name returns just the method name)
+                            match = (cname == expected or 
+                                    cname.endswith(f".{func_name}") or 
+                                    cname == func_name)
                         else:
                             # Looking for standalone function
                             # Use exact match to avoid false positives like "test" matching "test_function"
