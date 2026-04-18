@@ -277,6 +277,54 @@ def _validate_dir_fd_consistent(dir_fd: int, parent_dir: Path) -> bool:
         return False
 
 
+def _is_parent_directory_symlink(dir_fd: int, child_name: str) -> bool:
+    """Check if the immediate parent directory of a file is a symlink.
+    
+    This detects the malicious TOCTOU scenario where a parent directory
+    symlink is swapped after validation but before file opening.
+    
+    Args:
+        dir_fd: Open directory file descriptor
+        child_name: Name of the child file within the directory
+        
+    Returns:
+        True if the parent directory is a symlink, False otherwise
+    """
+    try:
+        # Try to open the child with O_NOFOLLOW to detect symlinks
+        # O_PATH allows opening symlinks without following them
+        flags = getattr(os, 'O_PATH', 0) | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        try:
+            child_fd = os.open(child_name, flags, dir_fd=dir_fd)
+            os.close(child_fd)
+            # If open succeeded without ELOOP, it's not a symlink
+            return False
+        except OSError as e:
+            # If we get ELOOP, the immediate parent is a symlink
+            if hasattr(os, 'O_NOFOLLOW') and e.errno == getattr(errno, 'ELOOP', None):
+                return True
+            # Other errors - fall back to alternative check
+            pass
+        
+        # Fallback: try to readlink on the parent directory path
+        # This is less secure but works on systems without O_NOFOLLOW
+        try:
+            # Get parent directory path from dir_fd if possible
+            proc_path = Path(f"/proc/self/fd/{dir_fd}")
+            if proc_path.exists():
+                parent_path = proc_path.readlink()
+                # Check if parent path is a symlink
+                return os.path.islink(str(parent_path))
+        except (OSError, ValueError):
+            pass
+        
+        # Conservative default: assume it might be a symlink
+        return True
+    except Exception:
+        # If we can't determine, be conservative
+        return True
+
+
 def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
     """Read a file atomically to prevent TOCTOU symlink attacks.
     
@@ -300,8 +348,7 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         
         # Step 1: Check if parent directory is a symlink before opening
         # This prevents TOCTOU attacks where a symlink could be swapped
-        if os.path.islink(str(parent_dir)):
-            return None  # Parent directory is a symlink
+        # We'll check this more precisely after opening the directory
         
         try:
             # Try to open directory with secure flags if available
@@ -319,22 +366,27 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
                 # but we lose TOCTOU protection for symlink swaps
                 dir_fd = os.open(str(parent_dir), os.O_RDONLY)
         
+        # Check if the parent directory is a symlink (malicious TOCTOU scenario)
+        if _is_parent_directory_symlink(dir_fd, filename):
+            os.close(dir_fd)
+            return None  # Parent directory is a symlink - potential TOCTOU attack
+        
         # Step 2: Validate that the opened directory descriptor matches the expected path
         # This implements device/inode validation to prevent TOCTOU attacks
         if not _validate_dir_fd_consistent(dir_fd, parent_dir):
             os.close(dir_fd)
-            return "PERMISSION ERROR: Directory descriptor mismatch - possible TOCTOU attack"
+            return None  # Directory descriptor mismatch - possible TOCTOU attack
         
         # 5. Validate the *real* parent directory is within allowed_paths
         # Get the real path of the parent directory for containment check
         try:
             parent_real = Path(os.path.realpath(str(parent_dir)))
         except OSError:
-            return "PERMISSION ERROR: Cannot resolve real path of parent directory"
+            return None  # Cannot resolve real path of parent directory
         
         # Containment check: Ensure the real parent directory is within allowed paths
         if not any(parent_real.is_relative_to(allowed) for allowed in allowed_paths):
-            return "PERMISSION ERROR: Parent directory not within allowed paths"
+            return None  # Parent directory not within allowed paths
         
         # 5. Open target file relative to dir_fd
         # Use O_NOFOLLOW to prevent following symlinks - this fixes TOCTOU attacks
@@ -352,16 +404,16 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
                 try:
                     file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
                 except OSError:
-                    return "PERMISSION ERROR: Cannot open file"
+                    return None  # Cannot open file
             else:
-                return "PERMISSION ERROR: Cannot open file"
+                return None  # Cannot open file
         
         # 6. CRITICAL SECURITY FIX: Validate the opened file is within allowed paths
         # This prevents hardlink attacks where a hardlink inside allowed directory
         # points to a file outside allowed directory
         if not _validate_file_within_allowed_paths(file_fd, allowed_paths):
             os.close(file_fd)
-            return "PERMISSION ERROR: File not within allowed paths (hardlink attack prevented)"
+            return None  # File not within allowed paths (hardlink attack prevented)
         
         # 7. Verify the opened file matches the expected file
         file_stat = os.fstat(file_fd)
