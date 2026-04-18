@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,51 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$')
+
+    def _read_file_atomically(self, path: Path, allowed_paths: list[Path]) -> str | None:
+        """Read a file atomically to prevent TOCTOU symlink attacks.
+        
+        Args:
+            path: Path to the file to read.
+            allowed_paths: List of allowed directory paths for security containment.
+            
+        Returns:
+            File content as string, or None if the file cannot be read securely.
+        """
+        try:
+            # Open file descriptor without following symlinks
+            fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+            try:
+                # Get file stats from the descriptor
+                fd_stat = os.fstat(fd)
+                
+                # Re-resolve the original path and check if it's still the same file
+                try:
+                    path_stat = path.stat()
+                except OSError:
+                    return None
+                
+                # Compare device and inode numbers to ensure we're reading the same file
+                if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
+                    return None
+                
+                # Check if the resolved path is within allowed paths
+                abs_path = path.resolve()
+                if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) 
+                          for allowed_path in allowed_paths):
+                    return None
+                
+                # Read content from the file descriptor
+                with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                    return f.read()
+            finally:
+                # Ensure file descriptor is closed even if errors occur above
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        except (OSError, PermissionError, UnicodeDecodeError):
+            return None
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -139,15 +185,9 @@ class CrossReferenceTool(Tool):
         test_pattern = re.compile(rf'(?<!\w){re.escape(func_name)}(?!\w)') if include_tests else None
 
         for fpath in py_files:
-            # Security containment check FIRST to avoid TOCTOU symlink attacks
-            try:
-                # Security containment check FIRST
-                abs_path = fpath.resolve()
-                if not any(abs_path == allowed_path or abs_path.is_relative_to(allowed_path) for allowed_path in allowed):
-                    continue
-                # Read content only after path validation
-                source = abs_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
+            # Use atomic file reading to prevent TOCTOU symlink attacks
+            source = self._read_file_atomically(fpath, allowed)
+            if source is None:
                 continue
             
             try:
