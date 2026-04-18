@@ -11,64 +11,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
-def _read_file_atomically(path: Path | str, allowed_paths: list[Path] | None = None) -> str | None:
-    """Read a file atomically to prevent TOCTOU symlink attacks.
-    
-    DEPRECATED: Use read_file_atomically from harness.core.security instead.
-    
-    Args:
-        path: Path to the file to read.
-        allowed_paths: Optional list of allowed directory paths for security containment.
-            
-    Returns:
-        File content as string, or None if the file cannot be read securely.
-    """
-    import warnings
-    warnings.warn(
-        "_read_file_atomically is deprecated; import read_file_atomically from harness.core.security",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    import os
-    fd = None
-    try:
-        # 1. RESOLVE and VALIDATE path security FIRST
-        abs_path = Path(path).resolve()
-        
-        # Check if the resolved path is within allowed paths (if provided)
-        if allowed_paths is not None:
-            if not any(abs_path.is_relative_to(allowed_path) 
-                      for allowed_path in allowed_paths):
-                return None
-        
-        # 2. Open file descriptor (with O_NOFOLLOW)
-        open_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
-        fd = os.open(str(abs_path), open_flags)
-        
-        # 3. FINAL VERIFICATION: Ensure opened fd matches the resolved path
-        fd_stat = os.fstat(fd)
-        try:
-            path_stat = abs_path.stat()
-        except OSError:
-            return None
-        
-        if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
-            return None  # File was swapped after resolution but before open
-        
-        # 4. Read content
-        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-            fd = None
-            return f.read()
-    except (OSError, PermissionError, UnicodeDecodeError):
-        return None
-    finally:
-        # Only close the file descriptor if os.fdopen didn't take ownership
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+from harness.core.security import read_file_atomically
 
 
 def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
@@ -80,7 +23,7 @@ def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
     and log diagnostic information instead of silently skipping.
     """
     try:
-        source = _read_file_atomically(path)
+        source = read_file_atomically(path)
         if source is None:
             return None, f"OSError reading {path}: cannot read file securely"
         return ast.parse(source, filename=str(path)), None
