@@ -12,11 +12,12 @@ import ast
 from pathlib import Path
 
 
-def _read_file_atomically(path: Path | str) -> str | None:
+def _read_file_atomically(path: Path | str, allowed_paths: list[Path] | None = None) -> str | None:
     """Read a file atomically to prevent TOCTOU symlink attacks.
     
     Args:
         path: Path to the file to read.
+        allowed_paths: Optional list of allowed directory paths for security containment.
         
     Returns:
         File content as string, or None if the file cannot be read securely.
@@ -38,6 +39,13 @@ def _read_file_atomically(path: Path | str) -> str | None:
             # Compare device and inode numbers to ensure we're reading the same file
             if not (fd_stat.st_dev == path_stat.st_dev and fd_stat.st_ino == path_stat.st_ino):
                 return None
+            
+            # Check if the resolved path is within allowed paths (if provided)
+            if allowed_paths is not None:
+                abs_path = Path(path).resolve()
+                if not any(abs_path.is_relative_to(allowed_path) 
+                          for allowed_path in allowed_paths):
+                    return None
             
             # Read content from the file descriptor
             with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
