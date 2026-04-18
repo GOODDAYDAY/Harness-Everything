@@ -477,4 +477,94 @@ class TestClass:
     
     # Verify the tool is using the correct security function (no deprecation warnings in output)
     assert "deprecated" not in result.output.lower()
+
+
+def test_execute_validates_root_path():
+    """Test that CrossReferenceTool.execute validates root path for security.
+    
+    Provides a root path containing a homoglyph (e.g., \u0430 for 'a').
+    The test must assert the returned ToolResult has is_error=True 
+    and the error message contains "PERMISSION ERROR".
+    """
+    import asyncio
+    from pathlib import Path
+    import tempfile
+    from harness.tools.cross_reference import CrossReferenceTool
+    from harness.core.config import HarnessConfig
+    
+    # Create a temporary workspace
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        
+        # Create a simple Python file to search
+        test_file = workspace / "test.py"
+        test_file.write_text("""
+def some_function():
+    pass
+""")
+        
+        # Create config with workspace as allowed path
+        config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+        
+        # Create the tool
+        tool = CrossReferenceTool()
+        
+        # Test 1: Valid root path (normal ASCII)
+        result = asyncio.run(tool.execute(
+            config, 
+            symbol="some_function",
+            root=str(workspace)
+        ))
+        assert not result.is_error, f"Valid root path should not error: {result.error}"
+        
+        # Test 2: Root path with homoglyph (Cyrillic small a looks like ASCII 'a')
+        # Use a path that contains the homoglyph character
+        homoglyph_path = str(workspace).replace("a", "\u0430")  # Replace ASCII 'a' with Cyrillic 'a'
+        
+        result = asyncio.run(tool.execute(
+            config,
+            symbol="some_function",
+            root=homoglyph_path
+        ))
+        
+        # The result should be an error
+        assert result.is_error, "Root path with homoglyph should trigger permission error"
+        assert "PERMISSION ERROR" in result.error, f"Error should contain 'PERMISSION ERROR'. Got: {result.error}"
+        
+        # Test 3: Root path with null byte (should also be caught)
+        null_byte_path = str(workspace) + "\x00"
+        
+        result = asyncio.run(tool.execute(
+            config,
+            symbol="some_function",
+            root=null_byte_path
+        ))
+        
+        assert result.is_error, "Root path with null byte should trigger permission error"
+        assert "PERMISSION ERROR" in result.error, f"Error should contain 'PERMISSION ERROR'. Got: {result.error}"
+        
+        # Test 4: Root path outside allowed paths (should also be caught)
+        outside_path = "/tmp/outside_directory"
+        
+        result = asyncio.run(tool.execute(
+            config,
+            symbol="some_function",
+            root=outside_path
+        ))
+        
+        assert result.is_error, "Root path outside allowed paths should trigger permission error"
+        assert "PERMISSION ERROR" in result.error or "not in allowed paths" in result.error, \
+            f"Error should indicate permission issue. Got: {result.error}"
+        
+        # Test 5: Verify the specific homoglyph description is mentioned
+        # Run the homoglyph test again and check for the specific description
+        result = asyncio.run(tool.execute(
+            config,
+            symbol="some_function",
+            root=homoglyph_path
+        ))
+        
+        # The error should mention the homoglyph
+        assert "homoglyph" in result.error.lower() or "Cyrillic" in result.error or "U+0430" in result.error, \
+            f"Error should mention homoglyph detection. Got: {result.error}"
     assert "deprecated" not in result2.output.lower()
