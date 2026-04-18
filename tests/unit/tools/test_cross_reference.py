@@ -61,6 +61,13 @@ def some_function():
     # Test: Valid symbol with maximum allowed depth (9 dots, 10 identifiers)
     valid_max_depth_symbol = "a.b.c.d.e.f.g.h.i.j"  # 9 dots, 10 identifiers
     
+    # First, test the _validate_symbol_format method directly (boundary condition)
+    # This should not raise any exception
+    try:
+        tool._validate_symbol_format(valid_max_depth_symbol)
+    except Exception as e:
+        pytest.fail(f"_validate_symbol_format should accept symbol at max depth. Got: {e}")
+    
     result = asyncio.run(tool.execute(
         config,
         symbol=valid_max_depth_symbol,
