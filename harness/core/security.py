@@ -301,7 +301,7 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # Step 1: Check if parent directory is a symlink before opening
         # This prevents TOCTOU attacks where a symlink could be swapped
         if os.path.islink(str(parent_dir)):
-            return "PERMISSION ERROR: Parent directory is a symlink"
+            return None  # Parent directory is a symlink
         
         try:
             # Try to open directory with secure flags if available
