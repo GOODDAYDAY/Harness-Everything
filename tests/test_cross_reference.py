@@ -655,9 +655,9 @@ def some_function():
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
     
-    # Verify the error contains the exact phrase "exceeds maximum depth"
-    assert "exceeds maximum depth" in result.error, \
-        f"Error should contain 'exceeds maximum depth'. Got: {result.error}"
+    # Verify the error contains the exact phrase "exceeds maximum identifier count"
+    assert "exceeds maximum identifier count" in result.error, \
+        f"Error should contain 'exceeds maximum identifier count'. Got: {result.error}"
     assert "11" in result.error and "10" in result.error, \
         f"Error should mention actual and limit values. Got: {result.error}"
     
