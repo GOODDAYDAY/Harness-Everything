@@ -58,14 +58,18 @@ class CrossReferenceTool(Tool):
         if not symbol:
             return False, "Symbol cannot be empty"
 
-        # Defense-in-depth: regex validation first
-        if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
-            return False, f"Invalid symbol format: {symbol}. Must be ASCII, start with a letter/underscore, and contain at most 10 identifiers."
+        # Check for empty/whitespace symbols
+        if not symbol.strip():
+            return False, "Symbol cannot be empty or whitespace-only"
 
-        # Explicit depth check for clarity (redundant with regex but provides better error)
+        # Explicit depth check first for clearer error messages
         identifiers = symbol.split('.')
         if len(identifiers) > self._MAX_SYMBOL_DEPTH:
             return False, f"Symbol exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers: {symbol}"
+
+        # Defense-in-depth: regex validation
+        if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
+            return False, f"Invalid symbol format: {symbol}. Must be ASCII, start with a letter/underscore, and contain at most 10 identifiers."
 
         return True, ""
 
