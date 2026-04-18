@@ -42,8 +42,8 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    # Maximum qualification depth of 10 identifiers (1 base identifier + 0-9 dot-qualified identifiers).
-    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,9}$', re.ASCII)
+    # Allows more identifiers than _MAX_SYMBOL_DEPTH so depth validation can catch excessive depth
+    _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*){0,19}$', re.ASCII)
     
     # Maximum depth for symbol qualification to prevent denial-of-service attacks
     # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
@@ -168,13 +168,15 @@ class CrossReferenceTool(Tool):
             symbol: The symbol string to validate
             
         Returns:
-            The validated symbol string
+            The validated and stripped symbol string
             
         Raises:
             ValueError: If symbol validation fails with detailed error message
         """
-        self._validate_symbol(symbol)
-        return symbol
+        # Make a copy to strip and validate
+        symbol_to_validate = symbol.strip()
+        self._validate_symbol(symbol_to_validate)
+        return symbol_to_validate
 
     async def execute(
         self,

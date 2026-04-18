@@ -640,8 +640,8 @@ def some_function():
     # Create the tool
     tool = CrossReferenceTool()
     
-    # Test 1: Symbol at maximum depth (10 dots, 11 identifiers)
-    # This should be accepted by the regex pattern but should be rejected by depth validation
+    # Test 1: Symbol exceeding maximum depth (10 dots, 11 identifiers)
+    # This should pass regex but fail depth validation
     max_depth_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 10 dots, 11 identifiers
     
     result = asyncio.run(tool.execute(
@@ -651,7 +651,7 @@ def some_function():
     ))
     
     # The result should be an error because it exceeds _MAX_SYMBOL_DEPTH
-    assert result.is_error, f"Symbol at maximum depth should trigger error: {max_depth_symbol}"
+    assert result.is_error, f"Symbol exceeding maximum depth should trigger error: {max_depth_symbol}"
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
     
