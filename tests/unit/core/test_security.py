@@ -7,6 +7,7 @@ by evaluators.
 
 import os
 import tempfile
+import logging
 from pathlib import Path
 import pytest
 from harness.core.security import (
