@@ -49,24 +49,25 @@ class CrossReferenceTool(Tool):
     # via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
     _MAX_SYMBOL_DEPTH = 10
 
-    def _validate_symbol_format(self, symbol: str) -> str:
+    def _validate_symbol_format(self, symbol: str) -> tuple[bool, str]:
         """
         Validate symbol format against security constraints.
-        Returns the normalized symbol if valid, otherwise raises ValueError.
+        Returns a tuple (is_valid, error_message).
+        If is_valid is True, error_message is empty string.
         """
         if not symbol:
-            raise ValueError("Symbol cannot be empty")
+            return False, "Symbol cannot be empty"
 
         # Defense-in-depth: regex validation first
         if self._VALID_SYMBOL_PATTERN.fullmatch(symbol) is None:
-            raise ValueError(f"Invalid symbol format: {symbol}. Must be ASCII, start with a letter/underscore, and contain at most 10 identifiers.")
+            return False, f"Invalid symbol format: {symbol}. Must be ASCII, start with a letter/underscore, and contain at most 10 identifiers."
 
         # Explicit depth check for clarity (redundant with regex but provides better error)
         identifiers = symbol.split('.')
         if len(identifiers) > self._MAX_SYMBOL_DEPTH:
-            raise ValueError(f"Symbol exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers: {symbol}")
+            return False, f"Symbol exceeds maximum depth of {self._MAX_SYMBOL_DEPTH} identifiers: {symbol}"
 
-        return symbol
+        return True, ""
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -152,11 +153,9 @@ class CrossReferenceTool(Tool):
         Raises:
             ValueError: If symbol validation fails
         """
-        try:
-            self._validate_symbol_format(symbol)
-        except ValueError as e:
-            # Re-raise with context for this public method
-            raise ValueError(f"Symbol validation failed: {e}")
+        is_valid, error_msg = self._validate_symbol_format(symbol)
+        if not is_valid:
+            raise ValueError(f"Symbol validation failed: {error_msg}")
     
     def validate_symbol(self, symbol: str) -> str:
         """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
@@ -172,7 +171,9 @@ class CrossReferenceTool(Tool):
         """
         # Make a copy to strip and validate
         symbol_to_validate = symbol.strip()
-        self._validate_symbol(symbol_to_validate)
+        is_valid, error_msg = self._validate_symbol_format(symbol_to_validate)
+        if not is_valid:
+            raise ValueError(f"Symbol validation failed: {error_msg}")
         return symbol_to_validate
 
     async def execute(
@@ -187,13 +188,12 @@ class CrossReferenceTool(Tool):
         if err_result:
             return err_result
         
-        # Validate symbol format, depth, and security
+        # Validate symbol format, depth, and security using consolidated validation
         symbol = symbol.strip()
-        try:
-            symbol = self.validate_symbol(symbol)
-            logging.getLogger(__name__).debug(f"Validated symbol: {symbol}")
-        except ValueError as e:
-            return ToolResult(error=f"Symbol validation failed: {e}", is_error=True)
+        is_valid, error_msg = self._validate_symbol_format(symbol)
+        if not is_valid:
+            return ToolResult(error=f"Symbol validation failed: {error_msg}", is_error=True)
+        logging.getLogger(__name__).debug(f"Validated symbol: {symbol}")
 
         parts = symbol.strip().split(".", 1)
         class_name = parts[0] if len(parts) == 2 else None

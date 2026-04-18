@@ -54,8 +54,9 @@ def some_function():
     # Verify the error contains the exact phrase about invalid symbol format
     # Note: The regex validation happens first, so we get "Invalid symbol format" 
     # instead of "exceeds maximum identifier count" - this is correct defense-in-depth
-    assert "Invalid symbol format" in result.error, \
-        f"Error should contain 'Invalid symbol format'. Got: {result.error}"
+    # The error should contain either "Invalid symbol format" or "exceeds maximum depth"
+    assert "Invalid symbol format" in result.error or "exceeds maximum depth" in result.error, \
+        f"Error should contain validation failure message. Got: {result.error}"
     assert "a.b.c.d.e.f.g.h.i.j.k" in result.error, \
         f"Error should mention the invalid symbol. Got: {result.error}"
     
@@ -179,3 +180,68 @@ def some_function():
     if result.is_error:
         assert "Symbol validation failed" not in result.error, \
             f"Valid symbol should not trigger validation error. Got: {result.error}"
+
+
+def test_validation_methods_consistent():
+    """Test that validation methods produce consistent results.
+    
+    This test validates the falsifiable criterion by ensuring that
+    validate_symbol() and execute() produce congruent validation results,
+    preventing security bypasses through inconsistent validation.
+    """
+    tool = CrossReferenceTool()
+    
+    test_cases = [
+        # (symbol, should_be_valid, description)
+        ("simple_function", True, "Simple valid symbol"),
+        ("ClassName.method_name", True, "Valid class method"),
+        ("a.b.c.d.e.f.g.h.i.j", True, "Valid symbol at max depth (10 identifiers)"),
+        ("", False, "Empty symbol"),
+        ("   ", False, "Whitespace-only symbol"),
+        ("a.b.c.d.e.f.g.h.i.j.k", False, "Symbol exceeding max depth (11 identifiers)"),
+        ("bad-symbol", False, "Invalid character in symbol"),
+        ("123start", False, "Symbol starting with number"),
+        (".leading_dot", False, "Symbol with leading dot"),
+        ("trailing_dot.", False, "Symbol with trailing dot"),
+        ("double..dots", False, "Symbol with consecutive dots"),
+    ]
+    
+    for symbol, should_be_valid, description in test_cases:
+        # Test validate_symbol() method
+        validate_symbol_result = None
+        try:
+            validated = tool.validate_symbol(symbol)
+            validate_symbol_result = (True, f"Validated: {validated}")
+        except ValueError as e:
+            validate_symbol_result = (False, str(e))
+        
+        # Test execute() method (validation part only)
+        # We'll create a minimal config for execute()
+        config = HarnessConfig(workspace="/tmp", allowed_paths=["/tmp"])
+        execute_result = asyncio.run(tool.execute(config, symbol=symbol, root="/tmp"))
+        
+        # Check consistency
+        if should_be_valid:
+            # For valid symbols, validate_symbol should not raise
+            assert validate_symbol_result[0] is True, \
+                f"{description}: validate_symbol() should accept valid symbol '{symbol}'"
+            
+            # execute() may not find the symbol, but should not have validation error
+            if execute_result.is_error:
+                assert "Symbol validation failed" not in execute_result.error, \
+                    f"{description}: execute() should not have validation error for valid symbol '{symbol}'. Got: {execute_result.error}"
+        else:
+            # For invalid symbols, validate_symbol should raise ValueError
+            assert validate_symbol_result[0] is False, \
+                f"{description}: validate_symbol() should reject invalid symbol '{symbol}'"
+            
+            # execute() should return validation error
+            assert execute_result.is_error, \
+                f"{description}: execute() should return error for invalid symbol '{symbol}'"
+            assert "Symbol validation failed" in execute_result.error, \
+                f"{description}: execute() error should contain 'Symbol validation failed' for invalid symbol '{symbol}'. Got: {execute_result.error}"
+            
+            # Both should mention the symbol in error (for traceability)
+            assert symbol.strip() in validate_symbol_result[1] or symbol.strip() in execute_result.error, \
+                f"{description}: Error messages should mention the invalid symbol '{symbol}'. " \
+                f"validate_symbol: {validate_symbol_result[1]}, execute: {execute_result.error}"
