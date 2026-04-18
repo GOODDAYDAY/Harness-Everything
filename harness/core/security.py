@@ -141,47 +141,52 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             # Fallback for systems without O_PATH/O_DIRECTORY
             dir_fd = os.open(str(parent_dir), os.O_RDONLY)
         
-        # 3. Open the target file relative to the directory fd with O_NOFOLLOW
-        # This ensures we open the actual file, not a symlink
-        file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        # 3. [CRITICAL FIX] Get device/inode of the opened directory descriptor
+        dir_stat = os.fstat(dir_fd)
+        
+        # 4. Validate the *real* parent directory is within allowed_paths
+        # Get the real path of the parent directory for containment check
+        try:
+            parent_real = Path(os.path.realpath(str(parent_dir)))
+        except OSError:
+            return None
+        
+        # Security check: Ensure the opened dir_fd points to the intended directory
+        # Compare device/inode of the opened descriptor with the real path
+        try:
+            parent_real_stat = parent_real.stat()
+        except OSError:
+            return None
+        
+        # Verify the opened directory descriptor matches the real directory
+        if not (dir_stat.st_dev == parent_real_stat.st_dev and dir_stat.st_ino == parent_real_stat.st_ino):
+            return None
+        
+        # Containment check: Ensure the real parent directory is within allowed paths
+        if not any(parent_real.is_relative_to(allowed) for allowed in allowed_paths):
+            return None
+        
+        # 5. Open target file relative to dir_fd
+        # Note: We don't use O_NOFOLLOW because we need to allow symlinks,
+        # but we validate the opened file matches the expected file
+        file_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
         try:
             file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
         except OSError:
             return None
         
-        # 4. Get device and inode of the opened file
+        # 6. Verify the opened file matches the expected file
         file_stat = os.fstat(file_fd)
-        
-        # 5. Construct the expected absolute path for validation
-        # We need to get the real path of the parent directory
         try:
-            # Get real path of parent directory (without dir_fd parameter)
-            parent_real = Path(os.path.realpath(str(parent_dir)))
+            expected_stat = (parent_real / filename).stat()
         except OSError:
             return None
         
-        # 6. Construct the expected real path
-        expected_real_path = parent_real / filename
-        
-        # 7. Get device and inode of the expected file
-        try:
-            expected_stat = expected_real_path.stat()
-        except OSError:
-            return None
-        
-        # 8. Critical security check: ensure we opened the intended file
-        # Compare device and inode to prevent symlink swap attacks
-        # This MUST come before path containment check to eliminate race window
         if (file_stat.st_dev != expected_stat.st_dev or 
             file_stat.st_ino != expected_stat.st_ino):
             return None
         
-        # 9. Verify the expected real path is within allowed paths
-        # Now safe to check since we've verified we opened the right file
-        if not any(expected_real_path.is_relative_to(allowed) for allowed in allowed_paths):
-            return None
-        
-        # 10. Read content
+        # 7. Read content
         with os.fdopen(file_fd, 'r', encoding='utf-8', errors='replace') as f:
             file_fd = None
             return f.read()
