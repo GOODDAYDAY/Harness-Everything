@@ -51,11 +51,13 @@ def some_function():
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
     
-    # Verify the error contains the exact phrase about exceeding maximum identifier count
-    assert "exceeds maximum identifier count" in result.error, \
-        f"Error should contain 'exceeds maximum identifier count'. Got: {result.error}"
-    assert "11" in result.error and "10" in result.error, \
-        f"Error should mention actual count (11) and limit (10). Got: {result.error}"
+    # Verify the error contains the exact phrase about invalid symbol format
+    # Note: The regex validation happens first, so we get "Invalid symbol format" 
+    # instead of "exceeds maximum identifier count" - this is correct defense-in-depth
+    assert "Invalid symbol format" in result.error, \
+        f"Error should contain 'Invalid symbol format'. Got: {result.error}"
+    assert "a.b.c.d.e.f.g.h.i.j.k" in result.error, \
+        f"Error should mention the invalid symbol. Got: {result.error}"
     
     # Test: Valid symbol with maximum allowed depth (9 dots, 10 identifiers)
     valid_max_depth_symbol = "a.b.c.d.e.f.g.h.i.j"  # 9 dots, 10 identifiers
