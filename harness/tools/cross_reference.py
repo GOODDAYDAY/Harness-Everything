@@ -121,34 +121,21 @@ class CrossReferenceTool(Tool):
         func_name: str,
         context: dict[str, str] | None
     ) -> bool:
-        """Check if a call node is an instance method call for the given class.
-        
-        Args:
-            call_node: AST call node to check
-            class_name: Name of the class
-            func_name: Name of the method
-            context: Mapping from variable names to class names
-            
-        Returns:
-            True if the call is an instance method call for the target class
-        """
-        # Must be an attribute call like obj.method()
+        """Check if a Call node represents an instance method call of target class."""
         if not isinstance(call_node.func, ast.Attribute):
             return False
-        
-        # The attribute name must match the method name
         if call_node.func.attr != func_name:
             return False
-        
-        # If the value is a Name node (like obj in obj.method())
+    
+        # Check if the base is a variable name
         if isinstance(call_node.func.value, ast.Name):
             var_name = call_node.func.value.id
-            # Check if we have context mapping for this variable
-            if context and var_name in context:
-                return context[var_name] == class_name
-            # Without context, we can't be sure - return False
-            return False
-        
+            # Check if variable type matches target class
+            if context and var_name in context and context[var_name] == class_name:
+                return True
+            # Special case: 'self' in instance methods
+            if var_name == 'self' and context and context.get('self_class') == class_name:
+                return True
         return False
 
 
@@ -205,6 +192,40 @@ class CrossReferenceTool(Tool):
                 rel = str(fpath)
             lines = source.splitlines()
 
+            # Collect context for variable types if looking for a class method
+            class VariableCollector(ast.NodeVisitor):
+                def __init__(self):
+                    self.context = {}
+                    self.current_class = None
+
+                def visit_ClassDef(self, node):
+                    old_class = self.current_class
+                    self.current_class = node.name
+                    self.generic_visit(node)
+                    self.current_class = old_class
+
+                def visit_FunctionDef(self, node):
+                    # Map 'self' parameter to current class in instance methods
+                    if self.current_class and node.args.args:
+                        first_arg = node.args.args[0]
+                        if isinstance(first_arg, ast.arg) and first_arg.arg == 'self':
+                            self.context['self'] = self.current_class
+                            self.context['self_class'] = self.current_class
+                    self.generic_visit(node)
+
+                def visit_Assign(self, node):
+                    # Simple type inference for: var = ClassName()
+                    if (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and
+                        isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)):
+                        var_name = node.targets[0].id
+                        class_name = node.value.func.id
+                        self.context[var_name] = class_name
+                    self.generic_visit(node)
+
+            collector = VariableCollector()
+            collector.visit(tree)
+            context = collector.context if class_name else {}
+
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     name_match = node.name == func_name
@@ -234,36 +255,21 @@ class CrossReferenceTool(Tool):
 
                 # Caller detection
                 if isinstance(node, ast.Call) and len(callers) < 50:
-                    # Create context for instance method resolution
-                    context = {"self": class_name} if class_name else None
                     cname = call_name(node, context)
-                    if cname:
-                        # For class methods: check if cname matches "ClassName.method_name"
-                        # For standalone functions: check if cname matches "func_name"
-                        if class_name:
-                            expected = f"{class_name}.{func_name}"
-                            # Match direct class method calls
-                            if cname == expected:
-                                match = True
-                            # Match instance method calls where call_name returned "var_name.method_name"
-                            # and we need to check if it's actually our target method
-                            elif cname.endswith(f".{func_name}") and isinstance(node.func, ast.Attribute):
-                                # This could be an instance method call like obj.my_method()
-                                # We need to check if the attribute name matches
-                                if node.func.attr == func_name:
-                                    # Use the helper method to check if it's an instance of our class
-                                    match = self._is_instance_method_call(node, class_name, func_name, context)
-                                else:
-                                    match = False
-                            # Match instance method calls using the helper method (for other cases)
-                            elif self._is_instance_method_call(node, class_name, func_name, context):
-                                match = True
-                            else:
-                                match = False
-                        else:
-                            match = cname == func_name
-                        
-                        if match:
+                    match = False
+
+                    if class_name:
+                        expected = f"{class_name}.{func_name}"
+                        # 1. Direct class method call
+                        if cname == expected:
+                            match = True
+                        # 2. Instance method call via the new helper
+                        elif self._is_instance_method_call(node, class_name, func_name, context):
+                            match = True
+                    else:
+                        match = cname == func_name
+                    
+                    if match:
                             lineno = getattr(node, "lineno", 0)
                             snippet = (
                                 lines[lineno - 1].strip()
