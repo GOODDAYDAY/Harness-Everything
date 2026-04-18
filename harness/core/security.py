@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 
@@ -338,11 +339,22 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         # 5. Open target file relative to dir_fd
         # Use O_NOFOLLOW to prevent following symlinks - this fixes TOCTOU attacks
         # where a symlink could be swapped between opening and validation
+        # First try with O_NOFOLLOW to avoid following symlinks
         file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
         try:
             file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
-        except OSError:
-            return "PERMISSION ERROR: Cannot open file"
+        except OSError as e:
+            # If O_NOFOLLOW fails because the target is a symlink,
+            # try without O_NOFOLLOW to allow reading through symlinks
+            # but we'll validate the target later
+            if hasattr(os, 'O_NOFOLLOW') and e.errno == getattr(errno, 'ELOOP', None):
+                file_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+                try:
+                    file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
+                except OSError:
+                    return "PERMISSION ERROR: Cannot open file"
+            else:
+                return "PERMISSION ERROR: Cannot open file"
         
         # 6. CRITICAL SECURITY FIX: Validate the opened file is within allowed paths
         # This prevents hardlink attacks where a hardlink inside allowed directory
