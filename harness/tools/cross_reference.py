@@ -98,6 +98,12 @@ class CrossReferenceTool(Tool):
         test_pattern = re.compile(rf'(?<!\w){re.escape(func_name)}(?!\w)') if include_tests else None
 
         for fpath in py_files:
+            # Read file content first to avoid TOCTOU race condition
+            try:
+                source = fpath.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            
             # Explicit containment check as defense-in-depth against symlink attacks
             try:
                 abs_path = fpath.resolve()
@@ -107,7 +113,6 @@ class CrossReferenceTool(Tool):
                 continue
             
             try:
-                source = fpath.read_text(encoding="utf-8", errors="replace")
                 tree = safe_parse(source, filename=str(fpath))
                 if tree is None:
                     continue
