@@ -41,9 +41,6 @@ class CrossReferenceTool(Tool):
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
     _VALID_SYMBOL_PATTERN = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$', re.ASCII)
-    
-    # Maximum depth for symbol qualification to prevent abuse
-    _MAX_SYMBOL_DEPTH = 10
 
 
 
