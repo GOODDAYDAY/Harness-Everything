@@ -164,10 +164,24 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
             return None
         
         # 6. Final verification: ensure the opened file is within allowed paths
+        # Use fstat to get device and inode, then verify it matches the intended file
         try:
-            file_realpath = os.path.realpath(str(abs_path), dir_fd=file_fd)
-            file_realpath_path = Path(file_realpath)
-            if not any(file_realpath_path.is_relative_to(allowed) for allowed in allowed_paths):
+            # Get file stats for the opened file descriptor
+            file_stat = os.fstat(file_fd)
+            # Get file stats for the original path (should match if no symlink swap)
+            try:
+                target_stat = abs_path.stat()
+            except OSError:
+                return None
+            
+            # Compare device and inode to ensure we opened the intended file
+            if (file_stat.st_dev != target_stat.st_dev or 
+                file_stat.st_ino != target_stat.st_ino):
+                return None
+            
+            # Also verify the file is within allowed paths using the original path
+            # (which we already validated, but double-check for safety)
+            if not any(abs_path.is_relative_to(allowed) for allowed in allowed_paths):
                 return None
         except OSError:
             return None
