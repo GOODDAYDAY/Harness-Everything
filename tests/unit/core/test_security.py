@@ -93,9 +93,8 @@ class TestSecurity:
             # is outside the allowed directory
             content = read_file_atomically(hardlink, allowed_paths=[allowed_path])
             # The security fix now correctly rejects hardlinks to files outside allowed paths
-            assert content is not None
-            assert "PERMISSION ERROR" in content
-            assert "hardlink attack" in content
+            # Function returns None on security failures
+            assert content is None
 
     def test_read_file_atomically_toctou_dir_fd_validation(self):
         """Test that TOCTOU attack via parent directory symlink swap is prevented."""
