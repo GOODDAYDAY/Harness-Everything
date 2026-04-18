@@ -71,14 +71,33 @@ class CrossReferenceTool(Tool):
         """Return True if call_name represents an instance method call for the target class."""
         if not call_name.endswith(f".{target_method}"):
             return False
-        # call_name could be: "method", "obj.method", "self.method", "OtherClass.method"
+        # call_name could be: "obj.method", "self.method", "OtherClass.method"
         parts = call_name.split('.')
         if len(parts) != 2:
             return False  # Not a simple attribute access
-        # Accept calls where the first part is NOT clearly a different class.
-        # This handles "self.method", "obj.method", "cls.method" while rejecting "OtherClass.method".
         caller_obj = parts[0]
-        return caller_obj not in {"otherclass", "other_class"} and caller_obj.lower() != target_class.lower()
+        
+        # 1. Accept common instance references
+        common_refs = {"self", "cls", "obj", "instance", "this"}
+        if caller_obj in common_refs:
+            return True
+        
+        # 2. Accept if it's the target class itself
+        if caller_obj == target_class:
+            return True
+        
+        # 3. Accept if it's a lowercase version of the target class
+        # (e.g., "myclass" for "MyClass" - common convention for instances)
+        if caller_obj.lower() == target_class.lower():
+            return True
+        
+        # 4. Reject if it's clearly a different class (PascalCase)
+        if caller_obj and caller_obj[0].isupper():
+            return False
+        
+        # 5. For other lowercase variables, be conservative
+        # We'll accept them to avoid false negatives, but this may cause false positives
+        return True
 
     async def execute(
         self,
