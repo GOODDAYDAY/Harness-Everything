@@ -258,7 +258,7 @@ standalone_function()    # Should NOT be found for "MyClass.my_method"
     
     # Should find 1 caller for standalone_function
     assert len(data2["callers"]) == 1, f"Expected 1 caller for standalone_function, found {len(data2['callers'])}"
-    assert data2["callers"][0]["line"] == 21, f"Standalone function call should be at line 21, found at {data2['callers'][0]['line']}"
+    assert data2["callers"][0]["line"] == 22, f"Standalone function call should be at line 22, found at {data2['callers'][0]['line']}"
     
     # Additional test: directly verify the _is_instance_method_call helper
     # Parse a simple AST to test the helper method
@@ -655,10 +655,9 @@ def some_function():
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
     
-    # Verify the error references the depth limit
-    error_lower = result.error.lower()
-    assert any(word in error_lower for word in ["depth", "limit", "maximum", "exceed"]), \
-        f"Error should mention depth/limit. Got: {result.error}"
+    # Verify the error contains the exact phrase "exceeds maximum depth"
+    assert "exceeds maximum depth" in result.error, \
+        f"Error should contain 'exceeds maximum depth'. Got: {result.error}"
     assert "11" in result.error and "10" in result.error, \
         f"Error should mention actual and limit values. Got: {result.error}"
     
@@ -687,8 +686,10 @@ def some_function():
         assert False, f"_validate_symbol should raise ValueError for symbol exceeding depth limit: {overly_deep_symbol}"
     except ValueError as e:
         validation_result = str(e)
-        assert "depth" in validation_result.lower() or "limit" in validation_result.lower(), \
-            f"Validation error should mention depth/limit. Got: {validation_result}"
+        assert "exceeds maximum depth" in validation_result, \
+            f"Validation error should contain 'exceeds maximum depth'. Got: {validation_result}"
+        assert "12" in validation_result and "10" in validation_result, \
+            f"Validation error should mention actual and limit values. Got: {validation_result}"
     
     # Test 4: Verify the constant value matches what we're testing
     assert tool._MAX_SYMBOL_DEPTH == 10, \
