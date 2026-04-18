@@ -260,6 +260,77 @@ def test_validation_methods_consistent():
                 f"validate_symbol: {validate_symbol_result[1]}, execute: {execute_result.error}"
 
 
+def test_symbol_depth_boundary_consistency():
+    """Test that symbol depth validation is consistent between regex and explicit check.
+    
+    This test directly addresses the falsifiable criterion by verifying both
+    validation paths (_VALID_SYMBOL_PATTERN and _validate_symbol_format) produce
+    congruent results for the boundary case, preventing security bypasses.
+    """
+    import tempfile
+    from pathlib import Path
+    
+    tool = CrossReferenceTool()
+    
+    # Test 1: Symbol at maximum depth (10 identifiers, 9 dots) should be valid
+    max_valid_symbol = "a.b.c.d.e.f.g.h.i.j"  # 10 identifiers, 9 dots
+    assert tool._VALID_SYMBOL_PATTERN.fullmatch(max_valid_symbol) is not None, \
+        f"Regex should accept symbol at max depth: {max_valid_symbol}"
+    
+    # validate_symbol should not raise for valid symbol
+    validated = tool.validate_symbol(max_valid_symbol)
+    assert validated == max_valid_symbol, \
+        f"validate_symbol() should return the validated symbol unchanged. Got: {validated}"
+    
+    # Test 2: Symbol exceeding maximum depth (11 identifiers, 10 dots)
+    # With regex {0,10}, the pattern accepts 11 identifiers, but the explicit
+    # depth check in _validate_symbol_format will still reject it
+    too_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 11 identifiers, 10 dots
+    # The regex now accepts 11 identifiers (changed from {0,9} to {0,10})
+    assert tool._VALID_SYMBOL_PATTERN.fullmatch(too_deep_symbol) is not None, \
+        f"Regex with {{0,10}} should accept symbol with 11 identifiers: {too_deep_symbol}"
+    
+    # validate_symbol should raise ValueError for invalid symbol
+    try:
+        tool.validate_symbol(too_deep_symbol)
+        assert False, f"validate_symbol() should raise ValueError for symbol exceeding max depth: {too_deep_symbol}"
+    except ValueError as e:
+        error_msg = str(e)
+        assert "exceeds maximum depth" in error_msg or "Symbol validation failed" in error_msg, \
+            f"Error should mention depth violation. Got: {error_msg}"
+        assert too_deep_symbol in error_msg, \
+            f"Error should mention the invalid symbol. Got: {error_msg}"
+    
+    # Test 3: Execute should also reject symbol exceeding max depth
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace_path = Path(tmpdir) / "workspace"
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        workspace = str(workspace_path)
+        
+        # Create a simple Python file to search
+        test_file = workspace_path / "test.py"
+        test_file.write_text("""
+def some_function():
+    pass
+""")
+        
+        # Create config
+        config = HarnessConfig(workspace=workspace, allowed_paths=[workspace])
+        
+        # Execute with symbol exceeding max depth
+        result = asyncio.run(tool.execute(
+            config,
+            symbol=too_deep_symbol,
+            root=workspace
+        ))
+        
+        assert result.is_error, f"execute() should return error for symbol exceeding max depth: {too_deep_symbol}"
+        assert "exceeds maximum depth" in result.error or "Symbol validation failed" in result.error, \
+            f"Error should mention depth violation. Got: {result.error}"
+        assert too_deep_symbol in result.error, \
+            f"Error should mention the invalid symbol. Got: {result.error}"
+
+
 def test_validate_symbol_format_whitespace_bypass():
     """Test that whitespace-only symbols are properly rejected.
     
