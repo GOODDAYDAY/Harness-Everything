@@ -161,6 +161,7 @@ def extract_structured_feedback(text: str, evaluator_type: str = "basic", contex
     
     if errors:
         result["error"] = "Invalid evaluator output: " + "; ".join(errors)
+        result["validation_errors"] = errors
         return result
     
     if warnings:
@@ -337,6 +338,10 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             - "has_tests": bool indicating if tests were added/modified
             - "file_count": int number of files changed
             - "line_count": int number of lines changed
+            - "phase_name": str name of the current phase
+            - "has_syntax_errors": bool indicating if syntax errors were found
+            - "has_test_failures": bool indicating if tests failed
+            - "has_import_errors": bool indicating if import errors occurred
     
     Returns:
         List of warning messages if score appears miscalibrated
@@ -348,17 +353,23 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         warnings.append(f"Score {score} is outside valid range [0, 10]")
         return warnings
     
-    # Extract context information
+    # Extract context information with defaults
     mode = context.get("mode") if context else None
     has_critical_issues = context.get("has_critical_issues", False) if context else False
     has_tests = context.get("has_tests", False) if context else False
     file_count = context.get("file_count", 0) if context else 0
     line_count = context.get("line_count", 0) if context else 0
+    phase_name = context.get("phase_name", "") if context else ""
+    has_syntax_errors = context.get("has_syntax_errors", False) if context else False
+    has_test_failures = context.get("has_test_failures", False) if context else False
+    has_import_errors = context.get("has_import_errors", False) if context else False
     
+    # Score calibration anchors based on phase mode and context
     if evaluator_type == "basic":
-        # Basic evaluator calibration rules
+        # Basic evaluator calibration rules with phase-mode adaptation
         if mode == "debate":
             # Debate mode: evaluating text proposals
+            # Score calibration anchors for debate mode
             if score < 4.0 and not has_critical_issues:
                 warnings.append(f"Score {score} seems too low for debate mode without critical issues")
             elif score > 9.0 and file_count == 0 and line_count == 0:
@@ -368,16 +379,49 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
                 warnings.append(f"Score {score} for debate mode with no specific file references - check specificity")
                 # Log a warning for debate mode scores without file references
                 log.warning(f"Debate mode score {score} lacks file reference in {evaluator_type} evaluator")
-                
+            
+            # Phase-specific calibration anchors
+            if "analysis" in phase_name.lower():
+                # Analysis phases should have more nuanced scoring
+                if score > 8.5 and not has_tests:
+                    warnings.append(f"Score {score} seems high for analysis phase without test considerations")
+            
         elif mode == "implement":
             # Implement mode: evaluating executed code
+            # Score calibration anchors for implement mode with phase adaptation
             if score < 5.0 and not has_critical_issues:
                 warnings.append(f"Score {score} seems too low for implement mode without critical issues")
             elif score > 9.5 and not has_tests:
                 warnings.append(f"Score {score} seems too high for implement mode without test coverage")
+            
+            # Phase-specific implement mode calibration
+            if "improvement" in phase_name.lower():
+                # Improvement phases should have stricter scoring
+                if score > 8.0 and not has_tests:
+                    warnings.append(f"Score {score} seems high for improvement phase without test coverage")
+                if score > 9.0 and has_syntax_errors:
+                    warnings.append(f"Score {score} seems too high for improvement phase with syntax errors")
+            
+            elif "framework" in phase_name.lower():
+                # Framework changes need careful evaluation
+                if score > 8.5 and file_count > 2:
+                    warnings.append(f"Score {score} for framework change affecting {file_count} files - verify backward compatibility")
+            
             # Implementations with many changes but perfect score are suspicious
             if score == 10.0 and line_count > 50:
                 warnings.append(f"Perfect score {score} for large change ({line_count} lines) - verify no edge cases missed")
+            
+            # Critical issues should significantly lower scores
+            if score > 7.0 and has_critical_issues:
+                warnings.append(f"Score {score} seems high despite critical issues - verify issue severity")
+            
+            # Import errors should severely impact scores
+            if score > 6.0 and has_import_errors:
+                warnings.append(f"Score {score} seems high with import errors - verify functionality")
+            
+            # Test failures should impact scores
+            if score > 8.0 and has_test_failures:
+                warnings.append(f"Score {score} seems high with test failures - verify test coverage")
                 
         else:
             # Generic basic evaluator rules
