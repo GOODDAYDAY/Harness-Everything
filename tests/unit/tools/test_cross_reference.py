@@ -283,12 +283,11 @@ def test_symbol_depth_boundary_consistency():
         f"validate_symbol() should return the validated symbol unchanged. Got: {validated}"
     
     # Test 2: Symbol exceeding maximum depth (11 identifiers, 10 dots)
-    # With regex {0,10}, the pattern accepts 11 identifiers, but the explicit
-    # depth check in _validate_symbol_format will still reject it
+    # With regex {0,9}, the pattern should reject 11 identifiers
     too_deep_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 11 identifiers, 10 dots
-    # The regex now accepts 11 identifiers (changed from {0,9} to {0,10})
-    assert tool._VALID_SYMBOL_PATTERN.fullmatch(too_deep_symbol) is not None, \
-        f"Regex with {{0,10}} should accept symbol with 11 identifiers: {too_deep_symbol}"
+    # The regex should reject 11 identifiers (pattern is {0,9})
+    assert tool._VALID_SYMBOL_PATTERN.fullmatch(too_deep_symbol) is None, \
+        f"Regex with {{0,9}} should reject symbol with 11 identifiers: {too_deep_symbol}"
     
     # validate_symbol should raise ValueError for invalid symbol
     try:
