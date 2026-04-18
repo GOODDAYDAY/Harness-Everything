@@ -161,16 +161,19 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         except OSError:
             return None
         
-        # If the original path is a symlink, we need to verify it hasn't been swapped
-        if os.path.islink(str(parent_dir)):
-            # We opened the symlink (with O_PATH/O_NOFOLLOW) or its target (with O_RDONLY)
-            # Check if what we opened is still the same symlink
-            if not (dir_stat.st_dev == original_stat.st_dev and dir_stat.st_ino == original_stat.st_ino):
-                # What we opened doesn't match the original symlink
-                # This could mean:
-                # 1. We opened the symlink's target (O_RDONLY fallback) - dir_stat is target, original_stat is symlink
-                # 2. The symlink was swapped after we opened it
-                # In either case, we need to verify the symlink still points to what we opened
+        # CRITICAL FIX: Always verify the opened directory descriptor matches the original path
+        # This prevents TOCTOU attacks where a symlink is swapped after we open it
+        if not (dir_stat.st_dev == original_stat.st_dev and dir_stat.st_ino == original_stat.st_ino):
+            # What we opened doesn't match the original path
+            # This could mean:
+            # 1. The path was a symlink and we opened its target (O_RDONLY fallback)
+            # 2. The symlink was swapped after we opened it
+            # 3. A race condition occurred
+            # In all cases, we must fail securely
+            
+            # Special case: If the original path is a symlink and we opened its target,
+            # we need to check if the symlink still points to what we opened
+            if os.path.islink(str(parent_dir)):
                 try:
                     # Get current symlink target
                     current_target = Path(os.readlink(str(parent_dir)))
@@ -185,6 +188,9 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
                         return None  # Symlink points elsewhere now
                 except OSError:
                     return None
+            else:
+                # Not a symlink - this is definitely a race condition or attack
+                return None
         
         # 5. Validate the *real* parent directory is within allowed_paths
         # Get the real path of the parent directory for containment check
