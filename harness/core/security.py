@@ -420,18 +420,21 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         try:
             expected_stat = (parent_real / filename).stat()
         except OSError:
-            return "PERMISSION ERROR: Cannot stat expected file"
+            log.warning(f"Permission denied for {path}: Cannot stat expected file")
+            return None
         
         if (file_stat.st_dev != expected_stat.st_dev or 
             file_stat.st_ino != expected_stat.st_ino):
-            return "PERMISSION ERROR: File descriptor mismatch"
+            log.warning(f"Permission denied for {path}: File descriptor mismatch")
+            return None
         
         # 8. Read content
         with os.fdopen(file_fd, 'r', encoding='utf-8', errors='replace') as f:
             file_fd = None
             return f.read()
-    except (OSError, PermissionError, UnicodeDecodeError):
-        return "PERMISSION ERROR: Error reading file"
+    except (OSError, PermissionError, UnicodeDecodeError) as exc:
+        log.warning(f"Permission denied for {path}: {exc}")
+        return None
     finally:
         # Clean up file descriptors
         if file_fd is not None:
