@@ -17,6 +17,7 @@ from harness.core.security import (
     validate_path_no_control_chars,
     validate_path_security,
 )
+from harness.core.config import HarnessConfig
 
 
 def test_validate_path_no_homoglyphs():
@@ -434,3 +435,47 @@ def test_read_file_atomically_prevents_symlink_swap_attack():
         symlink_path.symlink_to(malicious_file)
         result = read_file_atomically(symlink_path, [allowed_dir])
         assert result is None, "Should return None when symlink points to file outside allowed paths"
+
+
+def test_validate_path_no_homoglyphs_with_config():
+    """Test homoglyph detection with a custom blocklist from HarnessConfig."""
+    config = HarnessConfig(homoglyph_blocklist={'\u0430': 'Cyrillic a'})
+    # Test passes with clean ASCII
+    assert validate_path_no_homoglyphs("/safe/path", config) is None
+    # Test detects configured homoglyph
+    result = validate_path_no_homoglyphs("/uns\u0430fe/path", config)
+    assert result is not None
+    assert "PERMISSION ERROR" in result
+    assert "Cyrillic a" in result
+
+
+def test_validate_path_security_order():
+    """Validate that checks execute in security-critical order: null bytes first."""
+    # A path with both a null byte and a homoglyph should trigger the null byte error first
+    test_path = "safe/\x00\u0430path"
+    error = validate_path_security(test_path)
+    assert error is not None
+    # The error should be about the null byte, not the homoglyph
+    assert "null byte" in error
+    assert "homoglyph" not in error
+
+
+def test_read_file_atomically_hardlink_scenario():
+    """Test that hardlinks to files outside allowed paths are rejected."""
+    import os
+    import tempfile
+    from pathlib import Path
+    
+    with tempfile.TemporaryDirectory() as allowed_tmp, tempfile.TemporaryDirectory() as outside_tmp:
+        allowed_path = Path(allowed_tmp)
+        outside_path = Path(outside_tmp)
+
+        original = outside_path / "secret.txt"
+        original.write_text("confidential")
+        hardlink = allowed_path / "link.txt"
+        os.link(original, hardlink)
+
+        # Attempt to read via hardlink inside allowed directory
+        result = read_file_atomically(hardlink, allowed_paths=[allowed_path])
+        # Should return None because the real file is outside allowed paths
+        assert result is None, "Should return None when hardlink points to file outside allowed paths"
