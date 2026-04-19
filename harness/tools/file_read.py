@@ -93,19 +93,25 @@ class ReadFileTool(Tool):
                     is_error=True
                 )
             elif exc.errno == errno.EINVAL:
-                # O_NOFOLLOW not supported on this system - use stat with follow_symlinks=False
+                # O_NOFOLLOW not supported - use atomic open+fstat
                 try:
-                    stat_result = await asyncio.to_thread(os.stat, resolved, follow_symlinks=False)
-                    if not stat.S_ISREG(stat_result.st_mode):
-                        return ToolResult(error=f"Not a regular file (may be a symlink): {resolved}", is_error=True)
-                    # Safe to read after verifying it's not a symlink
-                    # Note: There's still a small TOCTOU window between stat and read
-                    lines = Path(resolved).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                    fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY)
+                    try:
+                        # Use fstat on open fd to verify file type atomically
+                        stat_result = os.fstat(fd)
+                        if not stat.S_ISREG(stat_result.st_mode):
+                            os.close(fd)
+                            return ToolResult(error=f"Not a regular file: {resolved}", is_error=True)
+                        # Read from the already-open file descriptor
+                        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                            lines = f.read().splitlines(keepends=True)
+                    except Exception:
+                        os.close(fd)  # Critical: prevent FD leak on any exception
+                        raise
                 except Exception as fallback_exc:
                     return ToolResult(error=f"Secure fallback failed: {fallback_exc}", is_error=True)
             else:
-                # For other OSErrors (permission denied, etc.), return the error
-                return ToolResult(error=f"Failed to open file with O_NOFOLLOW: {exc}", is_error=True)
+                return ToolResult(error=f"Failed to open file: {exc}", is_error=True)
         except Exception as exc:
             return ToolResult(error=str(exc), is_error=True)
 
