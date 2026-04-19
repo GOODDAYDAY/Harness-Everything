@@ -334,6 +334,11 @@ class FindReplaceTool(Tool):
             resolved, err = self._resolve_and_check(config, str(fpath))
             if err:
                 continue
+            # Phase-scope check: skip files this phase is not allowed to edit.
+            # Silent skip (not an error) — find_replace is a multi-file op, and
+            # one out-of-scope match shouldn't abort the whole batch.
+            if self._check_phase_scope(config, resolved):
+                continue
 
             try:
                 original = fpath.read_text(encoding="utf-8", errors="replace")

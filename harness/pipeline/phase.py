@@ -55,6 +55,21 @@ class PhaseConfig:
     # failure gates the downstream commit. Intended for self-improvement
     # pipelines where a broken import would halt the next round entirely.
     import_smoke_modules: list[str] = field(default_factory=list)
+    # Additional statements the ImportSmokeHook subprocess executes AFTER the
+    # imports. Use these to exercise runtime code paths — a bare `import` only
+    # catches module-top-level errors, not a NameError buried in a function
+    # body. Each entry is a Python statement/expression string using fully
+    # qualified names, e.g.
+    #   "harness.evaluation.dual_evaluator.validate_evaluator_output("
+    #   "'DELTA\\nSCORE: 5', 'basic', 'debate')".
+    # The corresponding module must also appear in import_smoke_modules.
+    import_smoke_calls: list[str] = field(default_factory=list)
+    # File-mutating tools reject edits to paths outside these globs when the
+    # list is non-empty. Empty = unrestricted (back-compat). Used to bound the
+    # blast radius of a misbehaving phase — e.g. framework_improvement should
+    # not be editing evaluator code. Globs are matched against paths relative
+    # to the workspace root using fnmatch semantics (** for recursive).
+    allowed_edit_globs: list[str] = field(default_factory=list)
     commit_on_success: bool = False
     commit_repos: list[str] = field(default_factory=list)
 

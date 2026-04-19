@@ -470,6 +470,9 @@ class FilePatchTool(Tool):
                 errors.append(f"{rel_path}: {check_result.error}")
                 continue
             resolved = check_result
+            if scope_err := self._check_phase_scope(config, resolved):
+                errors.append(f"{rel_path}: {scope_err.error}")
+                continue
 
             p = Path(resolved)
             original = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""

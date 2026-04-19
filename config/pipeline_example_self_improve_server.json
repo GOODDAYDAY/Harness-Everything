@@ -100,7 +100,22 @@
       "import_smoke_modules": [
         "harness.core.config",
         "harness.pipeline.pipeline_loop",
-        "harness.tools"
+        "harness.tools",
+        "harness.evaluation.dual_evaluator"
+      ],
+      "import_smoke_calls": [
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'basic', 'debate')",
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'diffusion', 'implement')",
+        "harness.evaluation.dual_evaluator.parse_score('SCORE: 5.0')"
+      ],
+      "allowed_edit_globs": [
+        "harness/**",
+        "tests/**",
+        "main.py",
+        "CHANGELOG_AUTO.md",
+        "docs/**",
+        "config/pipeline_example_*.json",
+        "pyproject.toml"
       ],
       "commit_on_success": true,
       "commit_repos": [
@@ -128,7 +143,21 @@
       "import_smoke_modules": [
         "harness.core.config",
         "harness.pipeline.pipeline_loop",
-        "harness.tools"
+        "harness.tools",
+        "harness.evaluation.dual_evaluator"
+      ],
+      "import_smoke_calls": [
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'basic', 'debate')",
+        "harness.evaluation.dual_evaluator.parse_score('SCORE: 5.0')"
+      ],
+      "allowed_edit_globs": [
+        "harness/**",
+        "tests/**",
+        "main.py",
+        "CHANGELOG_AUTO.md",
+        "docs/**",
+        "config/pipeline_example_*.json",
+        "pyproject.toml"
       ],
       "commit_on_success": true,
       "commit_repos": [
@@ -157,7 +186,21 @@
       "import_smoke_modules": [
         "harness.core.config",
         "harness.pipeline.pipeline_loop",
-        "harness.tools"
+        "harness.tools",
+        "harness.evaluation.dual_evaluator"
+      ],
+      "import_smoke_calls": [
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'basic', 'debate')",
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'diffusion', 'implement')"
+      ],
+      "allowed_edit_globs": [
+        "harness/**",
+        "tests/**",
+        "main.py",
+        "CHANGELOG_AUTO.md",
+        "docs/**",
+        "config/pipeline_example_*.json",
+        "pyproject.toml"
       ],
       "commit_on_success": true,
       "commit_repos": [
@@ -186,7 +229,20 @@
       "import_smoke_modules": [
         "harness.core.config",
         "harness.pipeline.pipeline_loop",
-        "harness.tools"
+        "harness.tools",
+        "harness.evaluation.dual_evaluator"
+      ],
+      "import_smoke_calls": [
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'basic', 'debate')"
+      ],
+      "allowed_edit_globs": [
+        "harness/**",
+        "tests/**",
+        "main.py",
+        "CHANGELOG_AUTO.md",
+        "docs/**",
+        "config/pipeline_example_*.json",
+        "pyproject.toml"
       ],
       "commit_on_success": true,
       "commit_repos": [

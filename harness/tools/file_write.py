@@ -33,6 +33,8 @@ class WriteFileTool(Tool):
         if isinstance(path_result, ToolResult):
             return path_result  # This is a security or validation error
         resolved = path_result  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
 
         p = Path(resolved)
         try:

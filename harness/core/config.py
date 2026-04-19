@@ -93,6 +93,15 @@ class HarnessConfig:
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     evaluator: EvaluatorConfig = field(default_factory=EvaluatorConfig)
 
+    # --- per-phase transient state ---
+    # File-mutating tools (edit, write, patch, delete, move, find_replace)
+    # reject writes whose workspace-relative path does not match at least one
+    # glob in this list. Empty (default) = unrestricted. PhaseRunner sets this
+    # from PhaseConfig.allowed_edit_globs for the duration of the executor
+    # call, then clears it. The separation lives on HarnessConfig — not on
+    # Tool state — so that build_registry() can stay stateless across phases.
+    phase_edit_globs: list[str] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         # --- resolve paths ---
         self.workspace = str(Path(self.workspace).resolve())
