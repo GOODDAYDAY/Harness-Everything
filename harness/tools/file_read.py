@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
+import os
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +71,30 @@ class ReadFileTool(Tool):
             return ToolResult(error=f"Not a file: {resolved}", is_error=True)
 
         try:
-            lines = p.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            # Use asyncio.to_thread for async-safe file opening with O_NOFOLLOW
+            # to prevent symlink swapping attacks (TOCTOU vulnerability)
+            fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                # Read file content from the file descriptor
+                with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                    lines = f.read().splitlines(keepends=True)
+            finally:
+                # Ensure file descriptor is closed even if read fails
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass  # Already closed by fdopen
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return ToolResult(
+                    error=f"Symlink resolution escapes allowed directory: {resolved}",
+                    is_error=True
+                )
+            # Fallback to original method for non-POSIX systems or other errors
+            try:
+                lines = Path(resolved).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            except Exception as fallback_exc:
+                return ToolResult(error=str(fallback_exc), is_error=True)
         except Exception as exc:
             return ToolResult(error=str(exc), is_error=True)
 
