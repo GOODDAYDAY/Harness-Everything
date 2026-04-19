@@ -70,8 +70,12 @@ class ReadFileTool(Tool):
         
         try:
             # Read file content from the file descriptor
-            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+            # Ensure fd is closed even if fdopen fails
+            f = os.fdopen(fd, 'r', encoding='utf-8', errors='replace')
+            try:
                 lines = f.read().splitlines(keepends=True)
+            finally:
+                f.close()
         except Exception as exc:
             return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
 

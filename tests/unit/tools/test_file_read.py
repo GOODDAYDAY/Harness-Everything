@@ -465,5 +465,72 @@ def test_read_file_atomic_validation_rejects_symlinks():
             # (implied by the symlink error message)
 
 
+def test_open_with_atomic_fallback_einval_checks_symlink():
+    """Test that _open_with_atomic_fallback checks for symlinks in EINVAL fallback path.
+    
+    Mocks os.open to raise EINVAL on O_NOFOLLOW, then verifies that in the fallback
+    path, the method checks os.fstat for symlinks (stat.S_ISLNK).
+    """
+    import errno
+    import os
+    import stat
+    from unittest.mock import Mock, patch
+    
+    from harness.tools.base import Tool
+    
+    # Create a test tool instance
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        
+        def input_schema(self):
+            return {}
+        
+        async def execute(self, config, **kwargs):
+            pass
+    
+    tool = TestTool()
+    
+    # Track fstat calls and what they return
+    fstat_results = []
+    
+    def mock_fstat(fd):
+        # Create a mock stat result
+        st = Mock()
+        # Simulate a symlink
+        st.st_mode = stat.S_IFLNK | 0o777
+        fstat_results.append((fd, st.st_mode))
+        return st
+    
+    # Mock os.open to simulate EINVAL on O_NOFOLLOW, then success
+    open_calls = []
+    def mock_open(path, flags, *args, **kwargs):
+        open_calls.append((path, flags))
+        # First call with O_NOFOLLOW: simulate EINVAL
+        if flags & os.O_NOFOLLOW:
+            raise OSError(errno.EINVAL, "Invalid argument")
+        # Second call without O_NOFOLLOW: return a dummy fd
+        return 123
+    
+    with patch('os.open', mock_open), \
+         patch('os.fstat', mock_fstat), \
+         patch('os.close'):
+        
+        # Call _open_with_atomic_fallback
+        fd, error = tool._open_with_atomic_fallback("/test/path", os.O_RDONLY)
+        
+        # Verify behavior
+        assert open_calls[0][1] & os.O_NOFOLLOW  # First call had O_NOFOLLOW
+        assert not (open_calls[1][1] & os.O_NOFOLLOW)  # Second call didn't
+        assert len(fstat_results) == 1  # fstat was called
+        assert fstat_results[0][0] == 123  # fstat called on fd 123
+        # The error should indicate it's a symlink
+        assert error is not None
+        assert error.is_error
+        assert "symlink" in error.error.lower() or "Symlink" in error.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

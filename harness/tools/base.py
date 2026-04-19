@@ -266,6 +266,13 @@ class Tool(ABC):
                     try:
                         # Use fstat on open fd to verify file type atomically
                         stat_result = os.fstat(fd)
+                        # Reject symlinks (important for O_PATH on Linux)
+                        if stat.S_ISLNK(stat_result.st_mode):
+                            os.close(fd)
+                            return None, ToolResult(
+                                error=f"Path is a symlink: {path}",
+                                is_error=True
+                            )
                         if not stat.S_ISREG(stat_result.st_mode):
                             os.close(fd)
                             return None, ToolResult(
