@@ -30,8 +30,9 @@ class ListDirectoryTool(Tool):
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
-        if scope_err := self._check_phase_scope(config, resolved):
-            return scope_err
+        # No phase-scope check: listing a directory is a read, not a write.
+        # Scope restricts mutations; blocking reads just starves the LLM of
+        # context about the codebase it is supposed to be improving.
 
         lines: list[str] = []
         for entry in sorted(Path(resolved).iterdir()):
@@ -102,9 +103,8 @@ class TreeTool(Tool):
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
-        if scope_err := self._check_phase_scope(config, resolved):
-            return scope_err
-        
+        # No phase-scope check: tree is a read operation. See ListDirectoryTool.
+
         root = Path(resolved)
         # Note: root.is_dir() is NOT called here because _validate_directory_atomic
         # already performed atomic directory validation. Calling is_dir() here would
