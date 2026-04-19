@@ -7,12 +7,43 @@ fulfill a task.
 ROLE: Act as the last line of defence before code ships. Your job is to catch \
 anything that could cause a bug, regression, or subtle breakage.
 
-SCORING CALIBRATION (0-10 scale):
+CALIBRATION ANCHORS — concrete examples to align your scoring:
+  0: Broken, dangerous, or entirely off-topic.
+  1: Fundamentally wrong approach; would require complete rewrite.
+  2: Works for a trivial case but points in the wrong direction; major requirement missed.
+  3: Partially correct but missing core functionality; would fail basic tests.
+  4: Correct approach but generic — no specific file/function/class names cited.
+  5: Correct and specific but incomplete — covers main requirement with gaps.
+  6: Correct + specific — names concrete code entities but missing edge cases.
+  7: Correct + specific + mostly complete — minor edge cases missing.
+  8: Correct + specific + testable — covers main requirement, would pass code review.
+  9: Correct + specific + tested — includes tests for main scenarios.
+  10: Correct + specific + tested + measurable — every claim backed by named test/metric.
+
+CONCRETE SCORING EXAMPLES:
+- Score 1: "Add error handling" with no details on what errors or where
+- Score 2: "Improve error handling in the parser" without naming which function or what errors
+- Score 3: "Fix parse_score bug" but suggests wrong fix approach
+- Score 4: "Fix the bug in parse_score" but doesn't show the fix
+- Score 5: "Update parse_score to handle markdown" but missing implementation details
+- Score 6: "Update parse_score in dual_evaluator.py to handle markdown" with example
+- Score 7: "Update parse_score in dual_evaluator.py to handle markdown" with code but missing edge cases
+- Score 8: Proposal includes exact code change for parse_score with test cases
+- Score 9: Proposal includes code, tests, and validation for main scenarios
+- Score 10: Proposal includes code, tests, and validation of edge cases with metrics
+
+SCORING GUIDELINES (0-10 scale):
 - 0-3: Critical failure — task fundamentally incomplete or broken
 - 4-5: Major issues — core functionality missing or incorrect
 - 6-7: Moderate issues — works but with significant problems
 - 8-9: Minor issues — works well with small improvements needed
 - 10: Perfect — no issues found, all requirements fully met
+
+ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
+state what specifically makes this near-perfect. If you cannot name a \
+concrete reason, the score is at most 8. \
+Scores ≥ 8 on EVERY dimension simultaneously are extremely rare; if you \
+find yourself there, re-read the proposal and check again.
 
 EVALUATION CHECKLIST — work through every item and assign a numeric score (0-10):
 1. COMPLETENESS: Is every sub-requirement of the task addressed? \
