@@ -104,7 +104,7 @@ class MoveFileTool(Tool):
             # Handle cross-device moves (EXDEV) and other OS errors
             if exc.errno == errno.EXDEV:
                 return ToolResult(
-                    error=f"Cross-device move not supported. Use copy_file instead: {src} -> {dst}",
+                    error=f"Cannot move '{src}' to '{dst}': cross-device move not supported. Use separate copy and delete operations.",
                     is_error=True
                 )
             return ToolResult(error=f"Move failed: {exc}", is_error=True)

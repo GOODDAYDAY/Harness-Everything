@@ -316,5 +316,39 @@ def test_deletefile_atomic_unlink_no_exists_check():
             assert "disappeared after validation" in result.error  # Specific new error message
 
 
+def test_movefile_cross_device_error_no_copy_suggestion():
+    """Test that MoveFileTool's cross-device error does not suggest copy_file (security bypass)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = MoveFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        # Include both workspace and its parent in allowed paths for parent directory checks
+        config.allowed_paths = [str(workspace), tmpdir]
+        
+        # Mock os.rename to raise EXDEV (cross-device move error)
+        with patch('os.rename', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
+            result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+            
+            # Should return an error
+            assert result.is_error
+            
+            # Error should contain "cross-device move not supported"
+            assert "cross-device move not supported" in result.error.lower()
+            
+            # CRITICAL: Error should NOT suggest "copy_file" (security bypass)
+            assert "copy_file" not in result.error.lower(), \
+                "Security vulnerability: cross-device error suggests copy_file, creating a TOCTOU bypass vector"
+            
+            # Should suggest separate operations instead
+            assert "separate copy and delete" in result.error.lower()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
