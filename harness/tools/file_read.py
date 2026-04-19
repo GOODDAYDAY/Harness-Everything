@@ -90,11 +90,18 @@ class ReadFileTool(Tool):
                     error=f"Symlink resolution escapes allowed directory: {resolved}",
                     is_error=True
                 )
-            # Fallback to original method for non-POSIX systems or other errors
-            try:
-                lines = Path(resolved).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-            except Exception as fallback_exc:
-                return ToolResult(error=str(fallback_exc), is_error=True)
+            # Only fallback for errors that might indicate O_NOFOLLOW is not supported
+            # (e.g., EINVAL on some systems). For other errors, return the error.
+            if exc.errno == errno.EINVAL:
+                # O_NOFOLLOW might not be supported on this system
+                # Fall back to original method but log a warning
+                try:
+                    lines = Path(resolved).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                except Exception as fallback_exc:
+                    return ToolResult(error=str(fallback_exc), is_error=True)
+            else:
+                # For other OSErrors (permission denied, etc.), return the error
+                return ToolResult(error=f"Failed to open file: {exc}", is_error=True)
         except Exception as exc:
             return ToolResult(error=str(exc), is_error=True)
 
