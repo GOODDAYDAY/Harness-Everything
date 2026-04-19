@@ -70,9 +70,9 @@ class ReadFileTool(Tool):
         
         try:
             # Read file content from the file descriptor
-            # Ensure fd is closed even if fdopen fails
+            # Use binary mode to preserve O_NOFOLLOW protection from atomic open
             try:
-                f = os.fdopen(fd, 'r', encoding='utf-8', errors='replace')
+                f = os.fdopen(fd, 'rb')  # Binary mode preserves open flags
             except Exception as fdopen_exc:
                 # Close raw fd if fdopen fails before creating file object
                 try:
@@ -82,7 +82,9 @@ class ReadFileTool(Tool):
                     pass
                 raise fdopen_exc
             try:
-                lines = f.read().splitlines(keepends=True)
+                # Read binary and decode with same error handling as original
+                content = f.read()
+                lines = content.decode('utf-8', errors='replace').splitlines(keepends=True)
             finally:
                 f.close()
         except Exception as exc:

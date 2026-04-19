@@ -145,7 +145,7 @@ def test_readfile_einval_fallback_atomic():
             
             # Mock os.fdopen to return a mock file object that supports context manager
             mock_file = Mock()
-            mock_file.read.return_value = "test content\n"
+            mock_file.read.return_value = b"test content\n"  # Now returns bytes
             mock_file.__enter__ = Mock(return_value=mock_file)
             mock_file.__exit__ = Mock(return_value=None)
             
@@ -589,6 +589,47 @@ def test_execute_fdopen_failure_closes_fd():
         # Verify the result is an error (as expected)
         assert result.is_error
         assert "Failed to read file" in result.error
+
+
+def test_readfile_preserves_onofollow_through_fdopen():
+    """Test that O_NOFOLLOW protection is maintained through fdopen to prevent TOCTOU."""
+    import asyncio
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        legit = workspace / "data.txt"
+        legit.write_text("line1\nline2\nline3")
+        
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Mock to verify binary mode preserves flags
+        mock_file = Mock()
+        mock_file.read.return_value = b"line1\nline2\nline3"
+        mock_file.__enter__ = Mock(return_value=mock_file)
+        mock_file.__exit__ = Mock(return_value=None)
+        
+        # Execute with mocked atomic validation
+        with patch.object(tool, '_validate_atomic_path', 
+                         return_value=(True, str(legit))), \
+             patch.object(tool, '_open_with_atomic_fallback',
+                         return_value=(123, None)), \
+             patch('os.fdopen', return_value=mock_file) as mock_fdopen_func:
+            
+            result = asyncio.run(tool.execute(config, path=str(legit), offset=1, limit=2))
+            
+            # Verify fdopen called with 'rb' (binary mode)
+            assert mock_fdopen_func.called
+            assert mock_fdopen_func.call_args[0][1] == 'rb', "Must use binary mode to preserve O_NOFOLLOW"
+            
+            # Verify successful read
+            assert not result.is_error
+            assert "line1" in result.output
 
 
 if __name__ == "__main__":
