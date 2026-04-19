@@ -1,5 +1,6 @@
 """Unit tests for harness.tools.file_read."""
 
+import asyncio
 import errno
 import os
 import tempfile
@@ -54,7 +55,7 @@ def test_readfile_fallback_path_atomicity():
         with patch('os.open', side_effect=mock_open), \
              patch('os.fstat', side_effect=mock_fstat):
             # Run the tool
-            result = tool.execute(config, path=str(test_file))
+            result = asyncio.run(tool.execute(config, path=str(test_file)))
         
         # Verify the fallback path was used correctly
         assert len(open_calls) == 2, f"Expected 2 os.open calls, got {len(open_calls)}"
@@ -103,7 +104,7 @@ def test_readfile_symlink_protection():
         config.allowed_paths = [str(workspace)]
         
         # Should reject the symlink
-        result = tool.execute(config, path=str(symlink))
+        result = asyncio.run(tool.execute(config, path=str(symlink)))
         assert result.is_error
         assert "outside allowed" in result.error.lower() or "symlink" in result.error.lower()
 
@@ -132,7 +133,7 @@ def test_readfile_valid_symlink():
         config.allowed_paths = [str(workspace)]
         
         # Should allow and read through the symlink
-        result = tool.execute(config, path=str(symlink))
+        result = asyncio.run(tool.execute(config, path=str(symlink)))
         assert not result.is_error
         assert "target content" in result.output
 
@@ -154,7 +155,7 @@ def test_readfile_offset_and_limit():
         config.allowed_paths = [str(tmpdir_path)]
         
         # Test with offset=3, limit=4
-        result = tool.execute(config, path=str(test_file), offset=3, limit=4)
+        result = asyncio.run(tool.execute(config, path=str(test_file), offset=3, limit=4))
         assert not result.is_error
         output = result.output
         
@@ -165,6 +166,48 @@ def test_readfile_offset_and_limit():
         assert "line6" in output
         assert "line7" not in output  # Should be excluded by limit
         assert "line2" not in output  # Should be excluded by offset
+
+
+def test_read_file_uses_atomic_validation():
+    """Test that ReadFileTool uses _validate_atomic_path for TOCTOU safety."""
+    import asyncio
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    # Create a temporary directory for the test
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file
+        test_file = tmpdir_path / "test.txt"
+        test_file.write_text("test content")
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(tmpdir_path)
+        config.allowed_paths = [str(tmpdir_path)]
+        
+        # Mock _validate_atomic_path to return success
+        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = (True, str(test_file))
+            
+            # Mock the file reading to avoid actual I/O
+            with patch('builtins.open', Mock(return_value=Mock(
+                __enter__=Mock(return_value=Mock(
+                    read=Mock(return_value="test content"),
+                    __iter__=Mock(return_value=iter(["test content"]))
+                )),
+                __exit__=Mock()
+            ))):
+                # Run the tool
+                result = asyncio.run(tool.execute(config, path=str(test_file)))
+        
+        # Assert the correct, secure method was called
+        mock_validate.assert_called_once_with(config, str(test_file))
+        
+        # Verify the result is successful
+        assert not result.is_error
+        assert "test content" in result.output
 
 
 if __name__ == "__main__":
