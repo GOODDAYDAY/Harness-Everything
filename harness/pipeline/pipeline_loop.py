@@ -1024,7 +1024,7 @@ class PipelineLoop:
             "avg_score": round(sum(s["score"] for s in score_history) / len(score_history), 2) if score_history else 0.0,
             "best_score": round(best_score, 2),
             "worst_score": round(min(s["score"] for s in score_history), 2) if score_history else 0.0,
-            "total_phases": self.total_phases_run,
+            "total_phases_run": self.total_phases_run,
             "total_errors": total_tool_errors,
             "total_duration": round(total_elapsed, 2),
             "total_tool_calls": total_tool_calls,

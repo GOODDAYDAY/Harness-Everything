@@ -105,7 +105,7 @@ def test_cross_reference_rejects_invalid_symbol(tmp_path):
     for invalid_symbol in invalid_symbols:
         result = asyncio.run(tool.execute(config, invalid_symbol, root=""))
         assert result.is_error is True, f"Expected error for symbol: '{invalid_symbol}'"
-        assert "Invalid symbol format" in result.error or "Potentially malicious symbol" in result.error, f"Wrong error message for '{invalid_symbol}': {result.error}"
+        assert "Invalid symbol format" in result.error or "Potentially malicious symbol" in result.error or "cannot be empty or whitespace-only" in result.error, f"Wrong error message for '{invalid_symbol}': {result.error}"
     
     # Test valid symbols that should NOT return an error
     # (They may not find anything, but shouldn't error on validation)
