@@ -86,7 +86,12 @@ class ImportSmokeHook(VerificationHook):
     name = "import_smoke"
     gates_commit = True
 
-    def __init__(self, modules: list[str] | None = None, timeout: int = 30) -> None:
+    def __init__(
+        self,
+        modules: list[str] | None = None,
+        smoke_calls: list[str] | None = None,
+        timeout: int = 30,
+    ) -> None:
         # Default covers the self-improvement case; override via config for
         # pipelines with different import entry points.
         self.modules = modules or [
@@ -94,10 +99,19 @@ class ImportSmokeHook(VerificationHook):
             "harness.pipeline.pipeline_loop",
             "harness.tools",
         ]
+        # smoke_calls are arbitrary Python statements executed after the
+        # imports. They are how we catch runtime-only NameErrors that hide
+        # inside function bodies (see 2026-04-19 validate_calibration_anchors
+        # incident: bare `import` succeeded, but the next evaluator call blew
+        # up because a referenced helper was never defined). Each string must
+        # use fully qualified names — e.g. "harness.evaluation.dual_evaluator.
+        # validate_evaluator_output('DELTA\\nSCORE: 5', 'basic', 'debate')".
+        self.smoke_calls = smoke_calls or []
         self.timeout = timeout
 
     async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
         import_stmts = "\n".join(f"import {m}" for m in self.modules)
+        call_stmts = "\n".join(self.smoke_calls)
         # build_registry() exercises tool class loading, which is the most
         # common place a refactor breaks imports without hitting top-level
         # module imports directly.
@@ -105,6 +119,7 @@ class ImportSmokeHook(VerificationHook):
             f"{import_stmts}\n"
             "from harness.tools import build_registry\n"
             "build_registry()\n"
+            f"{call_stmts}\n"
         )
         # Use sys.executable so the smoke runs under the same interpreter
         # (and thus the same venv / installed packages) as the harness itself.
@@ -143,6 +158,128 @@ class ImportSmokeHook(VerificationHook):
             )
         err = stderr.decode(errors="replace") + stdout.decode(errors="replace")
         return HookResult(passed=False, output="", errors=err[:2000])
+
+
+class StaticCheckHook(VerificationHook):
+    """Run ruff (preferred) or pyflakes over changed files.
+
+    Targets static correctness errors that slip past ``py_compile`` but blow
+    up at runtime: most importantly F821 ("undefined name"), which caught
+    the ``validate_calibration_anchors`` incident 2026-04-19 where the LLM
+    wrote a call to a helper it never defined. We include F811 (redefined
+    name) and F401 (unused import) as cheap extras — both reliable signals
+    of a merge artefact or a hallucinated import.
+
+    Behaviour with missing tools:
+      • Neither ``ruff`` nor ``pyflakes`` importable → log a WARNING, pass
+        the hook. The build does not block. This preserves local-dev
+        ergonomics and avoids a chicken-and-egg on fresh installs.
+      • Tool present and reports errors → fail the hook (gates the commit).
+
+    Scope: checks only the files changed in this phase, sourced from the
+    hook context (``context["files_changed"]``). Falls back to a no-op if
+    no changed files are provided — we don't want to re-scan the whole
+    tree on every commit.
+    """
+
+    name = "static_check"
+    gates_commit = True
+
+    # F821 is the critical one. F811 and F401 are cheap, high-signal extras.
+    RUFF_RULES = "F821,F811,F401"
+
+    def __init__(self, timeout: int = 20) -> None:
+        self.timeout = timeout
+
+    async def _run_tool(
+        self, argv: list[str], cwd: str,
+    ) -> tuple[int | None, str]:
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=self.timeout
+            )
+        except asyncio.TimeoutError:
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
+            return None, "static check timed out"
+        except FileNotFoundError:
+            return None, "tool not found"
+        except Exception as e:
+            return None, str(e)
+        combined = stdout.decode(errors="replace") + stderr.decode(errors="replace")
+        return proc.returncode, combined
+
+    async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
+        changed: list[str] = [
+            f for f in context.get("files_changed", [])
+            if isinstance(f, str) and f.endswith(".py")
+        ]
+        if not changed:
+            return HookResult(
+                passed=True, output="static_check: no python files changed"
+            )
+
+        # Probe ruff first (faster, richer), fall back to pyflakes. Use
+        # sys.executable -m so we hit the same interpreter / venv as the
+        # harness itself — avoids "works on my machine" with a global ruff.
+        probe_rc, _ = await self._run_tool(
+            [sys.executable, "-m", "ruff", "--version"], config.workspace
+        )
+        if probe_rc == 0:
+            rc, output = await self._run_tool(
+                [
+                    sys.executable, "-m", "ruff", "check",
+                    "--select", self.RUFF_RULES,
+                    "--no-cache",
+                    *changed,
+                ],
+                config.workspace,
+            )
+            if rc == 0:
+                return HookResult(
+                    passed=True,
+                    output=f"static_check (ruff {self.RUFF_RULES}): clean on {len(changed)} file(s)",
+                )
+            return HookResult(
+                passed=False, output="",
+                errors=f"ruff reported issues:\n{output[:1500]}",
+            )
+
+        probe_rc, _ = await self._run_tool(
+            [sys.executable, "-m", "pyflakes", "--version"], config.workspace
+        )
+        if probe_rc == 0:
+            rc, output = await self._run_tool(
+                [sys.executable, "-m", "pyflakes", *changed],
+                config.workspace,
+            )
+            if rc == 0:
+                return HookResult(
+                    passed=True,
+                    output=f"static_check (pyflakes): clean on {len(changed)} file(s)",
+                )
+            return HookResult(
+                passed=False, output="",
+                errors=f"pyflakes reported issues:\n{output[:1500]}",
+            )
+
+        # Neither tool available. Warn but don't block — see class docstring.
+        return HookResult(
+            passed=True,
+            output=(
+                "static_check: neither ruff nor pyflakes is installed under "
+                f"{sys.executable}; static checks SKIPPED. Install ruff to "
+                "restore this guard (pip install ruff)."
+            ),
+        )
 
 
 class PytestHook(VerificationHook):
@@ -294,11 +431,26 @@ def build_hooks(
     if phase_config.syntax_check_patterns:
         hooks.append(SyntaxCheckHook(phase_config.syntax_check_patterns))
 
+    # Static check (ruff F821 etc.) runs right after syntax: same order of
+    # magnitude cost, catches strictly more (undefined names, redefinitions,
+    # unused imports). Opt-in via commit_on_success so advisory/debate-only
+    # phases don't pay the subprocess cost; implementation phases get it for
+    # free whenever a commit would otherwise land.
+    if phase_config.commit_on_success:
+        hooks.append(StaticCheckHook())
+
     # Import smoke: opt-in via a non-empty module list. Keep it ordered
     # before PytestHook/GitCommitHook so a failing import (gates_commit=True)
     # reliably suppresses the commit via the short-circuit below.
-    if getattr(phase_config, "import_smoke_modules", None):
-        hooks.append(ImportSmokeHook(phase_config.import_smoke_modules))
+    _smoke_modules = getattr(phase_config, "import_smoke_modules", None)
+    _smoke_calls = getattr(phase_config, "import_smoke_calls", None)
+    if _smoke_modules or _smoke_calls:
+        hooks.append(
+            ImportSmokeHook(
+                modules=_smoke_modules or None,
+                smoke_calls=_smoke_calls or None,
+            )
+        )
 
     if phase_config.run_tests:
         hooks.append(PytestHook(phase_config.test_path))

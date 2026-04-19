@@ -55,7 +55,18 @@ async def run_simple(task: str, config: HarnessConfig) -> None:
 # ===========================================================================
 
 
-async def run_pipeline(config: PipelineConfig) -> None:
+async def run_pipeline(config: PipelineConfig) -> int:
+    """Run the pipeline. Returns the process exit code.
+
+    Exit codes:
+      0 — pipeline produced real work (best_score >= 1.0 OR fewer than 3 rounds
+          ran, which is too few to call catastrophic).
+      2 — zero-work catastrophe: rounds>=3 completed but every phase crashed
+          (total_phases_run == 0) OR best_score stayed at 0. Distinguishable
+          from natural clean exit so systemd (Restart=on-failure) restarts
+          and heartbeat can treat it as a fault. See 2026-04-19 incident
+          where a missing function silently tanked 6 rounds × ~4 phases.
+    """
     loop = PipelineLoop(config)
     result = await loop.run()
 
@@ -67,6 +78,19 @@ async def run_pipeline(config: PipelineConfig) -> None:
     if result.final_proposal:
         print(f"Final proposal: {result.final_proposal[:200]}...")
     print("=" * 60)
+
+    zero_work = (
+        result.rounds_completed >= 3
+        and (result.total_phases_run == 0 or result.best_score < 1.0)
+    )
+    if zero_work:
+        print(
+            f"ZERO-WORK CATASTROPHE: rounds={result.rounds_completed} "
+            f"phases_run={result.total_phases_run} best_score={result.best_score:.1f} "
+            f"— exiting with code 2 so systemd treats this as a failure."
+        )
+        return 2
+    return 0
 
 
 # ===========================================================================
@@ -87,8 +111,8 @@ def main() -> None:
         config_path = Path(args[idx + 1])
         with open(config_path) as f:
             config = PipelineConfig.from_dict(json.load(f))
-        asyncio.run(run_pipeline(config))
-        return
+        exit_code = asyncio.run(run_pipeline(config))
+        sys.exit(exit_code)
 
     # Simple mode
     if not args:

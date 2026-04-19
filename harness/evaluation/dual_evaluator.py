@@ -534,6 +534,25 @@ def _score_is_in_code_block(text: str, score_line_start: int) -> bool:
     return in_code_block
 
 
+def validate_calibration_anchors(
+    text: str,
+    evaluator_type: str = "basic",
+    mode: str | None = None,
+) -> list[str]:
+    """Placeholder for anchor-drift validation — returns no issues.
+
+    The evaluator prompts (BASIC_SYSTEM, DIFFUSION_SYSTEM) include explicit
+    CALIBRATION ANCHORS blocks. A future implementation should check that
+    evaluator outputs actually reference the anchor language when scoring
+    near extremes (≤1 or ≥9). Until that logic exists this stub is
+    load-bearing: ``validate_evaluator_output`` calls it unconditionally,
+    so removing the stub re-introduces a NameError that dead-locks every
+    phase evaluation at runtime (see incident 2026-04-19). Keep the stub
+    and the signature stable; replace the body when implementing.
+    """
+    return []
+
+
 def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: str | None = None) -> tuple[bool, list[str]]:
     """Validate evaluator output structure and return (is_valid, issues).
     

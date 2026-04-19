@@ -31,7 +31,9 @@ class DeleteFileTool(Tool):
         if isinstance(path_result, ToolResult):
             return path_result  # This is a security or validation error
         resolved = path_result  # This is the validated path string
-        
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
+
         p = Path(resolved)
         if not p.exists():
             return ToolResult(error=f"Not found: {resolved}", is_error=True)
@@ -68,7 +70,14 @@ class MoveFileTool(Tool):
         if isinstance(dst_result, ToolResult):
             return dst_result  # This is a security or validation error
         dst = dst_result  # This is the validated path string
-        
+        # Scope check both source (we're removing it) and destination (we're
+        # creating it) — a move out of scope is effectively both a delete and
+        # a write.
+        if scope_err := self._check_phase_scope(config, src):
+            return scope_err
+        if scope_err := self._check_phase_scope(config, dst):
+            return scope_err
+
         if not Path(src).exists():
             return ToolResult(error=f"Source not found: {src}", is_error=True)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
@@ -105,7 +114,11 @@ class CopyFileTool(Tool):
         if isinstance(dst_result, ToolResult):
             return dst_result  # This is a security or validation error
         dst = dst_result  # This is the validated path string
-        
+        # Scope check on destination only — copying out of scope is still a
+        # write; reading the source does not create new state.
+        if scope_err := self._check_phase_scope(config, dst):
+            return scope_err
+
         if not Path(src).is_file():
             return ToolResult(error=f"Source not found: {src}", is_error=True)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)

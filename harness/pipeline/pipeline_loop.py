@@ -60,6 +60,13 @@ class PipelineResult:
     rounds_completed: int
     phases_results: list[list[PhaseResult]] = field(default_factory=list)
     final_proposal: str = ""
+    # Best round score across the entire run. Callers (main.py, CI) use this
+    # to distinguish "ran and produced real work" from "ran but every phase
+    # crashed" — the latter reports as success with rounds>0 but best_score=0.
+    best_score: float = 0.0
+    # Total number of phase executions that finished without raising. Zero
+    # here with rounds>0 is an unambiguous catastrophe signal.
+    total_phases_run: int = 0
 
 
 class PipelineLoop:
@@ -723,6 +730,8 @@ class PipelineLoop:
             rounds_completed=len(all_round_results),
             phases_results=all_round_results,
             final_proposal=prior_best or "",
+            best_score=best_round_score,
+            total_phases_run=self.total_phases_run,
         )
 
     async def _run_outer_round(
