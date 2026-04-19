@@ -168,14 +168,33 @@ class Tool(ABC):
                 is_error=True,
             )
         
-        # 2. Resolve path to eliminate symlink TOCTOU
+        # 2. Resolve path to eliminate symlink TOCTOU using Path.resolve(strict=True)
         try:
-            resolved = os.path.realpath(path_to_check)
-        except (ValueError, OSError) as exc:
-            return "", ToolResult(
-                error=f"PERMISSION ERROR: invalid path {path_to_check!r}: {exc}",
-                is_error=True,
-            )
+            # Use Path.resolve(strict=True) for atomic symlink resolution
+            resolved_path = Path(path_to_check).resolve(strict=True)
+            resolved = str(resolved_path)
+        except OSError as exc:
+            # Handle broken symlinks or non-existent paths
+            # Fall back to checking parent directories
+            try:
+                # Try non-strict resolution first
+                resolved_path = Path(path_to_check).resolve(strict=False)
+                resolved = str(resolved_path)
+                
+                # Check if all parent directories exist and are within allowed paths
+                current = Path(resolved)
+                while current != current.parent:  # Stop at root
+                    if not current.parent.exists():
+                        return "", ToolResult(
+                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
+                            is_error=True,
+                        )
+                    current = current.parent
+            except Exception as exc2:
+                return "", ToolResult(
+                    error=f"Cannot resolve path {path_to_check!r}: {exc2}",
+                    is_error=True,
+                )
         
         # 3. Check if resolved path is allowed
         if not config.is_path_allowed(resolved):
