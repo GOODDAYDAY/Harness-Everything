@@ -91,12 +91,8 @@ def test_check_path_symlink_swap():
         # The error message should indicate the path is outside allowed directories
         assert isinstance(result, ToolResult)
         assert result.is_error
-        # Check for either the symlink resolution error or the path outside allowed error
-        assert any(msg in result.error.lower() for msg in [
-            "symlink resolution",
-            "outside allowed",
-            "security"
-        ])
+        # Check for the specific symlink resolution error message
+        assert "symlink resolution" in result.error.lower() or "outside allowed" in result.error.lower()
 
 
 def test_check_path_resolves_symlinks():
