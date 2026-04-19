@@ -61,20 +61,19 @@ class MoveFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
+        # Use _check_path with standardized validation
         src_result = self._check_path(config, source)
-        # Add defensive assertion to catch type contract violations
-        assert isinstance(src_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(src_result)}"
-        if isinstance(src_result, ToolResult):
-            return src_result  # This is a security or validation error
-        src = src_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(src_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        src = validated  # This is the validated path string
         
         dst_result = self._check_path(config, destination)
-        # Add defensive assertion to catch type contract violations
-        assert isinstance(dst_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(dst_result)}"
-        if isinstance(dst_result, ToolResult):
-            return dst_result  # This is a security or validation error
-        dst = dst_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(dst_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        dst = validated  # This is the validated path string
+        
         # Scope check both source (we're removing it) and destination (we're
         # creating it) — a move out of scope is effectively both a delete and
         # a write.
@@ -109,20 +108,19 @@ class CopyFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
+        # Use _check_path with standardized validation
         src_result = self._check_path(config, source)
-        # Add defensive assertion to catch type contract violations
-        assert isinstance(src_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(src_result)}"
-        if isinstance(src_result, ToolResult):
-            return src_result  # This is a security or validation error
-        src = src_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(src_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        src = validated  # This is the validated path string
         
         dst_result = self._check_path(config, destination)
-        # Add defensive assertion to catch type contract violations
-        assert isinstance(dst_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(dst_result)}"
-        if isinstance(dst_result, ToolResult):
-            return dst_result  # This is a security or validation error
-        dst = dst_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(dst_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        dst = validated  # This is the validated path string
+        
         # Scope check on destination only — copying out of scope is still a
         # write; reading the source does not create new state.
         if scope_err := self._check_phase_scope(config, dst):
