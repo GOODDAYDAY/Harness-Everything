@@ -154,6 +154,27 @@ class Tool(ABC):
             is_error=True,
         )
 
+    def _validate_path_result(self, path_result: Any) -> tuple[bool, str | ToolResult]:
+        """Standardize type checking for _check_path return values.
+        
+        Returns: (is_valid, validated_path_or_error)
+        - is_valid=True: path_result is a string (validated path)
+        - is_valid=False: path_result is a ToolResult (error)
+        
+        This helper eliminates the inconsistent type checking currently
+        duplicated across tools (e.g., file_read.py lines 47-51).
+        """
+        if isinstance(path_result, str):
+            return True, path_result
+        elif isinstance(path_result, ToolResult):
+            return False, path_result
+        else:
+            # This should never happen if _check_path is implemented correctly
+            return False, ToolResult(
+                error=f"Unexpected type from _check_path: {type(path_result)}",
+                is_error=True,
+            )
+
 
 
     def _check_phase_scope(
