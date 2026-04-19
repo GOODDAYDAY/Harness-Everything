@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import errno
 import os
-import stat
-from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
