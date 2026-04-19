@@ -106,8 +106,9 @@ class TreeTool(Tool):
             return scope_err
         
         root = Path(resolved)
-        if not root.is_dir():
-            return ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+        # Note: root.is_dir() is NOT called here because _validate_directory_atomic
+        # already performed atomic directory validation. Calling is_dir() here would
+        # introduce a TOCTOU vulnerability.
 
         lines: list[str] = [f"{root.name}/"]
         self._walk(root, "", max_depth, 0, lines)
