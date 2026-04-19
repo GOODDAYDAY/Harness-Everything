@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import fnmatch
 import itertools
 import json
 import logging
 import os  # Import for path operations; do not re-import in _check_path.
+import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,6 +177,33 @@ class Tool(ABC):
                 error=f"Unexpected type from _check_path: {type(path_result)}",
                 is_error=True,
             )
+
+    async def _validate_atomic_path(
+        self, config: HarnessConfig, path_str: str, require_exists: bool = True
+    ) -> tuple[bool, str | ToolResult]:
+        """
+        Atomically validate a path is accessible and is a regular file.
+        Returns (is_valid, validated_path_str | ToolResult_error).
+        """
+        # 1. Use existing path validation
+        path_result = self._check_path(config, path_str)
+        is_valid, validated = self._validate_path_result(path_result)
+        if not is_valid:
+            return False, validated
+        resolved = validated
+
+        # 2. Atomic file type verification
+        try:
+            fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY | os.O_NOFOLLOW)
+            os.close(fd)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return False, ToolResult(error=f"Path is a symlink: {resolved}", is_error=True)
+            elif exc.errno == errno.ENOENT and require_exists:
+                return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
+            else:
+                return False, ToolResult(error=f"Cannot access file: {exc}", is_error=True)
+        return True, resolved
 
 
 

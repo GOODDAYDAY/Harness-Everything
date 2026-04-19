@@ -539,18 +539,109 @@ def validate_calibration_anchors(
     evaluator_type: str = "basic",
     mode: str | None = None,
 ) -> list[str]:
-    """Placeholder for anchor-drift validation — returns no issues.
-
+    """Validate that extreme scores (≤1 or ≥9) reference calibration anchors.
+    
     The evaluator prompts (BASIC_SYSTEM, DIFFUSION_SYSTEM) include explicit
-    CALIBRATION ANCHORS blocks. A future implementation should check that
-    evaluator outputs actually reference the anchor language when scoring
-    near extremes (≤1 or ≥9). Until that logic exists this stub is
-    load-bearing: ``validate_evaluator_output`` calls it unconditionally,
-    so removing the stub re-introduces a NameError that dead-locks every
-    phase evaluation at runtime (see incident 2026-04-19). Keep the stub
-    and the signature stable; replace the body when implementing.
+    CALIBRATION ANCHORS blocks. When scores are near extremes, the evaluator
+    should reference the anchor language to demonstrate proper calibration.
+    
+    Args:
+        text: Evaluator output text to validate
+        evaluator_type: "basic" or "diffusion" to check appropriate anchors
+        mode: Optional mode ("debate" or "implement") - not used for anchor validation
+        
+    Returns:
+        List of issues found, empty if none
     """
-    return []
+    issues = []
+    
+    # Extract score from text
+    score_match = re.search(r'SCORE:\s*([0-9]+(?:\.[0-9]+)?)', text)
+    if not score_match:
+        # If no score found, can't validate anchors
+        return []
+    
+    try:
+        score = float(score_match.group(1))
+    except ValueError:
+        # Invalid score format
+        return []
+    
+    # Check if score is near extremes
+    is_low_extreme = score <= 1.5  # Allow small margin for rounding
+    is_high_extreme = score >= 8.5  # Allow small margin for rounding
+    
+    if not (is_low_extreme or is_high_extreme):
+        # Score is not extreme, no anchor validation needed
+        return []
+    
+    # Define anchor keywords based on evaluator type and score range
+    if evaluator_type == "basic":
+        if is_low_extreme:
+            # Low extreme anchors for basic evaluator
+            anchor_keywords = [
+                "broken", "dangerous", "off-topic", "fundamentally wrong",
+                "complete rewrite", "trivial case", "major requirement missed",
+                "partially correct", "missing core functionality", "fail basic tests"
+            ]
+        else:  # is_high_extreme
+            # High extreme anchors for basic evaluator
+            anchor_keywords = [
+                "correct + specific", "testable", "tested", "measurable",
+                "covers main requirement", "pass code review", "edge cases",
+                "named test", "metric", "every claim backed"
+            ]
+    else:  # diffusion
+        if is_low_extreme:
+            # Low extreme anchors for diffusion evaluator
+            anchor_keywords = [
+                "catastrophic", "irreversible", "systemically destabilising",
+                "dangerous", "breaks unrelated functionality", "no mitigation",
+                "concerning", "significant cascade", "explicit mitigation"
+            ]
+        else:  # is_high_extreme
+            # High extreme anchors for diffusion evaluator
+            anchor_keywords = [
+                "minor", "trivial ripple", "easily addressed", "negligible",
+                "zero maintenance", "trivial rollback", "bounded effects",
+                "clear mitigation", "minimal impact"
+            ]
+    
+    # Check if any anchor keywords appear in the analysis section
+    analysis_section = ""
+    if "ANALYSIS:" in text:
+        # Extract analysis section up to next section
+        analysis_start = text.find("ANALYSIS:")
+        analysis_text = text[analysis_start:]
+        
+        # Find end of analysis section (next section header)
+        section_end = len(analysis_text)
+        for section in ["TOP DEFECT:", "KEY RISK:", "DELTA VS PRIOR BEST:", 
+                       "ACTIONABLE FEEDBACK:", "ACTIONABLE MITIGATIONS:", 
+                       "WHAT WOULD MAKE THIS 10/10:", "SCORE:"]:
+            if section in analysis_text:
+                section_pos = analysis_text.find(section)
+                if section_pos > 0 and section_pos < section_end:
+                    section_end = section_pos
+        
+        analysis_section = analysis_text[:section_end].lower()
+    
+    # Check for anchor keyword presence
+    found_anchor = False
+    for keyword in anchor_keywords:
+        if keyword.lower() in analysis_section:
+            found_anchor = True
+            break
+    
+    if not found_anchor:
+        score_range = "low" if is_low_extreme else "high"
+        issues.append(
+            f"Extreme {score_range} score ({score}) without reference to calibration anchors. "
+            f"When scoring {score_range} extremes, the analysis should reference the "
+            f"calibration anchor language (e.g., '{anchor_keywords[0]}', '{anchor_keywords[1]}')."
+        )
+    
+    return issues
 
 
 def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: str | None = None) -> tuple[bool, list[str]]:
