@@ -63,12 +63,6 @@ class ReadFileTool(Tool):
             return path_validated  # This is the ToolResult error
         resolved = path_validated
 
-        p = Path(resolved)
-        if not p.exists():
-            return ToolResult(error=f"File not found: {resolved}", is_error=True)
-        if not p.is_file():
-            return ToolResult(error=f"Not a file: {resolved}", is_error=True)
-
         # Use the atomic fallback helper from base class
         fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, os.O_RDONLY)
         if error is not None:
