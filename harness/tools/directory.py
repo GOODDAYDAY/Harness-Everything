@@ -25,14 +25,12 @@ class ListDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
+        # Use _check_path with standardized validation
         path_result = self._check_path(config, path)
-        # Handle type contract violations properly
-        if not isinstance(path_result, (str, ToolResult)):
-            return ToolResult(error=f"Unexpected type from _check_path: {type(path_result)}", is_error=True)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(path_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
         
         p = Path(resolved)
         if not p.is_dir():
@@ -64,14 +62,12 @@ class CreateDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
+        # Use _check_path with standardized validation
         path_result = self._check_path(config, path)
-        # Handle type contract violations properly
-        if not isinstance(path_result, (str, ToolResult)):
-            return ToolResult(error=f"Unexpected type from _check_path: {type(path_result)}", is_error=True)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(path_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
         
         Path(resolved).mkdir(parents=True, exist_ok=True)
         return ToolResult(output=f"Created {resolved}")
@@ -103,14 +99,12 @@ class TreeTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, max_depth: int = 3
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
+        # Use _check_path with standardized validation
         path_result = self._check_path(config, path)
-        # Handle type contract violations properly
-        if not isinstance(path_result, (str, ToolResult)):
-            return ToolResult(error=f"Unexpected type from _check_path: {type(path_result)}", is_error=True)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(path_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
         
         root = Path(resolved)
         if not root.is_dir():
