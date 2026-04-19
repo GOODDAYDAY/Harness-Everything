@@ -64,11 +64,15 @@ class MoveFileTool(Tool):
     ) -> ToolResult:
         # FIX: Use _check_path instead of _validate_root_path directly
         src_result = self._check_path(config, source)
+        # Add defensive assertion to catch type contract violations
+        assert isinstance(src_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(src_result)}"
         if isinstance(src_result, ToolResult):
             return src_result  # This is a security or validation error
         src = src_result  # This is the validated path string
         
         dst_result = self._check_path(config, destination)
+        # Add defensive assertion to catch type contract violations
+        assert isinstance(dst_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(dst_result)}"
         if isinstance(dst_result, ToolResult):
             return dst_result  # This is a security or validation error
         dst = dst_result  # This is the validated path string
@@ -108,11 +112,15 @@ class CopyFileTool(Tool):
     ) -> ToolResult:
         # FIX: Use _check_path instead of _validate_root_path directly
         src_result = self._check_path(config, source)
+        # Add defensive assertion to catch type contract violations
+        assert isinstance(src_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(src_result)}"
         if isinstance(src_result, ToolResult):
             return src_result  # This is a security or validation error
         src = src_result  # This is the validated path string
         
         dst_result = self._check_path(config, destination)
+        # Add defensive assertion to catch type contract violations
+        assert isinstance(dst_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(dst_result)}"
         if isinstance(dst_result, ToolResult):
             return dst_result  # This is a security or validation error
         dst = dst_result  # This is the validated path string
