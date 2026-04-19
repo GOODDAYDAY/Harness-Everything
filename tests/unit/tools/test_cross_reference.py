@@ -46,7 +46,7 @@ def some_function():
         root=workspace
     ))
     
-    # The result should be an error because it exceeds _MAX_SYMBOL_DEPTH
+    # The result should be an error because it exceeds _MAX_SYMBOL_IDENTIFIERS
     assert result.is_error, f"Symbol exceeding maximum depth should trigger error: {max_depth_symbol}"
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"

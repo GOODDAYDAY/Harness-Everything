@@ -613,9 +613,9 @@ def test_symbol_validation_rejects_unicode_homoglyphs():
 
 
 def test_execute_rejects_symbol_exceeding_max_depth(tmp_path):
-    """Test that CrossReferenceTool.execute() rejects symbols exceeding _MAX_SYMBOL_DEPTH.
+    """Test that CrossReferenceTool.execute() rejects symbols exceeding _MAX_SYMBOL_IDENTIFIERS.
     
-    This validates the falsifiable criterion: the _MAX_SYMBOL_DEPTH constant 
+    This validates the falsifiable criterion: the _MAX_SYMBOL_IDENTIFIERS constant 
     must be enforced at runtime, not just by the regex pattern.
     """
     import asyncio
@@ -650,7 +650,7 @@ def some_function():
         root=workspace
     ))
     
-    # The result should be an error because it exceeds _MAX_SYMBOL_DEPTH
+    # The result should be an error because it exceeds _MAX_SYMBOL_IDENTIFIERS
     assert result.is_error, f"Symbol exceeding maximum depth should trigger error: {max_depth_symbol}"
     assert "Symbol validation failed" in result.error, \
         f"Error should mention symbol validation. Got: {result.error}"
@@ -696,13 +696,13 @@ def some_function():
         f"_MAX_SYMBOL_IDENTIFIERS should be 10, got {tool._MAX_SYMBOL_IDENTIFIERS}"
     
     # Test 5: Verify depth calculation is correct
-    # Symbol with 10 dots has 11 identifiers, which exceeds _MAX_SYMBOL_DEPTH=10
+    # Symbol with 10 dots has 11 identifiers, which exceeds _MAX_SYMBOL_IDENTIFIERS=10
     test_symbol = "a.b.c.d.e.f.g.h.i.j.k"  # 10 dots
     dot_count = test_symbol.count('.')
     identifier_count = dot_count + 1
     assert identifier_count == 11, f"Expected 11 identifiers, got {identifier_count}"
-    assert identifier_count > tool._MAX_SYMBOL_DEPTH, \
-        f"Symbol should exceed depth limit: {identifier_count} > {tool._MAX_SYMBOL_DEPTH}"
+    assert identifier_count > tool._MAX_SYMBOL_IDENTIFIERS, \
+        f"Symbol should exceed depth limit: {identifier_count} > {tool._MAX_SYMBOL_IDENTIFIERS}"
 
 
 def test_regex_depth_boundary_consistency():
