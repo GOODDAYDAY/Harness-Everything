@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
+import os
 import shutil
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -108,13 +112,13 @@ class CopyFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        # Use _check_path with standardized validation
-        src_result = self._check_path(config, source)
-        is_valid, validated = self._validate_path_result(src_result)
-        if not is_valid:
-            return validated  # This is a ToolResult error
-        src = validated  # This is the validated path string
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        if not is_valid_src:
+            return src_validated  # This is the ToolResult error
+        src = src_validated
         
+        # Use standard path validation for destination
         dst_result = self._check_path(config, destination)
         is_valid, validated = self._validate_path_result(dst_result)
         if not is_valid:
@@ -125,9 +129,13 @@ class CopyFileTool(Tool):
         # write; reading the source does not create new state.
         if scope_err := self._check_phase_scope(config, dst):
             return scope_err
-
-        if not Path(src).is_file():
-            return ToolResult(error=f"Source not found: {src}", is_error=True)
+        
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        
+        # Proceed with the copy using async thread
+        try:
+            await asyncio.to_thread(shutil.copy2, src, dst)
+        except Exception as exc:
+            return ToolResult(error=f"Copy failed: {exc}", is_error=True)
+        
         return ToolResult(output=f"Copied {src} -> {dst}")
