@@ -780,9 +780,43 @@ def test_guaranteed_fd_cleanup_fdopen_success():
         assert result == mock_file
         assert error is None
         
-        # Verify os.close was called (in finally block)
-        assert len(close_called) == 1
-        assert close_called[0] == 123
+        # Verify os.close was NOT called (fdopen takes ownership)
+        assert len(close_called) == 0
+
+
+def test_guaranteed_fd_cleanup_success_transfers_ownership():
+    """Test that successful fdopen transfers descriptor ownership."""
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        f.write("test content")
+        temp_path = f.name
+
+    fd = os.open(temp_path, os.O_RDONLY)
+    from harness.tools.file_read import ReadFileTool
+    tool = ReadFileTool()
+
+    def fdopen_op(fd):
+        return os.fdopen(fd, 'rb')
+
+    file_obj, error = tool._guaranteed_fd_cleanup(fd, fdopen_op)
+    
+    # Falsifiable Criterion Assertion: Successful operation transfers ownership
+    assert error is None
+    assert file_obj is not None
+    # The file object's internal descriptor should be valid
+    # Note: On POSIX systems, fdopen returns a file object wrapping the same fd
+    assert file_obj.fileno() == fd  # Same descriptor number
+    # Reading should succeed, proving the descriptor is valid
+    content = file_obj.read()
+    assert content == b"test content"
+    file_obj.close()
+    
+    # Verify that closing the file object doesn't cause issues
+    # (the original fd should not be closed separately)
+    
+    os.unlink(temp_path)
 
 
 if __name__ == "__main__":

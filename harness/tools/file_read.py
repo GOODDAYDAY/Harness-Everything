@@ -41,28 +41,20 @@ class ReadFileTool(Tool):
 
     def _guaranteed_fd_cleanup(self, fd: int, operation: Callable[[int], Any]) -> Tuple[Any, Optional[ToolResult]]:
         """
-        Execute `operation(fd)` and guarantee `os.close(fd)` is called afterward.
+        Execute `operation(fd)` and guarantee `os.close(fd)` is called on failure.
         Returns (result, None) on success, or (None, ToolResult_error) on failure.
         """
         try:
-            result = operation(fd)
+            result = operation(fd)  # e.g., os.fdopen(fd, 'rb')
             return result, None
         except Exception as exc:
-            # Attempt to close the fd on any error in the operation
+            # Close fd only on operation failure
             try:
                 os.close(fd)
             except OSError:
-                # Ignore close errors, preserve the original failure
                 pass
             return None, ToolResult(error=f"Operation on file descriptor failed: {exc}", is_error=True)
-        finally:
-            # Ensure fd is closed if operation succeeded but didn't take ownership
-            # (e.g., if operation returns a file object that owns the fd, this is a no-op)
-            try:
-                os.close(fd)
-            except OSError:
-                # fd already closed or invalid
-                pass
+        # NO finally block - successful operation transfers ownership
 
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
