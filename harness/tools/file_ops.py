@@ -70,12 +70,12 @@ class MoveFileTool(Tool):
             return src_validated  # This is the ToolResult error
         src = src_validated
         
-        # Use standard path validation for destination
-        dst_result = self._check_path(config, destination)
-        is_valid, validated = self._validate_path_result(dst_result)
-        if not is_valid:
-            return validated  # This is a ToolResult error
-        dst = validated  # This is the validated path string
+        # Use atomic validation for destination to prevent TOCTOU attacks
+        # require_exists=False because destination may not exist yet
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        if not is_valid_dst:
+            return dst_validated  # This is a ToolResult error
+        dst = dst_validated  # This is the validated path string
         
         # Scope check both source (we're removing it) and destination (we're
         # creating it) — a move out of scope is effectively both a delete and
@@ -117,12 +117,12 @@ class CopyFileTool(Tool):
             return src_validated  # This is the ToolResult error
         src = src_validated
         
-        # Use standard path validation for destination
-        dst_result = self._check_path(config, destination)
-        is_valid, validated = self._validate_path_result(dst_result)
-        if not is_valid:
-            return validated  # This is a ToolResult error
-        dst = validated  # This is the validated path string
+        # Use atomic validation for destination to prevent TOCTOU attacks
+        # require_exists=False because destination may not exist yet
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        if not is_valid_dst:
+            return dst_validated  # This is a ToolResult error
+        dst = dst_validated  # This is the validated path string
         
         # Scope check on destination only — copying out of scope is still a
         # write; reading the source does not create new state.
