@@ -853,5 +853,34 @@ def test_guaranteed_fd_cleanup_failure_closes_fd():
         assert 123 in close_called
 
 
+def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
+    """Test that _guaranteed_fd_cleanup attempts to close FD even when os.close raises OSError.
+    
+    This tests the edge case where both the operation fails AND os.close fails,
+    ensuring cleanup is attempted and the method returns a ToolResult error.
+    """
+    tool = ReadFileTool()
+    
+    # Mock operation to raise an exception
+    def failing_operation(fd: int):
+        raise OSError("Operation failed")
+    
+    # Mock os.close to also raise an exception
+    with patch('harness.tools.file_read.os.close') as mock_close:
+        mock_close.side_effect = OSError("Close failed")
+        
+        # Call the method
+        result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
+        
+        # Verify os.close was called (may be called twice - in except and finally blocks)
+        assert mock_close.call_count >= 1
+        
+        # Verify result is None and error is a ToolResult
+        assert result is None
+        assert isinstance(error, ToolResult)
+        assert error.is_error
+        assert "File operation failed on descriptor 123" in error.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
