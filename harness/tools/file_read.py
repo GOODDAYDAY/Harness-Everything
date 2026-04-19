@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -58,8 +59,9 @@ class ReadFileTool(Tool):
 
         # FIX: Use _check_path instead of _validate_root_path directly
         path_result = self._check_path(config, path)
-        # Add defensive assertion to catch type contract violations
-        assert isinstance(path_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(path_result)}"
+        # Handle type contract violations properly
+        if not isinstance(path_result, (str, ToolResult)):
+            return ToolResult(error=f"Unexpected type from _check_path: {type(path_result)}", is_error=True)
         if isinstance(path_result, ToolResult):
             return path_result  # This is a security or validation error
         resolved = path_result  # This is the validated path string
@@ -90,9 +92,20 @@ class ReadFileTool(Tool):
                     error=f"Symlink resolution escapes allowed directory: {resolved}",
                     is_error=True
                 )
-            # For other OSErrors (permission denied, EINVAL, etc.), return the error
-            # No insecure fallback - O_NOFOLLOW is required for security
-            return ToolResult(error=f"Failed to open file with O_NOFOLLOW: {exc}", is_error=True)
+            elif exc.errno == errno.EINVAL:
+                # O_NOFOLLOW not supported on this system - use stat with follow_symlinks=False
+                try:
+                    stat_result = await asyncio.to_thread(os.stat, resolved, follow_symlinks=False)
+                    if not stat.S_ISREG(stat_result.st_mode):
+                        return ToolResult(error=f"Not a regular file (may be a symlink): {resolved}", is_error=True)
+                    # Safe to read after verifying it's not a symlink
+                    # Note: There's still a small TOCTOU window between stat and read
+                    lines = Path(resolved).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                except Exception as fallback_exc:
+                    return ToolResult(error=f"Secure fallback failed: {fallback_exc}", is_error=True)
+            else:
+                # For other OSErrors (permission denied, etc.), return the error
+                return ToolResult(error=f"Failed to open file with O_NOFOLLOW: {exc}", is_error=True)
         except Exception as exc:
             return ToolResult(error=str(exc), is_error=True)
 
