@@ -532,5 +532,63 @@ def test_open_with_atomic_fallback_einval_checks_symlink():
         assert "symlink" in error.error.lower() or "Symlink" in error.error
 
 
+def test_execute_fdopen_failure_closes_fd():
+    """Test that ReadFileTool.execute() closes file descriptor when os.fdopen fails.
+    
+    This tests the security guard added to prevent file descriptor leaks
+    (CWE-403: Exposure of File Descriptor to Unintended Control Sphere).
+    """
+    import asyncio
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file
+        test_file = tmpdir_path / "test.txt"
+        test_file.write_text("test content")
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(tmpdir_path)
+        config.allowed_paths = [str(tmpdir_path)]
+        
+        # Track calls to os.close
+        close_calls = []
+        original_close = os.close
+        
+        def mock_close(fd):
+            close_calls.append(fd)
+            original_close(fd)
+        
+        # Mock _validate_atomic_path to succeed
+        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = (True, str(test_file))
+            
+            # Mock _open_with_atomic_fallback to return a valid file descriptor
+            mock_fd = 123  # Dummy file descriptor
+            with patch.object(tool, '_open_with_atomic_fallback') as mock_open_fallback:
+                mock_open_fallback.return_value = (mock_fd, None)  # Success, no error
+                
+                # Mock os.fdopen to raise an exception
+                def mock_fdopen(fd, *args, **kwargs):
+                    raise OSError("Simulated fdopen failure")
+                
+                with patch('os.fdopen', side_effect=mock_fdopen), \
+                     patch('os.close', side_effect=mock_close):
+                    
+                    # Run the tool - should fail due to fdopen error
+                    result = asyncio.run(tool.execute(config, path=str(test_file)))
+        
+        # Verify the file descriptor was closed even though fdopen failed
+        assert len(close_calls) == 1, f"Expected 1 os.close call, got {len(close_calls)}"
+        assert close_calls[0] == mock_fd, f"Expected os.close called with fd={mock_fd}, got {close_calls[0]}"
+        
+        # Verify the result is an error (as expected)
+        assert result.is_error
+        assert "Failed to read file" in result.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
