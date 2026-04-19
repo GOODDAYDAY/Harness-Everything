@@ -77,15 +77,60 @@ class Tool(ABC):
         
         Security validation order:
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
-        2. Resolve path with os.path.realpath to eliminate symlink TOCTOU
+        2. Resolve path with Path.resolve(strict=True) to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
         """
         try:
-            # Use the consolidated validation method
-            resolved, err = self._validate_root_path(config, path)
-            if err is not None:
-                return err
-            return resolved
+            # 1. Security validation on raw path
+            if error_msg := validate_path_security(path, config):
+                return ToolResult(error=error_msg, is_error=True)
+            
+            # Handle empty path (use workspace)
+            path_to_check = path if path else config.workspace
+            
+            # If path is relative, join it with workspace
+            if not os.path.isabs(path_to_check):
+                path_to_check = os.path.join(config.workspace, path_to_check)
+            
+            # 2. Resolve path to eliminate symlink TOCTOU using Path.resolve(strict=True)
+            try:
+                # Use Path.resolve(strict=True) for atomic symlink resolution
+                resolved_path = Path(path_to_check).resolve(strict=True)
+                resolved_str = str(resolved_path)
+            except OSError as exc:
+                # Handle broken symlinks or non-existent paths
+                # Fall back to checking parent directories
+                try:
+                    # Try non-strict resolution first
+                    resolved_path = Path(path_to_check).resolve(strict=False)
+                    resolved_str = str(resolved_path)
+                    
+                    # Check if all parent directories exist and are within allowed paths
+                    current = Path(resolved_str)
+                    while current != current.parent:  # Stop at root
+                        if not current.parent.exists():
+                            return ToolResult(
+                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
+                                is_error=True,
+                            )
+                        current = current.parent
+                except Exception as exc2:
+                    return ToolResult(
+                        error=f"Cannot resolve path {path_to_check!r}: {exc2}",
+                        is_error=True,
+                    )
+            
+            # 3. Check if resolved path is allowed
+            # Use the same logic as config.is_path_allowed but with our resolved path
+            for allowed_path in config.allowed_paths:
+                allowed_resolved = os.path.realpath(allowed_path)
+                if resolved_str == allowed_resolved or resolved_str.startswith(allowed_resolved + os.sep):
+                    return resolved_str
+            
+            return ToolResult(
+                error=f"Path not allowed: {resolved_str}  (allowed: {config.allowed_paths})",
+                is_error=True,
+            )
         except ValueError as e:
             # CRITICAL: Must return ToolResult, not None or raise exception
             return ToolResult(error=f"Path validation failed: {e}", is_error=True)
