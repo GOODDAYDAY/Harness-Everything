@@ -429,5 +429,41 @@ def test_readfile_fallback_fd_closed_on_non_regular_file():
         assert "Not a regular file" in result.error
 
 
+def test_read_file_atomic_validation_rejects_symlinks():
+    """Test that atomic validation in _open_with_atomic_fallback rejects symlinks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        outside = Path(tmpdir) / "outside"
+        outside.mkdir()
+
+        # Create a legitimate file inside workspace
+        legit = workspace / "data.txt"
+        legit.write_text("safe content")
+        
+        # Create a symlink to it
+        link = workspace / "link.txt"
+        link.symlink_to(legit)
+
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Mock _validate_atomic_path to return the symlink path
+        # This simulates a scenario where the symlink passes initial validation
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            mock_validate.return_value = (True, str(link))
+            
+            # Execute the tool
+            result = asyncio.run(tool.execute(config, path=str(link)))
+            
+            # Verify the result contains a symlink error
+            assert result.is_error
+            assert "Symlink resolution escapes allowed directory" in result.error
+            # Verify _open_with_atomic_fallback was triggered
+            # (implied by the symlink error message)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
