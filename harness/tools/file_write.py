@@ -28,11 +28,12 @@ class WriteFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, content: str
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        path_result = self._check_path(config, path)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        # Use atomic validation for the file path to prevent TOCTOU attacks
+        # For write operations, we don't require the file to exist
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False)
+        if not is_valid_path:
+            return path_validated  # This is a ToolResult error
+        resolved = path_validated
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 

@@ -43,11 +43,11 @@ class EditFileTool(Tool):
         new_str: str,
         replace_all: bool = False,
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        path_result = self._check_path(config, path)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path)
+        if not is_valid_path:
+            return path_validated  # This is the ToolResult error
+        resolved = path_validated
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 

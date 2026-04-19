@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import errno
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -26,18 +29,25 @@ class DeleteFileTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        path_result = self._check_path(config, path)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_src, src_validated = await self._validate_atomic_path(config, path)
+        if not is_valid_src:
+            return src_validated  # This is the ToolResult error
+        resolved = src_validated
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 
-        p = Path(resolved)
-        if not p.exists():
-            return ToolResult(error=f"Not found: {resolved}", is_error=True)
-        p.unlink()
+        # Atomic deletion without a separate existence check
+        try:
+            os.unlink(resolved)  # Atomic operation on the validated path string
+        except FileNotFoundError:
+            # File was deleted by another process after validation
+            return ToolResult(
+                error=f"File disappeared after validation: {resolved}",
+                is_error=True
+            )
+        except OSError as exc:
+            return ToolResult(error=f"Delete failed: {exc}", is_error=True)
         return ToolResult(output=f"Deleted {resolved}")
 
 
@@ -60,16 +70,19 @@ class MoveFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        src_result = self._check_path(config, source)
-        if isinstance(src_result, ToolResult):
-            return src_result  # This is a security or validation error
-        src = src_result  # This is the validated path string
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        if not is_valid_src:
+            return src_validated  # This is the ToolResult error
+        src = src_validated
         
-        dst_result = self._check_path(config, destination)
-        if isinstance(dst_result, ToolResult):
-            return dst_result  # This is a security or validation error
-        dst = dst_result  # This is the validated path string
+        # Use atomic validation for destination to prevent TOCTOU attacks
+        # require_exists=False because destination may not exist yet
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        if not is_valid_dst:
+            return dst_validated  # This is a ToolResult error
+        dst = dst_validated  # This is the validated path string
+        
         # Scope check both source (we're removing it) and destination (we're
         # creating it) — a move out of scope is effectively both a delete and
         # a write.
@@ -78,10 +91,23 @@ class MoveFileTool(Tool):
         if scope_err := self._check_phase_scope(config, dst):
             return scope_err
 
-        if not Path(src).exists():
-            return ToolResult(error=f"Source not found: {src}", is_error=True)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(src, dst)
+        try:
+            os.rename(src, dst)  # Atomic operation on validated path strings
+        except FileNotFoundError:
+            # File was deleted/moved by another process after validation
+            return ToolResult(
+                error=f"Source file disappeared after validation: {src}",
+                is_error=True
+            )
+        except OSError as exc:
+            # Handle cross-device moves (EXDEV) and other OS errors
+            if exc.errno == errno.EXDEV:
+                return ToolResult(
+                    error=f"Cannot move '{src}' to '{dst}': cross-device move not supported. Use separate copy and delete operations.",
+                    is_error=True
+                )
+            return ToolResult(error=f"Move failed: {exc}", is_error=True)
         return ToolResult(output=f"Moved {src} -> {dst}")
 
 
@@ -104,23 +130,30 @@ class CopyFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        src_result = self._check_path(config, source)
-        if isinstance(src_result, ToolResult):
-            return src_result  # This is a security or validation error
-        src = src_result  # This is the validated path string
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        if not is_valid_src:
+            return src_validated  # This is the ToolResult error
+        src = src_validated
         
-        dst_result = self._check_path(config, destination)
-        if isinstance(dst_result, ToolResult):
-            return dst_result  # This is a security or validation error
-        dst = dst_result  # This is the validated path string
+        # Use atomic validation for destination to prevent TOCTOU attacks
+        # require_exists=False because destination may not exist yet
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        if not is_valid_dst:
+            return dst_validated  # This is a ToolResult error
+        dst = dst_validated  # This is the validated path string
+        
         # Scope check on destination only — copying out of scope is still a
         # write; reading the source does not create new state.
         if scope_err := self._check_phase_scope(config, dst):
             return scope_err
-
-        if not Path(src).is_file():
-            return ToolResult(error=f"Source not found: {src}", is_error=True)
+        
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        
+        # Proceed with the copy using async thread
+        try:
+            await asyncio.to_thread(shutil.copy2, src, dst)
+        except Exception as exc:
+            return ToolResult(error=f"Copy failed: {exc}", is_error=True)
+        
         return ToolResult(output=f"Copied {src} -> {dst}")

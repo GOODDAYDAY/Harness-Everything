@@ -899,3 +899,91 @@ def test_read_file_atomically_blocks_symlink_race(tmp_path):
     resolved_after = race_symlink.resolve()
     assert resolved_before != resolved_after, "Symlink resolution should change after swap"
     assert str(resolved_after).startswith(str(forbidden_dir)), "Should resolve to forbidden directory"
+
+
+def test_readfile_fallback_path_atomicity(tmp_path, monkeypatch):
+    """Test that ReadFileTool's fallback path uses atomic open+fstat when O_NOFOLLOW fails.
+    
+    This test mocks os.open to simulate an EINVAL error on the first call (with O_NOFOLLOW),
+    then verifies the fallback path uses os.fstat on the opened file descriptor before reading.
+    """
+    import errno
+    import os
+    import stat
+    from unittest.mock import Mock, patch, call
+    
+    # Create a test file
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("test content\nline2\nline3")
+    
+    # Create a mock config
+    config = Mock()
+    config.workspace_root = str(tmp_path)
+    config.allowed_paths = [str(tmp_path)]
+    
+    # Create the tool
+    tool = ReadFileTool()
+    
+    # Track calls to verify atomicity
+    open_calls = []
+    fstat_calls = []
+    fdopen_calls = []
+    
+    def mock_open(path, flags):
+        open_calls.append((path, flags))
+        if flags & os.O_NOFOLLOW:
+            # First call with O_NOFOLLOW should fail with EINVAL
+            raise OSError(errno.EINVAL, "O_NOFOLLOW not supported")
+        # Second call without O_NOFOLLOW should succeed
+        return 123  # Fake file descriptor
+    
+    def mock_fstat(fd):
+        fstat_calls.append(fd)
+        # Return a mock stat result indicating a regular file
+        stat_result = Mock()
+        stat_result.st_mode = stat.S_IFREG | 0o644  # Regular file
+        return stat_result
+    
+    def mock_fdopen(fd, mode, encoding, errors):
+        fdopen_calls.append((fd, mode, encoding, errors))
+        # Return a mock file object
+        mock_file = Mock()
+        mock_file.read.return_value = "test content\nline2\nline3"
+        return mock_file
+    
+    # Apply mocks
+    with patch('os.open', side_effect=mock_open), \
+         patch('os.fstat', side_effect=mock_fstat), \
+         patch('os.fdopen', side_effect=mock_fdopen), \
+         patch('os.close', return_value=None):
+        
+        # Run the tool
+        import asyncio
+        result = asyncio.run(tool.execute(config, path=str(test_file)))
+        
+        # Verify the result
+        assert not result.is_error
+        assert "test content" in result.output
+        
+        # Verify the call sequence for atomicity
+        # 1. First call with O_NOFOLLOW
+        assert len(open_calls) >= 1
+        first_call = open_calls[0]
+        assert first_call[1] & os.O_NOFOLLOW  # Should have O_NOFOLLOW flag
+        
+        # 2. Second call without O_NOFOLLOW (fallback)
+        assert len(open_calls) >= 2
+        second_call = open_calls[1]
+        assert not (second_call[1] & os.O_NOFOLLOW)  # Should NOT have O_NOFOLLOW flag
+        
+        # 3. fstat was called on the file descriptor
+        assert len(fstat_calls) == 1
+        assert fstat_calls[0] == 123  # Should be the same FD returned by open
+        
+        # 4. fdopen was called with the same FD
+        assert len(fdopen_calls) == 1
+        assert fdopen_calls[0][0] == 123  # Should be the same FD
+        
+        # Verify the atomicity: fstat was called on the already-open FD,
+        # not a separate os.stat call on the path (which would be vulnerable to TOCTOU)
+        # This is the key security improvement

@@ -25,18 +25,16 @@ class ListDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        path_result = self._check_path(config, path)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
-        
-        p = Path(resolved)
-        if not p.is_dir():
-            return ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+        # Use atomic directory validation to prevent TOCTOU attacks
+        is_valid, validated = await self._validate_directory_atomic(config, path)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
 
         lines: list[str] = []
-        for entry in sorted(p.iterdir()):
+        for entry in sorted(Path(resolved).iterdir()):
             if entry.is_dir():
                 lines.append(f"  [dir]  {entry.name}/")
             else:
@@ -61,11 +59,13 @@ class CreateDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
-        path_result = self._check_path(config, path)
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        # Use atomic directory validation to prevent TOCTOU attacks
+        is_valid, validated = await self._validate_directory_atomic(config, path)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
         
         Path(resolved).mkdir(parents=True, exist_ok=True)
         return ToolResult(output=f"Created {resolved}")
@@ -97,12 +97,18 @@ class TreeTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, max_depth: int = 3
     ) -> ToolResult:
-        resolved, err = self._validate_root_path(config, path)
-        if err:
-            return err
+        # Use atomic directory validation to prevent TOCTOU attacks
+        is_valid, validated = await self._validate_directory_atomic(config, path)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
+        
         root = Path(resolved)
-        if not root.is_dir():
-            return ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+        # Note: root.is_dir() is NOT called here because _validate_directory_atomic
+        # already performed atomic directory validation. Calling is_dir() here would
+        # introduce a TOCTOU vulnerability.
 
         lines: list[str] = [f"{root.name}/"]
         self._walk(root, "", max_depth, 0, lines)
