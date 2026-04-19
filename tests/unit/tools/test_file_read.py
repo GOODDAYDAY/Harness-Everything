@@ -684,5 +684,106 @@ def test_execute_fdopen_failure_returns_toolresult():
             assert isinstance(result, ToolResult)
 
 
+def test_guaranteed_fd_cleanup_thread_failure():
+    """Test that _guaranteed_fd_cleanup ensures fd is closed even when thread/operation fails."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock operation to raise an exception
+    def failing_operation(fd: int):
+        raise RuntimeError("Simulated thread/operation failure")
+    
+    # Test with mocked os.close
+    with patch('os.close', side_effect=mock_close):
+        result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
+        
+        # Verify error result
+        assert result is None
+        assert error is not None
+        assert error.is_error
+        assert "Operation on file descriptor failed" in error.error
+        
+        # Verify os.close was called with the correct file descriptor
+        # It may be called twice (once in except, once in finally)
+        assert len(close_called) >= 1
+        assert 123 in close_called
+
+
+def test_guaranteed_fd_cleanup_success():
+    """Test that _guaranteed_fd_cleanup returns result when operation succeeds."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock operation that succeeds
+    def successful_operation(fd: int):
+        return f"result from fd {fd}"
+    
+    # Test with mocked os.close
+    with patch('os.close', side_effect=mock_close):
+        result, error = tool._guaranteed_fd_cleanup(123, successful_operation)
+        
+        # Verify success result
+        assert result == "result from fd 123"
+        assert error is None
+        
+        # Verify os.close was called (in finally block)
+        assert len(close_called) == 1
+        assert close_called[0] == 123
+
+
+def test_guaranteed_fd_cleanup_fdopen_success():
+    """Test that _guaranteed_fd_cleanup works with os.fdopen operation."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Create a mock file object
+    mock_file = Mock()
+    mock_file.fileno.return_value = 123
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock os.fdopen to return our mock file
+    with patch('os.fdopen', return_value=mock_file), \
+         patch('os.close', side_effect=mock_close):
+        
+        def fdopen_operation(fd: int):
+            return os.fdopen(fd, 'rb')
+        
+        result, error = tool._guaranteed_fd_cleanup(123, fdopen_operation)
+        
+        # Verify success result
+        assert result == mock_file
+        assert error is None
+        
+        # Verify os.close was called (in finally block)
+        assert len(close_called) == 1
+        assert close_called[0] == 123
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

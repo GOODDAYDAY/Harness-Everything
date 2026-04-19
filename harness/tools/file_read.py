@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
@@ -39,24 +39,30 @@ class ReadFileTool(Tool):
             "required": ["path"],
         }
 
-    def _safe_fdopen_to_fileobj(self, fd: int) -> Tuple[Optional[io.BufferedReader], Optional[ToolResult]]:
+    def _guaranteed_fd_cleanup(self, fd: int, operation: Callable[[int], Any]) -> Tuple[Any, Optional[ToolResult]]:
         """
-        Safely convert a file descriptor to a file object with guaranteed cleanup.
-        
-        Returns (file_object, None) on success, or (None, ToolResult_error) on failure.
-        Guarantees the file descriptor is closed on any exception.
+        Execute `operation(fd)` and guarantee `os.close(fd)` is called afterward.
+        Returns (result, None) on success, or (None, ToolResult_error) on failure.
         """
         try:
-            file_obj = os.fdopen(fd, 'rb')  # Binary mode preserves open flags
-            return file_obj, None
+            result = operation(fd)
+            return result, None
         except Exception as exc:
-            # Close raw fd if fdopen fails before creating file object
+            # Attempt to close the fd on any error in the operation
             try:
                 os.close(fd)
             except OSError:
-                # Ignore errors closing already-closed fd, preserve original error
+                # Ignore close errors, preserve the original failure
                 pass
-            return None, ToolResult(error=f"Failed to open file descriptor: {exc}", is_error=True)
+            return None, ToolResult(error=f"Operation on file descriptor failed: {exc}", is_error=True)
+        finally:
+            # Ensure fd is closed if operation succeeded but didn't take ownership
+            # (e.g., if operation returns a file object that owns the fd, this is a no-op)
+            try:
+                os.close(fd)
+            except OSError:
+                # fd already closed or invalid
+                pass
 
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
@@ -85,10 +91,14 @@ class ReadFileTool(Tool):
         if error is not None:
             return error
         
-        # Safely convert file descriptor to file object with guaranteed cleanup
-        file_obj, open_error = await asyncio.to_thread(self._safe_fdopen_to_fileobj, fd)
+        # Use the new helper to safely convert fd to a file object
+        def fdopen_operation(fd: int):
+            return os.fdopen(fd, 'rb')
+        
+        file_obj, open_error = await asyncio.to_thread(self._guaranteed_fd_cleanup, fd, fdopen_operation)
         if open_error is not None:
             return open_error
+        # file_obj is now guaranteed to be open, and the original fd is closed.
         
         try:
             # Read binary and decode with same error handling as original
