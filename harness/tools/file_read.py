@@ -42,7 +42,10 @@ class ReadFileTool(Tool):
     def _guaranteed_fd_cleanup(self, fd: int, operation: Callable[[int], Any]) -> Tuple[Any, Optional[ToolResult]]:
         """
         Execute `operation(fd)` and guarantee `os.close(fd)` is called on failure.
-        Returns (result, None) on success, or (None, ToolResult_error) on failure.
+        Returns (result, None) on success, or (None, ToolResult) on failure.
+        
+        On success, ownership of `fd` is transferred to the result of `operation`.
+        On failure, `fd` is closed.
         """
         try:
             result = operation(fd)  # e.g., os.fdopen(fd, 'rb')

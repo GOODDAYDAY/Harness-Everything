@@ -744,9 +744,8 @@ def test_guaranteed_fd_cleanup_success():
         assert result == "result from fd 123"
         assert error is None
         
-        # Verify os.close was called (in finally block)
-        assert len(close_called) == 1
-        assert close_called[0] == 123
+        # Verify os.close was NOT called (no finally block, ownership transferred)
+        assert len(close_called) == 0
 
 
 def test_guaranteed_fd_cleanup_fdopen_success():
