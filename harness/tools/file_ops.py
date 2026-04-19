@@ -6,7 +6,6 @@ import asyncio
 import errno
 import os
 import shutil
-import stat
 from pathlib import Path
 from typing import Any
 
@@ -92,10 +91,23 @@ class MoveFileTool(Tool):
         if scope_err := self._check_phase_scope(config, dst):
             return scope_err
 
-        if not Path(src).exists():
-            return ToolResult(error=f"Source not found: {src}", is_error=True)
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(src, dst)
+        try:
+            os.rename(src, dst)  # Atomic operation on validated path strings
+        except FileNotFoundError:
+            # File was deleted/moved by another process after validation
+            return ToolResult(
+                error=f"Source file disappeared after validation: {src}",
+                is_error=True
+            )
+        except OSError as exc:
+            # Handle cross-device moves (EXDEV) and other OS errors
+            if exc.errno == errno.EXDEV:
+                return ToolResult(
+                    error=f"Cross-device move not supported. Use copy_file instead: {src} -> {dst}",
+                    is_error=True
+                )
+            return ToolResult(error=f"Move failed: {exc}", is_error=True)
         return ToolResult(output=f"Moved {src} -> {dst}")
 
 
