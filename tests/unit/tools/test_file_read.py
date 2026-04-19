@@ -609,10 +609,9 @@ def test_readfile_preserves_onofollow_through_fdopen():
         config.allowed_paths = [str(workspace)]
         
         # Mock to verify binary mode preserves flags
+        mock_fdopen = patch('os.fdopen')
         mock_file = Mock()
         mock_file.read.return_value = b"line1\nline2\nline3"
-        mock_file.__enter__ = Mock(return_value=mock_file)
-        mock_file.__exit__ = Mock(return_value=None)
         
         # Execute with mocked atomic validation
         with patch.object(tool, '_validate_atomic_path', 
