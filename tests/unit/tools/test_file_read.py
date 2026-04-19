@@ -368,7 +368,7 @@ def test_readfile_fallback_fd_leak_protection():
         
         # Verify the result is an error (as expected)
         assert result.is_error
-        assert "Failed to open file descriptor" in result.error
+        assert "Operation on file descriptor failed:" in result.error
         assert "Simulated fdopen failure" in result.error
 
 
@@ -816,6 +816,41 @@ def test_guaranteed_fd_cleanup_success_transfers_ownership():
     # (the original fd should not be closed separately)
     
     os.unlink(temp_path)
+
+
+def test_guaranteed_fd_cleanup_failure_closes_fd():
+    """Test that _guaranteed_fd_cleanup closes file descriptor on operation failure."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock operation that raises an OSError as specified in implementation plan
+    def failing_operation(fd: int):
+        # Using the exact pattern from implementation plan
+        (_ for _ in ()).throw(OSError("Mock failure"))
+    
+    # Test with mocked os.close
+    with patch('os.close', side_effect=mock_close):
+        result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
+        
+        # Verify error result
+        assert result is None
+        assert error is not None
+        assert error.is_error
+        # FALSIFIABLE CRITERION ASSERTION: Exact assertion from implementation plan
+        assert "Operation on file descriptor failed:" in error.error
+        
+        # Verify os.close was called with the correct file descriptor
+        assert len(close_called) >= 1
+        assert 123 in close_called
 
 
 if __name__ == "__main__":
