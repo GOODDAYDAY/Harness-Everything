@@ -31,6 +31,8 @@ class ListDirectoryTool(Tool):
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
         
         p = Path(resolved)
         if not p.is_dir():
@@ -68,6 +70,8 @@ class CreateDirectoryTool(Tool):
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
         
         Path(resolved).mkdir(parents=True, exist_ok=True)
         return ToolResult(output=f"Created {resolved}")
@@ -105,6 +109,8 @@ class TreeTool(Tool):
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
         
         root = Path(resolved)
         if not root.is_dir():
