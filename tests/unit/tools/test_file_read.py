@@ -879,7 +879,9 @@ def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
         assert result is None
         assert isinstance(error, ToolResult)
         assert error.is_error
-        assert "File operation failed on descriptor 123" in error.error
+        # Verify error message includes both operation and close failures
+        assert "Operation on file descriptor failed: Operation failed" in error.error
+        assert "[Close also failed: Close failed]" in error.error
 
 
 if __name__ == "__main__":

@@ -54,11 +54,16 @@ class ReadFileTool(Tool):
             return result, None
         except Exception as exc:  # Broad catch to guarantee cleanup
             # Close fd only on operation failure
+            close_error = None
             try:
                 os.close(fd)
-            except OSError:
-                pass  # FD may already be closed; ignore secondary error
-            return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
+            except OSError as close_exc:
+                close_error = close_exc
+            # Build error message including close failure if it occurred
+            error_msg = f"Operation on file descriptor failed: {exc}"
+            if close_error:
+                error_msg += f" [Close also failed: {close_error}]"
+            return None, ToolResult(error=error_msg, is_error=True)
         finally:
             if not ownership_transferred:
                 try:
