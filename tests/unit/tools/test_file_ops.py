@@ -212,5 +212,75 @@ def test_movefile_source_not_found():
         assert "not found" in result.error.lower()
 
 
+def test_movefile_atomic_symlink_protection_destination():
+    """Test that MoveFileTool prevents TOCTOU symlink attacks on destination with atomic open."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        outside = Path(tmpdir) / "outside"
+        outside.mkdir()
+
+        # Create a legitimate source file inside workspace
+        source = workspace / "source.txt"
+        source.write_text("safe content")
+        
+        # Create a legitimate file inside workspace
+        legit = workspace / "data.txt"
+        legit.write_text("safe")
+        
+        # Create a secret file outside workspace
+        secret = outside / "secret.txt"
+        secret.write_text("classified")
+
+        # Create a symlink in workspace pointing to legit file
+        link = workspace / "link.txt"
+        link.symlink_to(legit)
+
+        tool = MoveFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Test: destination is a symlink - should be rejected
+        result = asyncio.run(tool.execute(config, source=str(source), destination=str(link)))
+        assert result.is_error
+        assert "symlink" in result.error.lower()
+
+
+def test_copyfile_atomic_symlink_protection_destination():
+    """Test that CopyFileTool prevents TOCTOU symlink attacks on destination with atomic open."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        outside = Path(tmpdir) / "outside"
+        outside.mkdir()
+
+        # Create a legitimate source file inside workspace
+        source = workspace / "source.txt"
+        source.write_text("safe content")
+        
+        # Create a legitimate file inside workspace
+        legit = workspace / "data.txt"
+        legit.write_text("safe")
+        
+        # Create a secret file outside workspace
+        secret = outside / "secret.txt"
+        secret.write_text("classified")
+
+        # Create a symlink in workspace pointing to legit file
+        link = workspace / "link.txt"
+        link.symlink_to(legit)
+
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Test: destination is a symlink - should be rejected
+        result = asyncio.run(tool.execute(config, source=str(source), destination=str(link)))
+        assert result.is_error
+        assert "symlink" in result.error.lower()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
