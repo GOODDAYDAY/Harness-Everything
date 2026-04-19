@@ -205,6 +205,42 @@ class Tool(ABC):
                 return False, ToolResult(error=f"Cannot access file: {exc}", is_error=True)
         return True, resolved
 
+    async def _validate_directory_atomic(
+        self, config: HarnessConfig, path_str: str
+    ) -> tuple[bool, str | ToolResult]:
+        """
+        Atomically validate a path is accessible and is a directory.
+        Returns (is_valid, validated_path_str | ToolResult_error).
+        """
+        # 1. Use atomic path validation first
+        is_valid, validated = await self._validate_atomic_path(config, path_str, require_exists=True)
+        if not is_valid:
+            return False, validated
+        resolved = validated
+
+        # 2. Atomic directory verification
+        try:
+            # Use O_DIRECTORY flag to ensure it's a directory atomically
+            fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            os.close(fd)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
+            elif exc.errno == errno.ENOTDIR:
+                return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+            elif exc.errno == errno.EINVAL:
+                # O_DIRECTORY not supported on this filesystem/platform
+                # Fall back to non-atomic check after successful atomic path validation
+                # This preserves security while maintaining compatibility
+                try:
+                    if not os.path.isdir(resolved):
+                        return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+                except Exception as fallback_exc:
+                    return False, ToolResult(error=f"Directory validation failed: {fallback_exc}", is_error=True)
+            else:
+                return False, ToolResult(error=f"Cannot access directory: {exc}", is_error=True)
+        return True, resolved
+
 
 
     def _check_phase_scope(

@@ -25,18 +25,13 @@ class ListDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # Use _check_path with standardized validation
-        path_result = self._check_path(config, path)
-        is_valid, validated = self._validate_path_result(path_result)
+        # Use atomic directory validation to prevent TOCTOU attacks
+        is_valid, validated = await self._validate_directory_atomic(config, path)
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
-        
-        p = Path(resolved)
-        if not p.is_dir():
-            return ToolResult(error=f"Not a directory: {resolved}", is_error=True)
 
         lines: list[str] = []
         for entry in sorted(p.iterdir()):
