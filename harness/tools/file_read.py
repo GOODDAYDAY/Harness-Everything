@@ -70,20 +70,22 @@ class ReadFileTool(Tool):
         
         try:
             # Read file content from the file descriptor
-            # Ensure fd is closed even if fdopen fails (CWE-403: Exposure of File Descriptor)
-            f = os.fdopen(fd, 'r', encoding='utf-8', errors='replace')
+            # Ensure fd is closed even if fdopen fails
+            try:
+                f = os.fdopen(fd, 'r', encoding='utf-8', errors='replace')
+            except Exception as fdopen_exc:
+                # Close raw fd if fdopen fails before creating file object
+                try:
+                    os.close(fd)
+                except OSError:
+                    # Ignore errors closing already-closed fd, preserve original error
+                    pass
+                raise fdopen_exc
             try:
                 lines = f.read().splitlines(keepends=True)
             finally:
                 f.close()
         except Exception as exc:
-            # Close the file descriptor if fdopen fails
-            try:
-                os.close(fd)
-            except OSError as close_exc:
-                # Log a debug warning but propagate the original error
-                import sys
-                print(f"DEBUG: Failed to close file descriptor {fd}: {close_exc}", file=sys.stderr)
             return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
 
         start = max(offset - 1, 0)

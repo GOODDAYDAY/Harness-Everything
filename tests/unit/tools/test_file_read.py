@@ -367,7 +367,8 @@ def test_readfile_fallback_fd_leak_protection():
         
         # Verify the result is an error (as expected)
         assert result.is_error
-        assert "Secure fallback failed" in result.error
+        assert "Failed to read file" in result.error
+        assert "Simulated fdopen failure" in result.error
 
 
 def test_readfile_fallback_fd_closed_on_non_regular_file():
