@@ -692,8 +692,8 @@ def some_function():
             f"Validation error should mention actual and limit values. Got: {validation_result}"
     
     # Test 4: Verify the constant value matches what we're testing
-    assert tool._MAX_SYMBOL_DEPTH == 10, \
-        f"_MAX_SYMBOL_DEPTH should be 10, got {tool._MAX_SYMBOL_DEPTH}"
+    assert tool._MAX_SYMBOL_IDENTIFIERS == 10, \
+        f"_MAX_SYMBOL_IDENTIFIERS should be 10, got {tool._MAX_SYMBOL_IDENTIFIERS}"
     
     # Test 5: Verify depth calculation is correct
     # Symbol with 10 dots has 11 identifiers, which exceeds _MAX_SYMBOL_DEPTH=10
