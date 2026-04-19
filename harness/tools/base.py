@@ -79,64 +79,80 @@ class Tool(ABC):
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
         2. Resolve path with Path.resolve(strict=True) to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
+        
+        This method addresses the TOCTOU vulnerability by using atomic symlink
+        resolution before checking allowed paths.
         """
+        # 1. Call validate_path_security(path) and return a ToolResult on error
+        if error_msg := validate_path_security(path, config):
+            return ToolResult(error=error_msg, is_error=True)
+        
+        # Handle empty path (use workspace)
+        path_to_check = path if path else config.workspace
+        
+        # If path is relative, join it with workspace
+        if not os.path.isabs(path_to_check):
+            path_to_check = os.path.join(config.workspace, path_to_check)
+        
         try:
-            # 1. Security validation on raw path
-            if error_msg := validate_path_security(path, config):
-                return ToolResult(error=error_msg, is_error=True)
-            
-            # Handle empty path (use workspace)
-            path_to_check = path if path else config.workspace
-            
-            # If path is relative, join it with workspace
-            if not os.path.isabs(path_to_check):
-                path_to_check = os.path.join(config.workspace, path_to_check)
-            
-            # 2. Resolve path to eliminate symlink TOCTOU using Path.resolve(strict=True)
+            # 2. Create a Path object and call its resolve(strict=True) method
+            # Catch OSError and return a ToolResult with error
+            resolved_path = Path(path_to_check).resolve(strict=True)
+            resolved_str = str(resolved_path)
+        except OSError as exc:
+            # Handle broken symlinks or non-existent paths
+            # Fall back to checking parent directories for paths that should be creatable
             try:
-                # Use Path.resolve(strict=True) for atomic symlink resolution
-                resolved_path = Path(path_to_check).resolve(strict=True)
+                # Try non-strict resolution
+                resolved_path = Path(path_to_check).resolve(strict=False)
                 resolved_str = str(resolved_path)
-            except OSError as exc:
-                # Handle broken symlinks or non-existent paths
-                # Fall back to checking parent directories
-                try:
-                    # Try non-strict resolution first
-                    resolved_path = Path(path_to_check).resolve(strict=False)
-                    resolved_str = str(resolved_path)
+                
+                # Check if all parent directory components exist and are within allowed paths
+                current = Path(resolved_str)
+                while current != current.parent:  # Stop at root
+                    if not current.parent.exists():
+                        return ToolResult(
+                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
+                            is_error=True,
+                        )
+                    # Check if parent directory is within allowed paths
+                    parent_allowed = False
+                    for allowed_path in config.allowed_paths:
+                        allowed_resolved = str(Path(allowed_path).resolve(strict=False))
+                        parent_str = str(current.parent)
+                        if parent_str == allowed_resolved or parent_str.startswith(allowed_resolved + os.sep):
+                            parent_allowed = True
+                            break
                     
-                    # Check if all parent directories exist and are within allowed paths
-                    current = Path(resolved_str)
-                    while current != current.parent:  # Stop at root
-                        if not current.parent.exists():
-                            return ToolResult(
-                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
-                                is_error=True,
-                            )
-                        current = current.parent
-                except Exception as exc2:
-                    return ToolResult(
-                        error=f"Cannot resolve path {path_to_check!r}: {exc2}",
-                        is_error=True,
-                    )
-            
-            # 3. Check if resolved path is allowed
-            # Use the same logic as config.is_path_allowed but with our resolved path
-            for allowed_path in config.allowed_paths:
-                allowed_resolved = str(Path(allowed_path).resolve(strict=False))
-                if resolved_str == allowed_resolved or resolved_str.startswith(allowed_resolved + os.sep):
-                    return resolved_str
-            
-            return ToolResult(
-                error=f"Path not allowed: {resolved_str}  (allowed: {config.allowed_paths})",
-                is_error=True,
-            )
-        except ValueError as e:
-            # CRITICAL: Must return ToolResult, not None or raise exception
-            return ToolResult(error=f"Path validation failed: {e}", is_error=True)
-        except Exception as e:
-            # Catch-all to ensure no unexpected exception returns None or raises
-            return ToolResult(error=f"Unexpected validation error: {e}", is_error=True)
+                    if not parent_allowed:
+                        return ToolResult(
+                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} is outside allowed paths",
+                            is_error=True,
+                        )
+                    
+                    current = current.parent
+            except Exception as exc2:
+                return ToolResult(
+                    error=f"Cannot resolve path {path_to_check!r}: {exc2}",
+                    is_error=True,
+                )
+        
+        # 3. Convert the resolved Path object to a string resolved_str
+        # Already done above
+        
+        # 4. For each path in config.allowed_paths, resolve it with 
+        # Path(allowed_path).resolve(strict=False) and check if resolved_str 
+        # is equal to or starts with the allowed path
+        for allowed_path in config.allowed_paths:
+            allowed_resolved = str(Path(allowed_path).resolve(strict=False))
+            if resolved_str == allowed_resolved or resolved_str.startswith(allowed_resolved + os.sep):
+                return resolved_str
+        
+        # 5. If no allowed path matches, return a ToolResult with error
+        return ToolResult(
+            error=f"Path {resolved_str} is outside allowed directories",
+            is_error=True,
+        )
 
 
 
