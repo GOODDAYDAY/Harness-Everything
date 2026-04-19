@@ -700,7 +700,7 @@ def test_guaranteed_fd_cleanup_thread_failure():
     
     # Mock operation to raise an exception
     def failing_operation(fd: int):
-        raise RuntimeError("Simulated thread/operation failure")
+        raise OSError("Simulated thread/operation failure")
     
     # Test with mocked os.close
     with patch('os.close', side_effect=mock_close):
@@ -710,7 +710,7 @@ def test_guaranteed_fd_cleanup_thread_failure():
         assert result is None
         assert error is not None
         assert error.is_error
-        assert "Operation on file descriptor failed" in error.error
+        assert "Operation on file descriptor failed:" in error.error
         
         # Verify os.close was called with the correct file descriptor
         # It may be called twice (once in except, once in finally)

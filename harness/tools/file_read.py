@@ -47,7 +47,7 @@ class ReadFileTool(Tool):
         try:
             result = operation(fd)  # e.g., os.fdopen(fd, 'rb')
             return result, None
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             # Close fd only on operation failure
             try:
                 os.close(fd)
