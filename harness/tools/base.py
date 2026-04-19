@@ -123,7 +123,7 @@ class Tool(ABC):
             # 3. Check if resolved path is allowed
             # Use the same logic as config.is_path_allowed but with our resolved path
             for allowed_path in config.allowed_paths:
-                allowed_resolved = os.path.realpath(allowed_path)
+                allowed_resolved = str(Path(allowed_path).resolve(strict=False))
                 if resolved_str == allowed_resolved or resolved_str.startswith(allowed_resolved + os.sep):
                     return resolved_str
             
