@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from harness.core.config import HarnessConfig
+from harness.tools.base import ToolResult
 from harness.tools.file_read import ReadFileTool
 
 
@@ -367,7 +368,7 @@ def test_readfile_fallback_fd_leak_protection():
         
         # Verify the result is an error (as expected)
         assert result.is_error
-        assert "Failed to read file" in result.error
+        assert "Failed to open file descriptor" in result.error
         assert "Simulated fdopen failure" in result.error
 
 
@@ -588,7 +589,7 @@ def test_execute_fdopen_failure_closes_fd():
         
         # Verify the result is an error (as expected)
         assert result.is_error
-        assert "Failed to read file" in result.error
+        assert "Failed to open file descriptor" in result.error
 
 
 def test_readfile_preserves_onofollow_through_fdopen():
@@ -629,6 +630,58 @@ def test_readfile_preserves_onofollow_through_fdopen():
             # Verify successful read
             assert not result.is_error
             assert "line1" in result.output
+
+
+def test_execute_fdopen_failure_returns_toolresult():
+    """Test that fdopen failure returns a ToolResult instead of raising exception.
+    
+    Verifies the critical fix for file descriptor leak and exception handling bug.
+    """
+    import asyncio
+    import errno
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file
+        test_file = tmpdir_path / "test.txt"
+        test_file.write_text("test content")
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(tmpdir_path)
+        config.allowed_paths = [str(tmpdir_path)]
+        
+        # Track if os.close was called
+        close_called = []
+        original_close = os.close
+        
+        def mock_close(fd):
+            close_called.append(fd)
+            return original_close(fd)
+        
+        # Mock os.fdopen to raise an exception (simulating EMFILE - too many open files)
+        with patch.object(tool, '_validate_atomic_path', 
+                         return_value=(True, str(test_file))), \
+             patch.object(tool, '_open_with_atomic_fallback',
+                         return_value=(123, None)), \
+             patch('os.fdopen', side_effect=OSError(errno.EMFILE, "Too many open files")), \
+             patch('os.close', side_effect=mock_close):
+            
+            # Execute - should return ToolResult, not raise exception
+            result = asyncio.run(tool.execute(config, path=str(test_file)))
+            
+            # Verify error result
+            assert result.is_error
+            assert "Failed to open file descriptor" in result.error
+            
+            # Verify os.close was called with the correct file descriptor
+            assert len(close_called) == 1
+            assert close_called[0] == 123
+            
+            # Verify no uncaught exception was raised
+            assert isinstance(result, ToolResult)
 
 
 if __name__ == "__main__":

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
-from typing import Any
+from typing import Any, Optional, Tuple
 
 from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
@@ -38,6 +39,25 @@ class ReadFileTool(Tool):
             "required": ["path"],
         }
 
+    def _safe_fdopen_to_fileobj(self, fd: int) -> Tuple[Optional[io.BufferedReader], Optional[ToolResult]]:
+        """
+        Safely convert a file descriptor to a file object with guaranteed cleanup.
+        
+        Returns (file_object, None) on success, or (None, ToolResult_error) on failure.
+        Guarantees the file descriptor is closed on any exception.
+        """
+        try:
+            file_obj = os.fdopen(fd, 'rb')  # Binary mode preserves open flags
+            return file_obj, None
+        except Exception as exc:
+            # Close raw fd if fdopen fails before creating file object
+            try:
+                os.close(fd)
+            except OSError:
+                # Ignore errors closing already-closed fd, preserve original error
+                pass
+            return None, ToolResult(error=f"Failed to open file descriptor: {exc}", is_error=True)
+
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
     ) -> ToolResult:
@@ -65,27 +85,19 @@ class ReadFileTool(Tool):
         if error is not None:
             return error
         
+        # Safely convert file descriptor to file object with guaranteed cleanup
+        file_obj, open_error = await asyncio.to_thread(self._safe_fdopen_to_fileobj, fd)
+        if open_error is not None:
+            return open_error
+        
         try:
-            # Read file content from the file descriptor
-            # Use binary mode to preserve O_NOFOLLOW protection from atomic open
-            try:
-                f = os.fdopen(fd, 'rb')  # Binary mode preserves open flags
-            except Exception as fdopen_exc:
-                # Close raw fd if fdopen fails before creating file object
-                try:
-                    os.close(fd)
-                except OSError:
-                    # Ignore errors closing already-closed fd, preserve original error
-                    pass
-                raise fdopen_exc
-            try:
-                # Read binary and decode with same error handling as original
-                content = f.read()
-                lines = content.decode('utf-8', errors='replace').splitlines(keepends=True)
-            finally:
-                f.close()
+            # Read binary and decode with same error handling as original
+            content = file_obj.read()
+            lines = content.decode('utf-8', errors='replace').splitlines(keepends=True)
         except Exception as exc:
             return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
+        finally:
+            file_obj.close()
 
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
