@@ -81,5 +81,7 @@ class ReadFileTool(Tool):
             f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
         )
         total = len(lines)
-        header = f"[{p.name}] lines {start+1}-{min(start+limit, total)} of {total}\n"
+        # Extract filename from resolved path
+        filename = os.path.basename(resolved)
+        header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
         return ToolResult(output=header + numbered)
