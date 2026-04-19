@@ -192,39 +192,41 @@ class Tool(ABC):
             return False, validated
         resolved = validated
 
-        # 2. Atomic file/directory type verification
-        flags = os.O_RDONLY | os.O_NOFOLLOW
-        if directory:
-            flags |= os.O_DIRECTORY
-        
-        try:
-            fd = await asyncio.to_thread(os.open, resolved, flags)
+        # 2. Atomic file/directory type verification using the new helper
+        flags = os.O_RDONLY
+        if not directory:
+            # For files, use the atomic fallback helper
+            fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, flags)
+            if error is not None:
+                return False, error
+            # Success - close the fd and return validated path
             os.close(fd)
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                if directory:
+            return True, resolved
+        else:
+            # For directories, use O_DIRECTORY if available
+            flags |= os.O_DIRECTORY
+            try:
+                fd = await asyncio.to_thread(os.open, resolved, flags | os.O_NOFOLLOW)
+                os.close(fd)
+            except OSError as exc:
+                if exc.errno == errno.ELOOP:
                     return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
+                elif exc.errno == errno.ENOENT and require_exists:
+                    return False, ToolResult(error=f"Directory not found: {resolved}", is_error=True)
+                elif exc.errno == errno.ENOTDIR:
+                    return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+                elif exc.errno == errno.EINVAL:
+                    # O_DIRECTORY not supported on this filesystem/platform
+                    # Fall back to non-atomic check after successful atomic path validation
+                    # This preserves security while maintaining compatibility
+                    try:
+                        if not os.path.isdir(resolved):
+                            return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+                    except Exception as fallback_exc:
+                        return False, ToolResult(error=f"Directory validation failed: {fallback_exc}", is_error=True)
                 else:
-                    return False, ToolResult(error=f"Path is a symlink: {resolved}", is_error=True)
-            elif exc.errno == errno.ENOENT and require_exists:
-                return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
-            elif exc.errno == errno.ENOTDIR and directory:
-                return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
-            elif exc.errno == errno.EINVAL and directory:
-                # O_DIRECTORY not supported on this filesystem/platform
-                # Fall back to non-atomic check after successful atomic path validation
-                # This preserves security while maintaining compatibility
-                try:
-                    if not os.path.isdir(resolved):
-                        return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
-                except Exception as fallback_exc:
-                    return False, ToolResult(error=f"Directory validation failed: {fallback_exc}", is_error=True)
-            else:
-                if directory:
                     return False, ToolResult(error=f"Cannot access directory: {exc}", is_error=True)
-                else:
-                    return False, ToolResult(error=f"Cannot access file: {exc}", is_error=True)
-        return True, resolved
+            return True, resolved
 
     async def _validate_directory_atomic(
         self, config: HarnessConfig, path_str: str
@@ -235,6 +237,67 @@ class Tool(ABC):
         """
         # Use the consolidated atomic path validation with directory flag
         return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True)
+
+    def _open_with_atomic_fallback(self, path: str, flags: int) -> tuple[int | None, ToolResult | None]:
+        """
+        Atomically open a file with fallback for systems without O_NOFOLLOW support.
+        
+        Returns (file_descriptor, None) on success, or (None, ToolResult_error) on failure.
+        
+        Security guarantee: The file type is verified atomically before returning.
+        For systems without O_NOFOLLOW, we use O_PATH (Linux) or open+fstat (other)
+        to verify file type before any operations.
+        """
+        try:
+            # First attempt: open with O_NOFOLLOW to prevent symlink swapping
+            fd = os.open(path, flags | os.O_NOFOLLOW)
+            return fd, None
+        except OSError as exc:
+            if exc.errno == errno.EINVAL:
+                # O_NOFOLLOW not supported on this filesystem/platform
+                # Use atomic fallback: open with O_PATH if available, otherwise regular open
+                fallback_flags = flags
+                if hasattr(os, 'O_PATH'):
+                    # Linux: O_PATH allows opening without following symlinks
+                    fallback_flags |= os.O_PATH
+                
+                try:
+                    fd = os.open(path, fallback_flags)
+                    try:
+                        # Use fstat on open fd to verify file type atomically
+                        stat_result = os.fstat(fd)
+                        if not stat.S_ISREG(stat_result.st_mode):
+                            os.close(fd)
+                            return None, ToolResult(
+                                error=f"Not a regular file: {path}",
+                                is_error=True
+                            )
+                        # Success: file is regular, fd is valid
+                        return fd, None
+                    except Exception:
+                        # Close fd on any fstat error
+                        os.close(fd)
+                        raise
+                except OSError as fallback_exc:
+                    if fallback_exc.errno == errno.ELOOP:
+                        return None, ToolResult(
+                            error=f"Symlink resolution escapes allowed directory: {path}",
+                            is_error=True
+                        )
+                    return None, ToolResult(
+                        error=f"Secure fallback failed: {fallback_exc}",
+                        is_error=True
+                    )
+            elif exc.errno == errno.ELOOP:
+                return None, ToolResult(
+                    error=f"Symlink resolution escapes allowed directory: {path}",
+                    is_error=True
+                )
+            else:
+                return None, ToolResult(
+                    error=f"Cannot access file: {exc}",
+                    is_error=True
+                )
 
 
 

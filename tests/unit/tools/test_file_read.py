@@ -94,6 +94,84 @@ def test_readfile_fallback_path_atomicity():
         assert "line1" in result.output
 
 
+def test_readfile_einval_fallback_atomic():
+    """Test that the EINVAL fallback path performs atomic fstat verification.
+    
+    Specifically tests that when O_NOFOLLOW fails with EINVAL, the fallback
+    uses os.fstat on the opened file descriptor before reading, ensuring
+    atomic file type verification.
+    """
+    import asyncio
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file
+        test_file = tmpdir_path / "test.txt"
+        test_file.write_text("test content\n")
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(tmpdir_path)
+        config.allowed_paths = [str(tmpdir_path)]
+        
+        # Track fstat calls to verify atomic verification
+        fstat_called = []
+        original_fstat = os.fstat
+        
+        def mock_fstat(fd):
+            fstat_called.append(fd)
+            # Return a mock stat result indicating a regular file
+            stat_result = Mock()
+            stat_result.st_mode = 0o100644  # Regular file
+            return stat_result
+        
+        # Mock os.open to simulate EINVAL on O_NOFOLLOW
+        open_calls = []
+        original_open = os.open
+        
+        def mock_open(path, flags, *args, **kwargs):
+            open_calls.append((path, flags))
+            if flags & os.O_NOFOLLOW:
+                raise OSError(errno.EINVAL, "Invalid argument")
+            # Return a mock file descriptor
+            return 123
+        
+        # Mock _validate_atomic_path to return success
+        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = (True, str(test_file))
+            
+            # Mock os.fdopen to return a mock file object that supports context manager
+            mock_file = Mock()
+            mock_file.read.return_value = "test content\n"
+            mock_file.__enter__ = Mock(return_value=mock_file)
+            mock_file.__exit__ = Mock(return_value=None)
+            
+            with patch('os.open', side_effect=mock_open), \
+                 patch('os.fstat', side_effect=mock_fstat), \
+                 patch('os.fdopen', return_value=mock_file):
+                
+                # Run the tool
+                result = asyncio.run(tool.execute(config, path=str(test_file)))
+        
+        # Verify atomic verification occurred
+        assert len(fstat_called) == 1, "os.fstat should have been called for atomic verification"
+        assert fstat_called[0] == 123, "fstat should have been called on the opened file descriptor"
+        
+        # Verify the fallback path was triggered
+        assert len(open_calls) >= 1, "os.open should have been called"
+        
+        # First call should have O_NOFOLLOW
+        first_path, first_flags = open_calls[0]
+        assert str(test_file) in str(first_path)
+        assert first_flags & os.O_NOFOLLOW
+        
+        # Result should be successful
+        assert not result.is_error
+
+
 def test_readfile_symlink_protection():
     """Test that symlinks pointing outside allowed directories are rejected."""
     with tempfile.TemporaryDirectory() as tmpdir:

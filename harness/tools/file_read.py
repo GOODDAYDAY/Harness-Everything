@@ -69,50 +69,17 @@ class ReadFileTool(Tool):
         if not p.is_file():
             return ToolResult(error=f"Not a file: {resolved}", is_error=True)
 
+        # Use the atomic fallback helper from base class
+        fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, os.O_RDONLY)
+        if error is not None:
+            return error
+        
         try:
-            # Use asyncio.to_thread for async-safe file opening with O_NOFOLLOW
-            # to prevent symlink swapping attacks (TOCTOU vulnerability)
-            fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY | os.O_NOFOLLOW)
-            try:
-                # Read file content from the file descriptor
-                with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-                    lines = f.read().splitlines(keepends=True)
-            finally:
-                # Ensure file descriptor is closed even if read fails
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass  # Already closed by fdopen
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                return ToolResult(
-                    error=f"Symlink resolution escapes allowed directory: {resolved}",
-                    is_error=True
-                )
-            elif exc.errno == errno.EINVAL:
-                # O_NOFOLLOW not supported - use atomic open+fstat
-                fd = None
-                try:
-                    fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY)
-                    # Use fstat on open fd to verify file type atomically
-                    stat_result = os.fstat(fd)
-                    if not stat.S_ISREG(stat_result.st_mode):
-                        return ToolResult(error=f"Not a regular file: {resolved}", is_error=True)
-                    # Read from the already-open file descriptor
-                    with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-                        lines = f.read().splitlines(keepends=True)
-                except Exception as fallback_exc:
-                    return ToolResult(error=f"Secure fallback failed: {fallback_exc}", is_error=True)
-                finally:
-                    if fd is not None:
-                        try:
-                            os.close(fd)
-                        except OSError:
-                            pass  # Already closed by fdopen or other means
-            else:
-                return ToolResult(error=f"Failed to open file: {exc}", is_error=True)
+            # Read file content from the file descriptor
+            with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                lines = f.read().splitlines(keepends=True)
         except Exception as exc:
-            return ToolResult(error=str(exc), is_error=True)
+            return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
 
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
