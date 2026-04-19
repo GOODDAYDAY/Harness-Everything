@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-16: O_NOFOLLOW preservation in ReadFileTool
+- Fixed critical TOCTOU vulnerability in `ReadFileTool.execute()` by using binary mode `os.fdopen(fd, 'rb')` to preserve O_NOFOLLOW symlink protection
+- Maintains same Unicode error handling with `decode('utf-8', errors='replace')` for backward compatibility
+- Added comprehensive test `test_readfile_preserves_onofollow_through_fdopen` verifying binary mode usage
+
 ## 2026-04-16: Critical TOCTOU security fix in read_file_atomically
 - Fixed critical TOCTOU vulnerability in `read_file_atomically` by adding proper device/inode validation
 - Now correctly detects symlink swaps by comparing opened directory descriptor with original path stats
