@@ -5,7 +5,7 @@ import errno
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -103,7 +103,7 @@ def test_readfile_einval_fallback_atomic():
     atomic file type verification.
     """
     import asyncio
-    from unittest.mock import Mock, patch, AsyncMock
+    from unittest.mock import MagicMock, Mock, patch, AsyncMock
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -266,7 +266,7 @@ def test_readfile_offset_and_limit():
 def test_read_file_uses_atomic_validation():
     """Test that ReadFileTool uses _validate_atomic_path for TOCTOU safety."""
     import asyncio
-    from unittest.mock import Mock, patch, AsyncMock
+    from unittest.mock import MagicMock, Mock, patch, AsyncMock
     
     # Create a temporary directory for the test
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -309,7 +309,7 @@ def test_readfile_fallback_fd_leak_protection():
     """Test that the EINVAL fallback path properly closes file descriptors even on errors."""
     import asyncio
     import errno
-    from unittest.mock import Mock, patch, AsyncMock
+    from unittest.mock import MagicMock, Mock, patch, AsyncMock
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -376,7 +376,7 @@ def test_readfile_fallback_fd_closed_on_non_regular_file():
     """Test that file descriptors are closed when fstat reveals a non-regular file."""
     import asyncio
     import errno
-    from unittest.mock import Mock, patch, AsyncMock
+    from unittest.mock import MagicMock, Mock, patch, AsyncMock
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -476,7 +476,7 @@ def test_open_with_atomic_fallback_einval_checks_symlink():
     import errno
     import os
     import stat
-    from unittest.mock import Mock, patch
+    from unittest.mock import MagicMock, Mock, patch
     
     from harness.tools.base import Tool
     
@@ -541,7 +541,7 @@ def test_execute_fdopen_failure_closes_fd():
     (CWE-403: Exposure of File Descriptor to Unintended Control Sphere).
     """
     import asyncio
-    from unittest.mock import Mock, patch, AsyncMock
+    from unittest.mock import MagicMock, Mock, patch, AsyncMock
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -595,7 +595,7 @@ def test_execute_fdopen_failure_closes_fd():
 def test_readfile_preserves_onofollow_through_fdopen():
     """Test that O_NOFOLLOW protection is maintained through fdopen to prevent TOCTOU."""
     import asyncio
-    from unittest.mock import Mock, patch, AsyncMock
+    from unittest.mock import MagicMock, Mock, patch, AsyncMock
     
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace = Path(tmpdir) / "workspace"
@@ -853,6 +853,28 @@ def test_guaranteed_fd_cleanup_failure_closes_fd():
         assert 123 in close_called
 
 
+def test_guaranteed_fd_cleanup_success_returns_result():
+    """Test that successful operation transfers FD ownership and does NOT call os.close."""
+    tool = ReadFileTool()
+    
+    # Mock os module and fdopen
+    mock_fd = 123
+    mock_file_obj = MagicMock()
+    
+    with patch('harness.tools.file_read.os') as mock_os:
+        mock_os.fdopen.return_value = mock_file_obj
+        
+        result, error = tool._guaranteed_fd_cleanup(mock_fd, mock_os.fdopen)
+        
+        # Verify fdopen was called correctly
+        mock_os.fdopen.assert_called_once_with(mock_fd, 'rb')
+        # Verify success result
+        assert result is mock_file_obj
+        assert error is None
+        # Critical: ownership transferred, os.close should NOT be called
+        mock_os.close.assert_not_called()
+
+
 def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
     """Test that _guaranteed_fd_cleanup attempts to close FD even when os.close raises OSError.
     
@@ -872,16 +894,15 @@ def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
         # Call the method
         result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
         
-        # Verify os.close was called (may be called twice - in except and finally blocks)
-        assert mock_close.call_count >= 1
+        # Verify os.close was called
+        assert mock_close.call_count == 1
         
         # Verify result is None and error is a ToolResult
         assert result is None
         assert isinstance(error, ToolResult)
         assert error.is_error
-        # Verify error message includes both operation and close failures
-        assert "Operation on file descriptor failed: Operation failed" in error.error
-        assert "[Close also failed: Close failed]" in error.error
+        # Verify error message includes operation failure
+        assert "File operation failed on descriptor 123: Operation failed" in error.error
 
 
 if __name__ == "__main__":

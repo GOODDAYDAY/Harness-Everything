@@ -45,31 +45,18 @@ class ReadFileTool(Tool):
         Returns (result, None) on success, or (None, ToolResult) on failure.
         
         On success, ownership of `fd` is transferred to the result of `operation`.
-        On failure, `fd` is closed. A finally block ensures cleanup on all paths.
+        On failure, `fd` is closed before returning an error.
         """
-        ownership_transferred = False
         try:
             result = operation(fd)  # e.g., os.fdopen(fd, 'rb')
-            ownership_transferred = True
             return result, None
-        except Exception as exc:  # Broad catch to guarantee cleanup
+        except Exception as exc:
             # Close fd only on operation failure
-            close_error = None
             try:
                 os.close(fd)
-            except OSError as close_exc:
-                close_error = close_exc
-            # Build error message including close failure if it occurred
-            error_msg = f"Operation on file descriptor failed: {exc}"
-            if close_error:
-                error_msg += f" [Close also failed: {close_error}]"
-            return None, ToolResult(error=error_msg, is_error=True)
-        finally:
-            if not ownership_transferred:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass  # FD already closed or invalid
+            except OSError:
+                pass  # FD may already be closed; ignore secondary error
+            return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
 
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
