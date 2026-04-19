@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import itertools
 import json
 import logging
@@ -93,6 +94,55 @@ class Tool(ABC):
             return ToolResult(error=f"Unexpected validation error: {e}", is_error=True)
 
 
+
+    def _check_phase_scope(
+        self, config: HarnessConfig, resolved_path: str,
+    ) -> ToolResult | None:
+        """Reject writes outside the running phase's allowed_edit_globs.
+
+        Returns None when the path is allowed (including: no globs configured,
+        i.e. back-compat unrestricted mode). Returns a ToolResult error when
+        the write should be blocked. Callers should invoke this AFTER
+        ``_check_path`` has resolved and security-validated the path, so the
+        path here is absolute and known-safe.
+
+        Matching is against the workspace-relative path using fnmatch
+        semantics, with a ``**`` prefix expanded so e.g. ``harness/**`` also
+        matches ``harness/pipeline/loop.py``. A path that is not under the
+        workspace (rare, but allowed_paths may span multiple roots) is
+        allowed — phase scoping is intentionally a workspace-local concept.
+
+        Scoping is per-phase and cheap: an empty list skips the entire check.
+        See PhaseConfig.allowed_edit_globs for the policy.
+        """
+        globs = getattr(config, "phase_edit_globs", None)
+        if not globs:
+            return None
+        try:
+            rel = os.path.relpath(resolved_path, config.workspace)
+        except ValueError:
+            # Cross-drive on Windows: path is outside workspace entirely.
+            return None
+        if rel.startswith("..") or os.path.isabs(rel):
+            return None
+        rel_posix = rel.replace(os.sep, "/")
+        for pattern in globs:
+            if fnmatch.fnmatch(rel_posix, pattern):
+                return None
+            # Support "foo/**" as a recursive prefix match (fnmatch alone
+            # treats '**' like '*').
+            if pattern.endswith("/**"):
+                prefix = pattern[:-3]
+                if rel_posix == prefix or rel_posix.startswith(prefix + "/"):
+                    return None
+        return ToolResult(
+            error=(
+                f"PHASE SCOPE ERROR: path {rel_posix!r} is not in this "
+                f"phase's allowed_edit_globs ({globs}). Edit a different "
+                "file, or report this as out-of-scope and move on."
+            ),
+            is_error=True,
+        )
 
     def _validate_root_path(self, config: HarnessConfig, root: str) -> tuple[str, ToolResult | None]:
         """Validate a root path for directory operations.

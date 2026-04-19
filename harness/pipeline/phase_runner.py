@@ -629,12 +629,24 @@ class PhaseRunner:
                 phase.tool_tags, len(active_registry.names),
             )
 
-        text, exec_log = await self.llm.call_with_tools(
-            [{"role": "user", "content": prompt}],
-            active_registry,
-            system=executor_system_with_workspace(self.harness.workspace),
-            max_turns=self.harness.max_tool_turns,
-        )
+        # Scope file-mutating tools to the phase's allowed_edit_globs for the
+        # duration of the executor loop. The HarnessConfig object is shared
+        # with self.llm (built from the same config.harness), so setting the
+        # field here takes effect inside Tool.execute via _check_phase_scope.
+        # The try/finally guarantees we clear the restriction even if the
+        # LLM raises, so subsequent phases (or non-phase callers of the same
+        # HarnessConfig) are not accidentally scoped.
+        _prior_globs = getattr(self.harness, "phase_edit_globs", [])
+        self.harness.phase_edit_globs = list(phase.allowed_edit_globs or [])
+        try:
+            text, exec_log = await self.llm.call_with_tools(
+                [{"role": "user", "content": prompt}],
+                active_registry,
+                system=executor_system_with_workspace(self.harness.workspace),
+                max_turns=self.harness.max_tool_turns,
+            )
+        finally:
+            self.harness.phase_edit_globs = _prior_globs
         _impl_elapsed = time.monotonic() - _impl_t0
         log.info(
             "R%d/phase=%s/inner=%d: tool_loop done  tool_calls=%d  elapsed=%.1fs",
