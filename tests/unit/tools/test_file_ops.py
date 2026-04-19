@@ -282,5 +282,39 @@ def test_copyfile_atomic_symlink_protection_destination():
         assert "symlink" in result.error.lower()
 
 
+def test_deletefile_atomic_unlink_no_exists_check():
+    """Test that DeleteFileTool uses os.unlink directly without Path.exists()."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        test_file = workspace / "test.txt"
+        test_file.write_text("content")
+        test_file_path_str = str(test_file)
+
+        tool = DeleteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # 1. Ensure Path.exists() is not called post-validation
+        with patch.object(Path, 'exists') as mock_exists:
+            result = asyncio.run(tool.execute(config, path=test_file_path_str))
+            assert not mock_exists.called, "DeleteFileTool must not use Path.exists() after atomic validation"
+            assert not result.is_error
+        
+        # Check actual file deletion (after patch context ends)
+        assert not os.path.exists(test_file_path_str)
+
+        # 2. Test FileNotFoundError handling (simulate race condition)
+        test_file2 = workspace / "test2.txt"
+        test_file2.write_text("content2")
+        test_file2_path_str = str(test_file2)
+        # Mock os.unlink to raise FileNotFoundError
+        with patch('os.unlink', side_effect=FileNotFoundError):
+            result = asyncio.run(tool.execute(config, path=test_file2_path_str))
+            assert result.is_error
+            assert "disappeared after validation" in result.error  # Specific new error message
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

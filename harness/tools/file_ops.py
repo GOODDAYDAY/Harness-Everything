@@ -38,10 +38,17 @@ class DeleteFileTool(Tool):
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 
-        p = Path(resolved)
-        if not p.exists():
-            return ToolResult(error=f"Not found: {resolved}", is_error=True)
-        p.unlink()
+        # Atomic deletion without a separate existence check
+        try:
+            os.unlink(resolved)  # Atomic operation on the validated path string
+        except FileNotFoundError:
+            # File was deleted by another process after validation
+            return ToolResult(
+                error=f"File disappeared after validation: {resolved}",
+                is_error=True
+            )
+        except OSError as exc:
+            return ToolResult(error=f"Delete failed: {exc}", is_error=True)
         return ToolResult(output=f"Deleted {resolved}")
 
 
