@@ -26,13 +26,12 @@ class DeleteFileTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # FIX: Use _check_path instead of _validate_root_path directly
+        # Use _check_path with standardized validation
         path_result = self._check_path(config, path)
-        # Add defensive assertion to catch type contract violations
-        assert isinstance(path_result, (str, ToolResult)), f"Unexpected type from _check_path: {type(path_result)}"
-        if isinstance(path_result, ToolResult):
-            return path_result  # This is a security or validation error
-        resolved = path_result  # This is the validated path string
+        is_valid, validated = self._validate_path_result(path_result)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 
