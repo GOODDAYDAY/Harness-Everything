@@ -45,10 +45,10 @@ class CrossReferenceTool(Tool):
     # Valid symbol pattern: standard Python identifier, optionally dot-qualified
     # e.g., "my_function", "ClassName.method_name"
     # REJECTS: consecutive dots, leading/trailing dots, directory traversal
-    # Allows 1-9 identifiers (0-8 dots), matching _MAX_SYMBOL_IDENTIFIERS=10
+    # Allows 1-10 identifiers (0-9 dots), matching _MAX_SYMBOL_IDENTIFIERS=10
     # Note: We need to extract just the core pattern without ^ and $ anchors
     _CORE_IDENTIFIER_PATTERN = r'[a-zA-Z_][a-zA-Z0-9_]*'
-    _VALID_SYMBOL_PATTERN = re.compile(r'^' + _CORE_IDENTIFIER_PATTERN + r'(?:\.' + _CORE_IDENTIFIER_PATTERN + r'){0,8}$', re.ASCII)
+    _VALID_SYMBOL_PATTERN = re.compile(r'^' + _CORE_IDENTIFIER_PATTERN + r'(?:\.' + _CORE_IDENTIFIER_PATTERN + r'){0,9}$', re.ASCII)
     
     # Maximum total identifiers (e.g., "a.b.c" has 3 identifiers) to prevent
     # denial-of-service attacks via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
