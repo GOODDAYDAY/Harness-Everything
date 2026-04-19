@@ -20,6 +20,9 @@ def test_readfile_fallback_path_atomicity():
     then verifies the fallback path uses os.fstat on the opened file descriptor
     before reading.
     """
+    import asyncio
+    from unittest.mock import AsyncMock
+    
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         
@@ -52,10 +55,23 @@ def test_readfile_fallback_path_atomicity():
             fstat_calls.append(fd)
             return original_fstat(fd)
         
-        with patch('os.open', side_effect=mock_open), \
-             patch('os.fstat', side_effect=mock_fstat):
-            # Run the tool
-            result = asyncio.run(tool.execute(config, path=str(test_file)))
+        # Mock _validate_atomic_path to return success
+        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = (True, str(test_file))
+            
+            # Also mock os.close to track it
+            close_calls = []
+            original_close = os.close
+            
+            def mock_close(fd):
+                close_calls.append(fd)
+                original_close(fd)
+            
+            with patch('os.open', side_effect=mock_open), \
+                 patch('os.fstat', side_effect=mock_fstat), \
+                 patch('os.close', side_effect=mock_close):
+                # Run the tool
+                result = asyncio.run(tool.execute(config, path=str(test_file)))
         
         # Verify the fallback path was used correctly
         assert len(open_calls) == 2, f"Expected 2 os.open calls, got {len(open_calls)}"
@@ -208,6 +224,131 @@ def test_read_file_uses_atomic_validation():
         # Verify the result is successful
         assert not result.is_error
         assert "test content" in result.output
+
+
+def test_readfile_fallback_fd_leak_protection():
+    """Test that the EINVAL fallback path properly closes file descriptors even on errors."""
+    import asyncio
+    import errno
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file
+        test_file = tmpdir_path / "test.txt"
+        test_file.write_text("test content")
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(tmpdir_path)
+        config.allowed_paths = [str(tmpdir_path)]
+        
+        # Track calls to os.close
+        close_calls = []
+        original_close = os.close
+        
+        def mock_close(fd):
+            close_calls.append(fd)
+            original_close(fd)
+        
+        # Mock scenario: O_NOFOLLOW fails with EINVAL, then regular open succeeds
+        # but fdopen fails to simulate an error after fstat
+        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = (True, str(test_file))
+            
+            # First os.open call with O_NOFOLLOW fails with EINVAL
+            # Second os.open call succeeds
+            mock_fd = 123  # Dummy file descriptor
+            
+            def mock_open(path, flags, *args, **kwargs):
+                if flags & os.O_NOFOLLOW:
+                    raise OSError(errno.EINVAL, "Invalid argument")
+                return mock_fd
+            
+            # Mock os.fstat to succeed
+            mock_stat_result = Mock()
+            mock_stat_result.st_mode = 0o100644  # Regular file
+            
+            # Mock os.fdopen to raise an exception
+            def mock_fdopen(fd, *args, **kwargs):
+                raise OSError("Simulated fdopen failure")
+            
+            with patch('os.open', side_effect=mock_open), \
+                 patch('os.fstat', return_value=mock_stat_result), \
+                 patch('os.fdopen', side_effect=mock_fdopen), \
+                 patch('os.close', side_effect=mock_close):
+                
+                # Run the tool - should fail due to fdopen error
+                result = asyncio.run(tool.execute(config, path=str(test_file)))
+        
+        # Verify the file descriptor was closed even though fdopen failed
+        assert len(close_calls) == 1, f"Expected 1 os.close call, got {len(close_calls)}"
+        assert close_calls[0] == mock_fd, f"Expected os.close called with fd={mock_fd}, got {close_calls[0]}"
+        
+        # Verify the result is an error (as expected)
+        assert result.is_error
+        assert "Secure fallback failed" in result.error
+
+
+def test_readfile_fallback_fd_closed_on_non_regular_file():
+    """Test that file descriptors are closed when fstat reveals a non-regular file."""
+    import asyncio
+    import errno
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file
+        test_file = tmpdir_path / "test.txt"
+        test_file.write_text("test content")
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(tmpdir_path)
+        config.allowed_paths = [str(tmpdir_path)]
+        
+        # Track calls to os.close
+        close_calls = []
+        original_close = os.close
+        
+        def mock_close(fd):
+            close_calls.append(fd)
+            original_close(fd)
+        
+        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
+            mock_validate.return_value = (True, str(test_file))
+            
+            # First os.open call with O_NOFOLLOW fails with EINVAL
+            # Second os.open call succeeds
+            mock_fd = 456  # Dummy file descriptor
+            
+            def mock_open(path, flags, *args, **kwargs):
+                if flags & os.O_NOFOLLOW:
+                    raise OSError(errno.EINVAL, "Invalid argument")
+                return mock_fd
+            
+            # Mock os.fstat to return a directory (not a regular file)
+            mock_stat_result = Mock()
+            mock_stat_result.st_mode = 0o040755  # Directory mode
+            
+            with patch('os.open', side_effect=mock_open), \
+                 patch('os.fstat', return_value=mock_stat_result), \
+                 patch('os.close', side_effect=mock_close):
+                
+                # Run the tool - should fail because it's not a regular file
+                result = asyncio.run(tool.execute(config, path=str(test_file)))
+        
+        # Verify the file descriptor was closed
+        assert len(close_calls) == 1, f"Expected 1 os.close call, got {len(close_calls)}"
+        assert close_calls[0] == mock_fd, f"Expected os.close called with fd={mock_fd}, got {close_calls[0]}"
+        
+        # Verify the result is an error (not a regular file)
+        assert result.is_error
+        assert "Not a regular file" in result.error
 
 
 if __name__ == "__main__":

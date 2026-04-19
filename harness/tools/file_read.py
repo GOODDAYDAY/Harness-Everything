@@ -91,22 +91,24 @@ class ReadFileTool(Tool):
                 )
             elif exc.errno == errno.EINVAL:
                 # O_NOFOLLOW not supported - use atomic open+fstat
+                fd = None
                 try:
                     fd = await asyncio.to_thread(os.open, resolved, os.O_RDONLY)
-                    try:
-                        # Use fstat on open fd to verify file type atomically
-                        stat_result = os.fstat(fd)
-                        if not stat.S_ISREG(stat_result.st_mode):
-                            os.close(fd)
-                            return ToolResult(error=f"Not a regular file: {resolved}", is_error=True)
-                        # Read from the already-open file descriptor
-                        with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
-                            lines = f.read().splitlines(keepends=True)
-                    except Exception:
-                        os.close(fd)  # Critical: prevent FD leak on any exception
-                        raise
+                    # Use fstat on open fd to verify file type atomically
+                    stat_result = os.fstat(fd)
+                    if not stat.S_ISREG(stat_result.st_mode):
+                        return ToolResult(error=f"Not a regular file: {resolved}", is_error=True)
+                    # Read from the already-open file descriptor
+                    with os.fdopen(fd, 'r', encoding='utf-8', errors='replace') as f:
+                        lines = f.read().splitlines(keepends=True)
                 except Exception as fallback_exc:
                     return ToolResult(error=f"Secure fallback failed: {fallback_exc}", is_error=True)
+                finally:
+                    if fd is not None:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass  # Already closed by fdopen or other means
             else:
                 return ToolResult(error=f"Failed to open file: {exc}", is_error=True)
         except Exception as exc:
