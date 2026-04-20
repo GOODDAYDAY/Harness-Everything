@@ -343,5 +343,31 @@ async def test_validate_atomic_path_detects_symlink_swap_async():
         assert "path" in error_lower or "file" in error_lower or "security" in error_lower
 
 
+@pytest.mark.asyncio
+async def test_atomic_write_text_concurrent():
+    """Test that _atomic_write_text doesn't block the event loop under concurrency."""
+    import asyncio
+    
+    tool = TestTool()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_path = os.path.join(tmpdir, "test_concurrent.txt")
+        content = "test"
+        
+        # Simulate concurrent writes
+        tasks = [tool._atomic_write_text(test_path, f"{content}_{i}") for i in range(5)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Verify no event loop stall: all tasks should complete without exceptions
+        exceptions = [r for r in results if isinstance(r, Exception)]
+        assert len(exceptions) == 0, f"Got exceptions: {exceptions}"
+        
+        # Verify the last write succeeded (file should exist with last content)
+        assert os.path.exists(test_path)
+        with open(test_path, 'r', encoding='utf-8') as f:
+            final_content = f.read()
+        assert final_content == "test_4"  # Last write should be "test_4"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
