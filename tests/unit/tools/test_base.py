@@ -157,5 +157,29 @@ def test_check_path_rejects_symlink_to_outside():
         assert "outside allowed" in result.error.lower() or "security" in result.error.lower()
 
 
+def test_guaranteed_fd_cleanup_returns_correct_tuple():
+    """Test that _guaranteed_fd_cleanup returns correct 2-tuple with error handling."""
+    tool = TestTool()
+    
+    # Test successful operation
+    def successful_operation(fd: int):
+        return fd * 2
+    
+    result, error = tool._guaranteed_fd_cleanup(42, successful_operation)
+    assert result == 84  # 42 * 2
+    assert error is None
+    
+    # Test error case - operation raises OSError
+    def failing_operation(fd: int):
+        raise OSError("Simulated file operation failure")
+    
+    result, error = tool._guaranteed_fd_cleanup(99, failing_operation)
+    assert result is None
+    assert isinstance(error, ToolResult)
+    assert error.is_error
+    assert "File operation failed on descriptor 99" in error.error
+    assert "Simulated file operation failure" in error.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

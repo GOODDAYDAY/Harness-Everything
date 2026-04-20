@@ -1084,6 +1084,22 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
         numbered_items = [line for line in lines if re.match(r'^\d+\.\s', line)]
         if not numbered_items:
             issues.append(f"{feedback_section} should contain numbered items (1., 2., etc.)")
+        else:
+            # Check that at least one numbered item contains concrete file/function reference
+            # Pattern matches: filename.py: function_name or filename.py function_name
+            has_concrete_reference = False
+            for item in numbered_items:
+                # Look for file.py: function or file.py function patterns
+                if re.search(r'\b\w+\.py\s*[: ]+\s*\w+\b', item):
+                    has_concrete_reference = True
+                    break
+                # Also check for file::function format
+                if '::' in item:
+                    has_concrete_reference = True
+                    break
+            
+            if not has_concrete_reference:
+                issues.append(f"{feedback_section} should contain at least one concrete file/function reference (e.g., 'file.py: function_name' or 'file::function')")
     
     # Check WHAT WOULD MAKE THIS 10/10 section if present
     if "WHAT WOULD MAKE THIS 10/10:" in text:
