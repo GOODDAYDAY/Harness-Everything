@@ -13,6 +13,7 @@ from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
 
 
+@enforce_atomic_validation
 class DeleteFileTool(Tool):
     name = "delete_file"
     description = "Delete a file."
@@ -49,6 +50,7 @@ class DeleteFileTool(Tool):
         return ToolResult(output=f"Deleted {resolved}")
 
 
+@enforce_atomic_validation
 class MoveFileTool(Tool):
     name = "move_file"
     description = "Move or rename a file."
@@ -81,9 +83,9 @@ class MoveFileTool(Tool):
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
 
-        # Create parent directories after validation to prevent TOCTOU
-        Path(dst).parent.mkdir(parents=True, exist_ok=True)
         try:
+            # Create parent directories inside try block to minimize TOCTOU window
+            Path(dst).parent.mkdir(parents=True, exist_ok=True)
             os.rename(src, dst)  # Atomic operation on validated path strings
         except FileNotFoundError:
             # File was deleted/moved by another process after validation
@@ -102,6 +104,7 @@ class MoveFileTool(Tool):
         return ToolResult(output=f"Moved {src} -> {dst}")
 
 
+@enforce_atomic_validation
 class CopyFileTool(Tool):
     name = "copy_file"
     description = "Copy a file to a new location."
