@@ -52,6 +52,18 @@ SCORING GUIDELINES (0-10 scale — enforce strict discrimination):
 - 9: Includes tests/validation for main scenarios — near production quality
 - 10: Comprehensive with edge case validation and metrics — production ready
 
+DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
+- CRITICAL RANGE (4-7): Most proposals fall here — focus on clear differentiation
+  - Score 4 vs 5: Does proposal name specific files/functions? If yes → ≥5, if no → 4
+  - Score 5 vs 6: Does proposal address main requirement completely? If yes → ≥6, if no → 5
+  - Score 6 vs 7: Does proposal handle edge cases? If yes → ≥7, if no → 6
+  - Score 7 vs 8: Is proposal testable and ready for code review? If yes → ≥8, if no → 7
+- DIMENSION DISCRIMINATION: Each checklist item (1-5) must show clear score differences
+  - Scores 4-5: Major gaps in one or more dimensions
+  - Scores 6-7: Moderate issues across dimensions
+  - Scores 8-9: Minor issues in specific dimensions
+  - Score 10: No issues in any dimension
+
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \
 concrete reason, the score is at most 8. \

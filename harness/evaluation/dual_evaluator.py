@@ -696,6 +696,28 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             warnings.append(f"Middle debate score {score} - verify reasoning quality and argument structure")
         elif mode == "implement" and score >= 5.0:
             warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
+    
+    # NEW: Enhanced discrimination for critical 4-7 range (most important for Spearman ρ)
+    if 4.0 <= score <= 7.0:
+        # Check for proper discrimination between adjacent scores
+        if score == 4.0 and not has_critical_issues:
+            warnings.append(f"Score {score} at lower boundary - verify this isn't a 5 (partial success) or 3 (fundamental issues)")
+        elif score == 5.0 and not has_critical_issues:
+            warnings.append(f"Score {score} in partial success range - ensure clear distinction from 4 (generic) and 6 (specific)")
+        elif score == 6.0 and not has_critical_issues:
+            warnings.append(f"Score {score} in specific but incomplete range - ensure clear distinction from 5 (partial) and 7 (mostly complete)")
+        elif score == 7.0 and not has_critical_issues:
+            warnings.append(f"Score {score} at upper boundary - verify this isn't a 6 (missing edge cases) or 8 (testable)")
+        
+        # Check for proper calibration anchor usage in critical range
+        if not has_calibration_anchors and not has_critical_issues:
+            warnings.append(f"Score {score} in critical discrimination range without calibration anchors - scores 4-7 require explicit reference to calibration criteria")
+        
+        # Check for dimension-based discrimination
+        if mode == "debate" and not has_dimension_scores:
+            warnings.append(f"Score {score} in debate mode without dimension scores - critical range scores should show multi-dimensional assessment")
+        elif mode == "implement" and not has_dimension_scores:
+            warnings.append(f"Score {score} in implement mode without dimension scores - critical range scores should show code quality dimensions")
 
     # Mode-specific score distribution validation
     if mode == "debate" and score > 8.0:
@@ -1265,6 +1287,23 @@ def parse_score(
             "parse_score: raw value %.2f is outside [%.0f, %.0f] — clamped to %.2f",
             raw, _SCORE_MIN, _SCORE_MAX, clamped,
         )
+    
+    # NEW: Enhanced discrimination logging for critical 4-7 range
+    if 4.0 <= clamped <= 7.0:
+        log.debug(
+            "parse_score: critical range score %.2f - ensure proper discrimination between adjacent scores",
+            clamped
+        )
+        # Log discrimination guidance for critical range
+        if 4.0 <= clamped < 5.0:
+            log.debug("  Score ~4: Should show generic approach without specific implementation")
+        elif 5.0 <= clamped < 6.0:
+            log.debug("  Score ~5: Should show partial success with specific elements")
+        elif 6.0 <= clamped < 7.0:
+            log.debug("  Score ~6: Should show specific implementation with gaps")
+        elif 7.0 <= clamped < 8.0:
+            log.debug("  Score ~7: Should show mostly complete implementation with minor edge cases missing")
+    
     return clamped
 
 

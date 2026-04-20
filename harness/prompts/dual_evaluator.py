@@ -47,6 +47,18 @@ DISCRIMINATION ENHANCEMENT: To improve evaluator discrimination (Spearman ρ), f
 4. For scores 8-9, emphasize minor issues while acknowledging quality
 5. Reserve score 10 for truly perfect implementations
 
+CRITICAL RANGE DISCRIMINATION (scores 4-7 — most important for Spearman ρ):
+- Score 4 (Correct but generic): Proposal identifies correct area but lacks specific implementation details
+- Score 5 (Correct and specific but incomplete): Proposal names concrete files/functions but has major gaps
+- Score 6 (Correct + specific but missing edge cases): Proposal has specific implementation but lacks important edge cases
+- Score 7 (Correct + specific + mostly complete): Proposal is mostly complete with only minor edge cases missing
+
+DISCRIMINATION CHECKLIST for scores 4-7:
+1. Score 4 vs 5: Does proposal name specific files/functions? If yes → ≥5, if no → 4
+2. Score 5 vs 6: Does proposal address main requirement completely? If yes → ≥6, if no → 5  
+3. Score 6 vs 7: Does proposal handle edge cases? If yes → ≥7, if no → 6
+4. Score 7 vs 8: Is proposal testable and ready for code review? If yes → ≥8, if no → 7
+
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \
 concrete reason, the score is at most 8. \
