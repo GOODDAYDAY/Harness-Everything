@@ -50,7 +50,7 @@ class EditFileTool(Tool):
         replace_all: bool = False,
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True, resolve_symlinks=True)
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)
         if not is_valid_path:
             return path_validated  # This is the ToolResult error
         resolved = path_validated
