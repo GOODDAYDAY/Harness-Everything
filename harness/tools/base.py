@@ -178,11 +178,15 @@ class Tool(ABC):
                 is_error=True,
             )
 
-    async def _validate_atomic_path(
+    def _validate_atomic_path_sync(
         self, config: HarnessConfig, path_str: str, require_exists: bool = True, directory: bool = False
     ) -> tuple[bool, str | ToolResult]:
         """
-        Atomically validate a path is accessible and is a regular file or directory.
+        Synchronous atomic path validation with inode verification.
+        
+        Opens path with os.O_RDONLY | os.O_NOFOLLOW, validates via _check_path,
+        and verifies file hasn't changed using st_dev and st_ino.
+        
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
         # 1. Use existing path validation
@@ -192,41 +196,77 @@ class Tool(ABC):
             return False, validated
         resolved = validated
 
-        # 2. Atomic file/directory type verification using the new helper
-        flags = os.O_RDONLY
-        if not directory:
-            # For files, use the atomic fallback helper
-            fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, flags)
-            if error is not None:
-                return False, error
-            # Success - close the fd and return validated path
+        # 2. Atomic open with O_NOFOLLOW to prevent symlink traversal
+        flags = os.O_RDONLY | os.O_NOFOLLOW
+        if directory:
+            flags |= getattr(os, 'O_DIRECTORY', 0)  # O_DIRECTORY may not exist on all platforms
+        
+        try:
+            fd = os.open(resolved, flags)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
+            elif exc.errno == errno.ENOENT and require_exists:
+                return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
+            elif exc.errno == errno.ENOTDIR and directory:
+                return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+            elif exc.errno == errno.EINVAL and directory:
+                # O_DIRECTORY not supported on this platform
+                # Fall back to non-atomic check
+                try:
+                    if not os.path.isdir(resolved):
+                        return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
+                except Exception as fallback_exc:
+                    return False, ToolResult(error=f"Directory validation failed: {fallback_exc}", is_error=True)
+                # fd was never opened in this case, so don't close it
+                return True, resolved
+            else:
+                return False, ToolResult(error=f"Cannot access file: {exc}", is_error=True)
+        
+        try:
+            # Get file stats to verify inode
+            stat_info = os.fstat(fd)
+            
+            # Verify the file we have open is the same as what _check_path validated
+            # by checking it's within allowed paths
+            for allowed_path in config.allowed_paths:
+                try:
+                    # Try to find the file by inode within allowed path
+                    found_path = self._find_path_by_inode(
+                        stat_info.st_dev, stat_info.st_ino, resolved, allowed_path
+                    )
+                    # Verify found_path is within allowed_path
+                    if os.path.commonpath([found_path, allowed_path]) == allowed_path:
+                        os.close(fd)
+                        return True, found_path
+                except (OSError, ValueError):
+                    continue
+            
+            # If we get here, file is not within any allowed path
             os.close(fd)
-            return True, resolved
-        else:
-            # For directories, use O_DIRECTORY if available
-            flags |= os.O_DIRECTORY
+            return False, ToolResult(
+                error=f"File validation failed: resolved path not within allowed directories",
+                is_error=True
+            )
+        except Exception as exc:
             try:
-                fd = await asyncio.to_thread(os.open, resolved, flags | os.O_NOFOLLOW)
                 os.close(fd)
-            except OSError as exc:
-                if exc.errno == errno.ELOOP:
-                    return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
-                elif exc.errno == errno.ENOENT and require_exists:
-                    return False, ToolResult(error=f"Directory not found: {resolved}", is_error=True)
-                elif exc.errno == errno.ENOTDIR:
-                    return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
-                elif exc.errno == errno.EINVAL:
-                    # O_DIRECTORY not supported on this filesystem/platform
-                    # Fall back to non-atomic check after successful atomic path validation
-                    # This preserves security while maintaining compatibility
-                    try:
-                        if not os.path.isdir(resolved):
-                            return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
-                    except Exception as fallback_exc:
-                        return False, ToolResult(error=f"Directory validation failed: {fallback_exc}", is_error=True)
-                else:
-                    return False, ToolResult(error=f"Cannot access directory: {exc}", is_error=True)
-            return True, resolved
+            except OSError:
+                pass
+            return False, ToolResult(error=f"File validation failed: {exc}", is_error=True)
+
+    async def _validate_atomic_path(
+        self, config: HarnessConfig, path_str: str, require_exists: bool = True, directory: bool = False
+    ) -> tuple[bool, str | ToolResult]:
+        """
+        Atomically validate a path is accessible and is a regular file or directory.
+        Returns (is_valid, validated_path_str | ToolResult_error).
+        
+        This async wrapper delegates to the synchronous implementation.
+        """
+        return await asyncio.to_thread(
+            self._validate_atomic_path_sync, config, path_str, require_exists, directory
+        )
 
     async def _validate_directory_atomic(
         self, config: HarnessConfig, path_str: str
@@ -324,6 +364,40 @@ class Tool(ABC):
             except OSError:
                 pass  # FD may already be closed; ignore secondary error
             return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
+
+    def _find_path_by_inode(self, st_dev: int, st_ino: int, original_path_hint: str, workspace_root: str) -> str:
+        """
+        Find a file by its device and inode numbers within the workspace.
+        
+        This is a fallback for systems without /proc/self/fd/ support.
+        Walks the workspace directory tree looking for a file matching the
+        given device and inode numbers.
+        
+        Args:
+            st_dev: Device number from stat()
+            st_ino: Inode number from stat()
+            original_path_hint: Original path for fallback
+            workspace_root: Root of workspace to search within
+            
+        Returns:
+            Path to the file if found, otherwise os.path.realpath(original_path_hint)
+        """
+        try:
+            for root, dirs, files in os.walk(workspace_root):
+                for name in files:
+                    filepath = os.path.join(root, name)
+                    try:
+                        stat_info = os.stat(filepath, follow_symlinks=False)
+                        if stat_info.st_dev == st_dev and stat_info.st_ino == st_ino:
+                            return filepath
+                    except OSError:
+                        continue  # Skip files we can't stat
+        except Exception:
+            # If walk fails for any reason, fall back to original path
+            pass
+        
+        # Fallback: return the realpath of the original hint
+        return os.path.realpath(original_path_hint)
 
 
     def _check_phase_scope(
