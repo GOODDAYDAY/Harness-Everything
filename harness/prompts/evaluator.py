@@ -42,6 +42,27 @@ DISCRIMINATION GUIDELINES (critical for consistent scoring):
 - Score 9: Proposal includes tests/validation for main scenarios
 - Score 10: Proposal includes comprehensive validation with metrics
 
+CRITICAL RANGE DISCRIMINATION (4-7) — Spearman ρ optimization:
+- Score 4.0: Generic approach — identifies correct area but NO specific file/function references
+- Score 4.5: Generic with hints — mentions some specifics but not enough for full 5.0
+- Score 5.0: Specific but incomplete — names concrete files/functions but missing major implementation details
+- Score 5.5: Specific with partial details — has some implementation details but not enough for 6.0
+- Score 6.0: Mostly complete — addresses main requirements but missing important edge cases
+- Score 6.5: Nearly complete — handles main requirements and some edge cases but not all
+- Score 7.0: Complete with minor issues — all requirements addressed, only minor polish needed
+
+DISCRIMINATION DECISION TREE for critical range:
+1. Does proposal name specific files/functions? NO → Score ≤ 4.5, YES → Score ≥ 5.0
+2. Does proposal address main requirements completely? NO → Score ≤ 5.5, YES → Score ≥ 6.0  
+3. Does proposal handle edge cases? NO → Score ≤ 6.5, YES → Score ≥ 7.0
+4. Is proposal testable and ready for code review? NO → Score ≤ 7.5, YES → Score ≥ 8.0
+
+FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
+- 4.5: MUST explain which specific elements push it above 4.0, AND what's missing for 5.0
+- 5.5: MUST explain which implementation details are present (pushing toward 6.0), AND what major gaps remain
+- 6.5: MUST explain which edge cases are addressed (pushing toward 7.0), AND what issues remain
+- ALWAYS use fractional scores when proposal clearly falls between integer criteria
+
 SCORING GUIDELINES (0-10 scale — enforce strict discrimination):
 - 0-3: Critical failure — proposal is fundamentally wrong, dangerous, or broken
 - 4: Identifies correct area but lacks any concrete implementation details
@@ -159,6 +180,20 @@ DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
   - For score 6.0: Verify clear distinction from 5.0 (partial) and 7.0 (mostly complete) - show testability evidence
   - For score 7.0: Verify this isn't actually 6.0 or 8.0 - is core goal fully achieved with only minor issues?
   - For fractional scores: ALWAYS explain why it's not the integer above or below
+
+CRITICAL RANGE DECISION TREE (Spearman ρ optimization):
+1. Does execution achieve ANY part of core goal? NO → Score ≤ 4.0, YES → Score ≥ 4.5
+2. Does execution name specific files/functions? NO → Score ≤ 4.5, YES → Score ≥ 5.0
+3. Does execution achieve MAJOR functionality? NO → Score ≤ 5.5, YES → Score ≥ 6.0
+4. Does execution MOSTLY work with only minor issues? NO → Score ≤ 6.5, YES → Score ≥ 7.0
+5. Is core goal FULLY achieved? NO → Score ≤ 7.5, YES → Score ≥ 8.0
+
+FRACTIONAL SCORE VALIDATION (required for Spearman ρ):
+- Before assigning fractional score, explicitly check BOTH adjacent integer scores
+- For 4.5: Confirm it's better than 4.0 (has specific elements) AND worse than 5.0 (missing major functionality)
+- For 5.5: Confirm it's better than 5.0 (has major functionality) AND worse than 6.0 (missing completeness)
+- For 6.5: Confirm it's better than 6.0 (mostly works) AND worse than 7.0 (has significant issues)
+- For 7.5: Confirm it's better than 7.0 (fully achieved) AND worse than 8.0 (needs polish)
 
 EVALUATION APPROACH:
 1. STATE the core goal of the task in one sentence — be specific, not vague \
