@@ -13,7 +13,7 @@ import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional, Tuple
 
 from harness.core.config import HarnessConfig
 from harness.core.security import validate_path_security
@@ -306,6 +306,24 @@ class Tool(ABC):
                     is_error=True
                 )
 
+    def _guaranteed_fd_cleanup(self, fd: int, operation: Callable[[int], Any]) -> Tuple[Any, Optional[ToolResult]]:
+        """
+        Execute `operation(fd)` and guarantee `os.close(fd)` is called on failure.
+        Returns (result, None) on success, or (None, ToolResult) on failure.
+        
+        On success, ownership of `fd` is transferred to the result of `operation`.
+        On failure, `fd` is closed before returning an error.
+        """
+        try:
+            result = operation(fd)  # e.g., os.fdopen(fd, 'rb')
+            return result, None
+        except Exception as exc:
+            # Close fd only on operation failure
+            try:
+                os.close(fd)
+            except OSError:
+                pass  # FD may already be closed; ignore secondary error
+            return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
 
 
     def _check_phase_scope(
