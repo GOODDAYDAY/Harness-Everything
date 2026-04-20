@@ -22,7 +22,8 @@
       "mkfs",
       "dd"
     ],
-    "max_tool_turns": 20,
+    "max_tool_turns": 60,
+    "// max_tool_turns=60": "v1 was 20; every v2 round hit the 20 cap while still doing read_file/grep_search, leaving 0 budget for actual writes (4/7 rounds empty commits). Raised to 60 so executor has room to read → edit → verify each file in the planner's plan. Cost scales with demand: LLM exits early when it hits stop=end_turn, so simple tasks stay cheap; only genuinely complex plans use the extra budget.",
     "log_level": "INFO"
   },
   "outer_rounds": 10,
