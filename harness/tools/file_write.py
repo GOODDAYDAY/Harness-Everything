@@ -42,7 +42,7 @@ class WriteFileTool(Tool):
         parent_dir = Path(resolved).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
             is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
-                config, str(parent_dir), require_exists=False, check_scope=True
+                config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=True
             )
             if not is_valid_parent:
                 return parent_result  # This is a ToolResult error
