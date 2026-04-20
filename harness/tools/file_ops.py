@@ -138,6 +138,12 @@ class CopyFileTool(Tool):
         # Proceed with the copy using async thread
         try:
             await asyncio.to_thread(shutil.copy2, src, dst)
+        except FileNotFoundError:
+            # File was deleted by another process after validation
+            return ToolResult(
+                error=f"Source file disappeared after validation: {src}",
+                is_error=True
+            )
         except OSError as exc:
             # Handle specific OS errors with user-friendly messages
             if exc.errno == errno.EXDEV:
