@@ -11,7 +11,7 @@ import logging
 import os  # Import for path operations; do not re-import in _check_path.
 import stat
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
@@ -29,6 +29,7 @@ class ToolResult:
     error: str = ""
     is_error: bool = False
     elapsed_s: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_api(self) -> dict[str, Any]:
         """Format as a tool_result content block for the Claude API."""

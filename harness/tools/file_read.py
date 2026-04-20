@@ -84,4 +84,13 @@ class ReadFileTool(Tool):
         # Extract filename from resolved path
         filename = os.path.basename(resolved)
         header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
-        return ToolResult(output=header + numbered)
+        
+        # Create structured metadata with line numbers and content
+        lines_metadata = [
+            (start + i + 1, line) for i, line in enumerate(selected)
+        ]
+        
+        return ToolResult(
+            output=header + numbered,
+            metadata={"lines": lines_metadata}
+        )
