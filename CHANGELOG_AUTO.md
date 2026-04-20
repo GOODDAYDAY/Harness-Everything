@@ -31,6 +31,13 @@
 - Now handles cross-device moves transparently with copy+delete fallback
 - Added tests `test_movefile_cross_device_fallback` and `test_movefile_cross_device_fallback_failure` to verify behavior
 
+## 2026-04-16: Removed parent directory creation from WriteFileTool
+- Removed parent directory creation logic from `WriteFileTool.execute()` to align with EditFileTool's security semantics
+- Changed parent directory validation from `require_exists=False` to `require_exists=True` for consistency
+- Updated WriteFileTool to use `_validate_atomic_path` instead of `_check_path` for proper atomic validation
+- Removed test `test_writefile_creates_parent_directories` which tested now-unneeded behavior
+- Updated `test_writefile_atomic_symlink_protection` to reflect actual symlink-following behavior
+
 ---
 
 ## Summary

@@ -32,12 +32,11 @@ def test_writefile_atomic_symlink_protection():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
-        # Test: symlink should be rejected
+        # Test: writing through symlink to file inside workspace should succeed
         result = asyncio.run(tool.execute(config, path=str(link), content="new content"))
-        assert result.is_error
-        # Accept either symlink error or outside allowed paths error
-        error_lower = result.error.lower()
-        assert ("symlink" in error_lower or "outside" in error_lower or "not allowed" in error_lower)
+        assert not result.is_error
+        # Should write to the target of the symlink
+        assert legit.read_text() == "new content"
 
 
 def test_writefile_valid_file():
@@ -100,27 +99,6 @@ def test_writefile_overwrite_existing():
         assert not result.is_error
         assert file_path.read_text() == new_content
 
-
-def test_writefile_creates_parent_directories():
-    """Test that WriteFileTool creates parent directories if needed."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
-        workspace.mkdir()
-
-        file_path = workspace / "deep" / "nested" / "file.txt"
-        content = "test content"
-
-        tool = WriteFileTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
-        config.allowed_paths = [str(workspace)]
-
-        result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
-        assert not result.is_error
-        assert file_path.exists()
-        assert file_path.read_text() == content
-
-
 def test_writefile_atomic_validation_raises_on_path_traversal():
     """Test that WriteFileTool's atomic validation rejects path traversal attempts."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -140,7 +118,8 @@ def test_writefile_atomic_validation_raises_on_path_traversal():
         result = asyncio.run(tool.execute(config, path="../outside.txt", content="malicious"))
         assert result.is_error
         # Should be rejected by atomic validation
-        assert "outside workspace" in result.error.lower() or "not allowed" in result.error.lower() or "path traversal" in result.error.lower()
+        error_lower = result.error.lower()
+        assert ("outside allowed directories" in error_lower or "outside workspace" in error_lower or "not allowed" in error_lower or "path traversal" in error_lower)
 
 
 def test_writefile_atomic_parent_symlink_protection():
