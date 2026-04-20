@@ -25,6 +25,12 @@
 - Now correctly detects symlink swaps by comparing opened directory descriptor with original path stats
 - Security test `test_read_file_atomically_toctou_dir_fd_validation` now passes with correct behavior
 
+## 2026-04-16: Cross-device move fallback in MoveFileTool
+- Fixed cross-device move bug in `MoveFileTool.execute()` by implementing fallback using `shutil.copy2` + `os.unlink`
+- Previously failed with "cross-device move not supported" error when moving files across different filesystems
+- Now handles cross-device moves transparently with copy+delete fallback
+- Added tests `test_movefile_cross_device_fallback` and `test_movefile_cross_device_fallback_failure` to verify behavior
+
 ---
 
 ## Summary

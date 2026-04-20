@@ -108,12 +108,23 @@ class MoveFileTool(Tool):
                 is_error=True
             )
         except OSError as exc:
-            # Handle cross-device moves (EXDEV) and other OS errors
+            # Handle cross-device moves (EXDEV) with fallback to copy+delete
             if exc.errno == errno.EXDEV:
-                return ToolResult(
-                    error=f"Cannot move '{src}' to '{dst}': cross-device move not supported. Use separate copy and delete operations.",
-                    is_error=True
-                )
+                try:
+                    # Fallback: copy then delete source
+                    shutil.copy2(src, dst)
+                    os.unlink(src)
+                    return ToolResult(output=f"Moved {src} -> {dst} (cross-device via copy+delete)")
+                except OSError as copy_exc:
+                    return ToolResult(
+                        error=f"Cross-device move failed during fallback copy/delete: {copy_exc}",
+                        is_error=True
+                    )
+                except Exception as copy_exc:
+                    return ToolResult(
+                        error=f"Unexpected error during cross-device move fallback: {copy_exc}",
+                        is_error=True
+                    )
             return ToolResult(error=f"Move failed: {exc}", is_error=True)
         return ToolResult(output=f"Moved {src} -> {dst}")
 

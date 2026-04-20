@@ -85,8 +85,9 @@ def test_movefile_atomic_symlink_protection():
 
         tool = MoveFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        config.allowed_paths = [str(workspace)]
+        config.workspace = str(workspace)
+        # Include workspace and all parent directories up to /tmp
+        config.allowed_paths = [str(workspace), tmpdir, "/tmp"]
 
         # Test: symlink should be rejected
         result = asyncio.run(tool.execute(config, source=str(link), destination=str(workspace / "moved.txt")))
@@ -316,8 +317,8 @@ def test_deletefile_atomic_unlink_no_exists_check():
             assert "disappeared after validation" in result.error  # Specific new error message
 
 
-def test_movefile_cross_device_error_no_copy_suggestion():
-    """Test that MoveFileTool's cross-device error does not suggest copy_file (security bypass)."""
+def test_movefile_cross_device_fallback():
+    """Test that MoveFileTool handles cross-device moves with copy+delete fallback."""
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace = Path(tmpdir) / "workspace"
         workspace.mkdir()
@@ -328,26 +329,64 @@ def test_movefile_cross_device_error_no_copy_suggestion():
         
         tool = MoveFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        # Include both workspace and its parent in allowed paths for parent directory checks
+        config.workspace = str(workspace)
+        # Include workspace and its parent in allowed paths
         config.allowed_paths = [str(workspace), tmpdir]
         
-        # Mock os.rename to raise EXDEV (cross-device move error)
-        with patch('os.rename', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
-            result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+        # Mock the validation methods to succeed
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            # Mock source validation
+            mock_validate.side_effect = [
+                (True, str(source)),  # source validation
+                (True, str(destination)),  # destination validation
+                (True, str(workspace)),  # parent directory validation
+            ]
             
-            # Should return an error
-            assert result.is_error
+            # Mock os.rename to raise EXDEV error to trigger fallback
+            with patch('os.rename', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
+                # Mock shutil.copy2 and os.unlink to verify they're called
+                with patch('shutil.copy2') as mock_copy2, patch('os.unlink') as mock_unlink:
+                    mock_copy2.return_value = None
+                    mock_unlink.return_value = None
+                    
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert not result.is_error, f"Expected success but got error: {result.error}"
+                    assert "cross-device via copy+delete" in result.output
+                    mock_copy2.assert_called_once_with(str(source), str(destination))
+                    mock_unlink.assert_called_once_with(str(source))
+
+
+def test_movefile_cross_device_fallback_failure():
+    """Test that MoveFileTool reports error when cross-device fallback fails."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = MoveFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace), tmpdir]
+        
+        # Mock the validation methods to succeed
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            # Mock source validation
+            mock_validate.side_effect = [
+                (True, str(source)),  # source validation
+                (True, str(destination)),  # destination validation
+                (True, str(workspace)),  # parent directory validation
+            ]
             
-            # Error should contain "cross-device move not supported"
-            assert "cross-device move not supported" in result.error.lower()
-            
-            # CRITICAL: Error should NOT suggest "copy_file" (security bypass)
-            assert "copy_file" not in result.error.lower(), \
-                "Security vulnerability: cross-device error suggests copy_file, creating a TOCTOU bypass vector"
-            
-            # Should suggest separate operations instead
-            assert "separate copy and delete" in result.error.lower()
+            # Mock os.rename to raise EXDEV error to trigger fallback
+            with patch('os.rename', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
+                # Mock shutil.copy2 to fail
+                with patch('shutil.copy2', side_effect=OSError("Permission denied")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "Cross-device move failed during fallback" in result.error
 
 
 def test_delete_file_atomic_validation_race_condition():
