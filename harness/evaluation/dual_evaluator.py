@@ -699,7 +699,7 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
     
     # NEW: Enhanced discrimination for critical 4-7 range (most important for Spearman ρ)
     if 4.0 <= score <= 7.0:
-        # Check for proper discrimination between adjacent scores
+        # Check for proper discrimination between adjacent scores (including fractional)
         if score == 4.0 and not has_critical_issues:
             warnings.append(f"Score {score} at lower boundary - verify this isn't a 5 (partial success) or 3 (fundamental issues)")
         elif score == 5.0 and not has_critical_issues:
@@ -708,6 +708,23 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             warnings.append(f"Score {score} in specific but incomplete range - ensure clear distinction from 5 (partial) and 7 (mostly complete)")
         elif score == 7.0 and not has_critical_issues:
             warnings.append(f"Score {score} at upper boundary - verify this isn't a 6 (missing edge cases) or 8 (testable)")
+        
+        # NEW: Enhanced fractional score discrimination validation
+        # Fractional scores (4.5, 5.5, 6.5) should show nuanced discrimination
+        if score % 1.0 != 0:  # This is a fractional score
+            fractional_part = score - int(score)
+            if fractional_part == 0.5:
+                # Half-point scores require clear justification for why not full point
+                warnings.append(f"Fractional score {score} - ensure clear justification for why this isn't {int(score)} (too low) or {int(score)+1} (too high)")
+            elif fractional_part not in [0.0, 0.5]:
+                # Other fractional scores (e.g., 4.3, 5.7) need special justification
+                warnings.append(f"Non-standard fractional score {score} - requires explicit justification for precision beyond half-point increments")
+            
+            # Mode-specific fractional score validation
+            if mode == "debate":
+                warnings.append(f"Debate fractional score {score} - verify nuanced reasoning assessment with clear dimension breakdown")
+            elif mode == "implement":
+                warnings.append(f"Implement fractional score {score} - verify nuanced code quality assessment with specific defect references")
         
         # Check for proper calibration anchor usage in critical range
         if not has_calibration_anchors and not has_critical_issues:
@@ -718,6 +735,16 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             warnings.append(f"Score {score} in debate mode without dimension scores - critical range scores should show multi-dimensional assessment")
         elif mode == "implement" and not has_dimension_scores:
             warnings.append(f"Score {score} in implement mode without dimension scores - critical range scores should show code quality dimensions")
+        
+        # NEW: Dimension score correlation validation
+        if has_dimension_scores:
+            # Calculate average of dimension scores
+            dimension_avg = sum(dimension_scores.values()) / len(dimension_scores)
+            score_diff = abs(score - dimension_avg)
+            if score_diff > 1.0:
+                warnings.append(f"Score {score} differs significantly from dimension average {dimension_avg:.1f} (Δ={score_diff:.1f}) - verify overall score aligns with dimension assessments")
+            elif score_diff > 0.5:
+                warnings.append(f"Score {score} differs moderately from dimension average {dimension_avg:.1f} (Δ={score_diff:.1f}) - ensure overall score justification references dimension breakdown")
 
     # Mode-specific score distribution validation
     if mode == "debate" and score > 8.0:
