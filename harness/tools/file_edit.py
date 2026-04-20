@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
-from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult

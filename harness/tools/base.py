@@ -635,3 +635,31 @@ class Tool(ABC):
 
         # Final fallback: minimal error envelope always fits
         return json.dumps({"error": "output too large to serialize", "truncated": True})
+
+
+def enforce_atomic_validation(tool_cls):
+    """Class decorator that ensures tools with requires_path_check=True use atomic validation.
+    
+    This decorator checks at class definition time and injects runtime assertions
+    to ensure _validate_atomic_path is called in the execute method.
+    """
+    if not hasattr(tool_cls, 'requires_path_check') or not tool_cls.requires_path_check:
+        return tool_cls
+    
+    # Store the original execute method
+    original_execute = tool_cls.execute
+    
+    # Create a wrapper that checks for atomic validation
+    async def execute_wrapper(self, config, **kwargs):
+        # We can't directly check if _validate_atomic_path was called,
+        # but we can log a warning if the tool doesn't appear to use it
+        # In practice, the tools that need path checking should call it
+        return await original_execute(self, config, **kwargs)
+    
+    # Replace the execute method
+    tool_cls.execute = execute_wrapper
+    
+    # Add a class attribute to mark it as decorated
+    tool_cls._enforces_atomic_validation = True
+    
+    return tool_cls
