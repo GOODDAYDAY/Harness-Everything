@@ -1452,10 +1452,14 @@ class DualEvaluator:
         basic_feedback = extract_structured_feedback(basic_resp.text, "basic")
         diffusion_feedback = extract_structured_feedback(diffusion_resp.text, "diffusion")
         
+        # Create critique strings from structured feedback
+        basic_critique = format_critique_from_feedback(basic_feedback)
+        diffusion_critique = format_critique_from_feedback(diffusion_feedback)
+        
         # Calculate proper combined score using DualScore.combined property
         temp_dual_score = DualScore(
-            basic=ScoreItem(basic_score, ""),
-            diffusion=ScoreItem(diffusion_score, "")
+            basic=ScoreItem(basic_score, basic_critique),
+            diffusion=ScoreItem(diffusion_score, diffusion_critique)
         )
         combined_score = temp_dual_score.combined
         
@@ -1473,6 +1477,6 @@ class DualEvaluator:
             log.debug("Diffusion evaluator key risk: %s", diffusion_feedback["defect"])
 
         return DualScore(
-            basic=ScoreItem(basic_score, basic_resp.text),
-            diffusion=ScoreItem(diffusion_score, diffusion_resp.text),
+            basic=ScoreItem(basic_score, basic_critique),
+            diffusion=ScoreItem(diffusion_score, diffusion_critique),
         )
