@@ -44,12 +44,12 @@ DISCRIMINATION GUIDELINES (critical for consistent scoring):
 
 CRITICAL RANGE DISCRIMINATION (4-7) — Spearman ρ optimization:
 - Score 4.0: Generic approach — identifies correct area but NO specific file/function references
-- Score 4.5: Generic with hints — mentions some specifics but not enough for full 5.0
-- Score 5.0: Specific but incomplete — names concrete files/functions but missing major implementation details
-- Score 5.5: Specific with partial details — has some implementation details but not enough for 6.0
-- Score 6.0: Mostly complete — addresses main requirements but missing important edge cases
-- Score 6.5: Nearly complete — handles main requirements and some edge cases but not all
-- Score 7.0: Complete with minor issues — all requirements addressed, only minor polish needed
+- Score 4.5: Generic with hints — mentions SOME specific elements but not enough for full 5.0
+- Score 5.0: Specific but incomplete — names concrete files/functions but missing MAJOR implementation details
+- Score 5.5: Specific with partial details — has SOME implementation details but not enough for 6.0
+- Score 6.0: Mostly complete — addresses main requirements but missing IMPORTANT edge cases
+- Score 6.5: Nearly complete — handles main requirements and SOME edge cases but not all
+- Score 7.0: Complete with minor issues — ALL requirements addressed, only MINOR polish needed
 
 DISCRIMINATION DECISION TREE for critical range:
 1. Does proposal name specific files/functions? NO → Score ≤ 4.5, YES → Score ≥ 5.0
@@ -57,10 +57,16 @@ DISCRIMINATION DECISION TREE for critical range:
 3. Does proposal handle edge cases? NO → Score ≤ 6.5, YES → Score ≥ 7.0
 4. Is proposal testable and ready for code review? NO → Score ≤ 7.5, YES → Score ≥ 8.0
 
+CRITICAL DISCRIMINATION CHECKLIST (4-7 range):
+- Score 4.0: NO specific file/function references → if ANY specific reference → must be ≥4.5
+- Score 5.0: MUST have concrete file/function references AND show major gaps preventing 6.0
+- Score 6.0: MUST show testability evidence AND main requirements addressed (edge cases missing)
+- Score 7.0: MUST show FULL requirement coverage AND only edge cases missing
+
 FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
-- 4.5: MUST explain which specific elements push it above 4.0, AND what's missing for 5.0
-- 5.5: MUST explain which implementation details are present (pushing toward 6.0), AND what major gaps remain
-- 6.5: MUST explain which edge cases are addressed (pushing toward 7.0), AND what issues remain
+- 4.5: MUST explain: (1) which specific elements push it above 4.0, AND (2) what's missing for 5.0
+- 5.5: MUST explain: (1) which implementation details are present (pushing toward 6.0), AND (2) what major gaps remain
+- 6.5: MUST explain: (1) which edge cases are addressed (pushing toward 7.0), AND (2) what issues remain
 - ALWAYS use fractional scores when proposal clearly falls between integer criteria
 
 SCORING GUIDELINES (0-10 scale — enforce strict discrimination):
