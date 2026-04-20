@@ -1,7 +1,6 @@
 """Unit tests for harness.tools.file_edit."""
 
 import asyncio
-import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock
