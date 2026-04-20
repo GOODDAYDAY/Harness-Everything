@@ -73,7 +73,7 @@ class Tool(ABC):
 
     # ---- helpers ----
 
-    def _check_path(self, config: HarnessConfig, path: str, require_exists: bool = True) -> str | ToolResult:
+    def _check_path(self, config: HarnessConfig, path: str, require_exists: bool = True, resolve_symlinks: bool = True) -> str | ToolResult:
         """Validate a file path against security rules.
         
         Returns: str on success, ToolResult on validation failure.
@@ -82,6 +82,10 @@ class Tool(ABC):
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
         2. Resolve path with Path.resolve(strict=True) to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
+        
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
         
         This method addresses the TOCTOU vulnerability by using atomic symlink
         resolution before checking allowed paths.
@@ -182,13 +186,17 @@ class Tool(ABC):
 
     def _validate_atomic_path_sync(
         self, config: HarnessConfig, path_str: str, require_exists: bool = True, 
-        directory: bool = False, check_scope: bool = False
+        directory: bool = False, check_scope: bool = False, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Synchronous atomic path validation with inode verification.
         
         Opens path with os.O_RDONLY | os.O_NOFOLLOW, validates via _check_path,
         and verifies file hasn't changed using st_dev and st_ino.
+        
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
         
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
@@ -272,33 +280,42 @@ class Tool(ABC):
 
     async def _validate_atomic_path(
         self, config: HarnessConfig, path_str: str, require_exists: bool = True, 
-        directory: bool = False, check_scope: bool = False
+        directory: bool = False, check_scope: bool = False, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Atomically validate a path is accessible and is a regular file or directory.
         Returns (is_valid, validated_path_str | ToolResult_error).
         
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
+        
         This async wrapper delegates to the synchronous implementation.
         """
         return await asyncio.to_thread(
-            self._validate_atomic_path_sync, config, path_str, require_exists, directory, check_scope
+            self._validate_atomic_path_sync, config, path_str, require_exists, directory, check_scope, resolve_symlinks
         )
 
     async def _validate_directory_atomic(
-        self, config: HarnessConfig, path_str: str
+        self, config: HarnessConfig, path_str: str, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Atomically validate a path is accessible and is a directory.
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
         # Use the consolidated atomic path validation with directory flag
-        return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True)
+        return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True, resolve_symlinks=resolve_symlinks)
 
     async def _validate_and_prepare_parent_directory(
-        self, config: HarnessConfig, parent_path: str, require_exists: bool = True, check_scope: bool = False
+        self, config: HarnessConfig, parent_path: str, require_exists: bool = True, 
+        check_scope: bool = False, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Atomically validate and optionally create a parent directory.
+        
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
         
         Returns (is_valid, validated_path_str | ToolResult_error).
         If require_exists=False and directory doesn't exist, it will be created.
@@ -309,7 +326,8 @@ class Tool(ABC):
             
         # Validate parent directory exists and is not a symlink
         is_valid_parent, parent_validated = await self._validate_atomic_path(
-            config, parent_path, require_exists=require_exists, directory=True, check_scope=check_scope
+            config, parent_path, require_exists=require_exists, directory=True, 
+            check_scope=check_scope, resolve_symlinks=resolve_symlinks
         )
         if not is_valid_parent:
             return is_valid_parent, parent_validated
