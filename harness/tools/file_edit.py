@@ -68,7 +68,7 @@ class EditFileTool(Tool):
             # Create parent directory if it doesn't exist
             if not os.path.exists(parent_validated):
                 try:
-                    os.makedirs(parent_validated, exist_ok=False)
+                    os.makedirs(parent_validated, exist_ok=True)
                 except OSError as exc:
                     return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
 
