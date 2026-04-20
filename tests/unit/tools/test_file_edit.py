@@ -225,7 +225,7 @@ def test_editfile_toctou_symlink_attack_detection():
         # Mock the atomic validation to simulate TOCTOU attack detection
         tool._validate_atomic_path = AsyncMock(return_value=(
             False, 
-            ToolResult(error="Path validation failed: symlink attack detected")
+            ToolResult(error="Path validation failed: symlink attack detected", is_error=True)
         ))
         
         # Attempt to edit the file
