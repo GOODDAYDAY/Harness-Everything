@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +49,7 @@ class EditFileTool(Tool):
         replace_all: bool = False,
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True)
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)
         if not is_valid_path:
             return path_validated  # This is the ToolResult error
         resolved = path_validated
@@ -58,19 +57,11 @@ class EditFileTool(Tool):
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(resolved).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
-            # Validate parent directory exists and is not a symlink
-            is_valid_parent, parent_validated = await self._validate_atomic_path(
-                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
+                config, str(parent_dir), require_exists=True, check_scope=True, resolve_symlinks=True
             )
             if not is_valid_parent:
-                return parent_validated  # This is a ToolResult error
-            
-            # Create parent directory if it doesn't exist
-            if not os.path.exists(parent_validated):
-                try:
-                    os.makedirs(parent_validated, exist_ok=True)
-                except OSError as exc:
-                    return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+                return parent_result  # This is a ToolResult error
 
         # Use the shared atomic read helper
         text, read_error = await self._atomic_read_text(config, resolved)

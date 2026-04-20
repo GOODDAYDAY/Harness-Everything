@@ -19,6 +19,9 @@ class ReadFileTool(Tool):
     )
     requires_path_check = True
     tags = frozenset({"file_read"})
+    
+    # Maximum allowed lines to prevent resource exhaustion attacks
+    MAX_READ_LINES = 10000
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -62,26 +65,46 @@ class ReadFileTool(Tool):
             return ToolResult(error=f"offset must be ≥ 1, got {offset}", is_error=True)
         if limit < 1:
             return ToolResult(error=f"limit must be ≥ 1, got {limit}", is_error=True)
+        if limit > self.MAX_READ_LINES:
+            return ToolResult(
+                error=f"limit exceeds maximum allowed lines ({self.MAX_READ_LINES}), got {limit}",
+                is_error=True
+            )
 
-        # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path)
-        if not is_valid_path:
-            return path_validated  # This is the ToolResult error
-        resolved = path_validated
-
-        # Use the shared atomic read helper
-        text, read_error = await self._atomic_read_text(config, resolved)
-        if read_error is not None:
-            return read_error
+        # Combined atomic validation and read
+        atomic_result = await self._validate_and_read_atomic(
+            config, path, require_exists=True, check_scope=True, resolve_symlinks=True
+        )
+        if isinstance(atomic_result, ToolResult):
+            return atomic_result  # Error from validation or read
+        text, resolved = atomic_result
         lines = text.splitlines(keepends=True)
 
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
-        numbered = "".join(
-            f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
-        )
         total = len(lines)
-        # Extract filename from resolved path
-        filename = os.path.basename(resolved)
-        header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
-        return ToolResult(output=header + numbered)
+        
+        # Handle empty selection (when start >= total)
+        if not selected:
+            # Extract filename from resolved path
+            filename = os.path.basename(resolved)
+            header = f"[{filename}] lines 0-0 of {total}\n"
+            numbered = ""
+            lines_metadata = []
+        else:
+            numbered = "".join(
+                f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
+            )
+            # Extract filename from resolved path
+            filename = os.path.basename(resolved)
+            header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
+            
+            # Create structured metadata with line numbers and content
+            lines_metadata = [
+                (start + i + 1, line) for i, line in enumerate(selected)
+            ]
+        
+        return ToolResult(
+            output=header + numbered,
+            metadata={"lines": lines_metadata}
+        )

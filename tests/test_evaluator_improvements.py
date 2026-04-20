@@ -85,6 +85,41 @@ def test_fractional_score_discrimination():
     assert "critical quality signals" in _MODE_HEADERS["implement"].lower()
 
 
+def test_enhanced_discrimination_guidance():
+    """Test enhanced discrimination guidance for critical 4-7 range (Spearman ρ optimization)."""
+    from harness.evaluation.dual_evaluator import validate_score_calibration
+    
+    # Test discrimination guidance for each score level in critical range
+    test_cases = [
+        (4.0, "Score 4.0 (Correct but generic): Verify proposal identifies correct area but lacks ANY specific implementation details. NO concrete file/function references."),
+        (4.5, "Score 4.5: Between generic and specific - MUST explain which specific elements push it above 4, AND what's missing for 5. Mode-specific validation applies."),
+        (5.0, "Score 5.0 (Correct and specific but incomplete): Verify proposal names concrete files/functions but has MAJOR gaps. MUST cite specific evidence."),
+        (5.5, "Score 5.5: Between specific and mostly complete - MUST explain which edge cases are addressed (pushing toward 6) AND what major gaps remain (keeping at 5). Mode-specific validation applies."),
+        (6.0, "Score 6.0 (Correct + specific + mostly complete): Verify proposal has specific implementation, addresses main requirements, and shows testability evidence."),
+        (6.5, "Score 6.5: Between mostly complete and complete - MUST explain which testability elements are present (pushing toward 7) AND what edge cases are missing (keeping at 6). Mode-specific validation applies."),
+        (7.0, "Score 7.0 (Complete with minor issues): Verify proposal demonstrates FULL requirement coverage with only edge cases missing. MUST show execution validation."),
+    ]
+    
+    for score, expected_guidance in test_cases:
+        warnings = validate_score_calibration(score, "basic", {"evaluator_output": f"Score {score}: Test output"})
+        # Check that the enhanced guidance is present in warnings
+        guidance_found = any(expected_guidance in w for w in warnings)
+        assert guidance_found, f"Expected discrimination guidance for score {score} not found in warnings: {warnings}"
+        
+        # Check discrimination checklist for scores >= 5.0
+        if score >= 5.0:
+            checklist_found = any("Discrimination checklist" in w for w in warnings)
+            assert checklist_found, f"Expected discrimination checklist for score {score} not found in warnings: {warnings}"
+            
+            # Verify specific checklist items based on score
+            if score >= 5.0:
+                assert any("SPECIFIC files/functions" in w for w in warnings), f"Missing specific files/functions checklist for score {score}"
+            if score >= 6.0:
+                assert any("MAIN requirement COMPLETELY" in w for w in warnings), f"Missing main requirement checklist for score {score}"
+            if score >= 7.0:
+                assert any("EDGE CASES" in w for w in warnings), f"Missing edge cases checklist for score {score}"
+
+
 def test_structured_output_format():
     """Test that evaluator output follows structured format."""
     from harness.evaluation.dual_evaluator import _STRICT_RE

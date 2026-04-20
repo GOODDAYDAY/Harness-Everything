@@ -12,6 +12,7 @@ import re
 from typing import Any, Literal
 
 from harness.core.llm import LLM
+from harness.evaluation.metrics import calculate_critical_range_discrimination
 from harness.pipeline.phase import DualScore, ScoreItem
 from harness.prompts import dual_evaluator as default_prompts
 
@@ -112,6 +113,56 @@ _MODE_HEADERS: dict[str, str] = {
         "- Use fractional scores to reflect nuanced quality assessment\n\n"
     ),
 }
+
+
+def format_critique_from_feedback(feedback_dict: dict[str, Any]) -> str:
+    """Format structured feedback dictionary into a readable critique string.
+    
+    Args:
+        feedback_dict: The structured feedback dictionary from extract_structured_feedback
+        
+    Returns:
+        A formatted critique string
+    """
+    if not feedback_dict:
+        return "No feedback available"
+    
+    parts = []
+    
+    # Add score if available
+    score = feedback_dict.get("score")
+    if score is not None:
+        parts.append(f"Score: {score:.1f}")
+    
+    # Add feedback items
+    feedback_items = feedback_dict.get("feedback_items", [])
+    if feedback_items:
+        parts.append("Feedback:")
+        for item in feedback_items:
+            parts.append(f"  • {item}")
+    
+    # Add improvement suggestion
+    improvement = feedback_dict.get("improvement_suggestion")
+    if improvement:
+        parts.append(f"Improvement suggestion: {improvement}")
+    
+    # Add defect if present
+    defect = feedback_dict.get("defect")
+    if defect:
+        parts.append(f"Critical defect: {defect.get('description', 'Unknown')}")
+    
+    # Add analysis summary
+    analysis = feedback_dict.get("analysis", {})
+    if analysis:
+        parts.append("Analysis:")
+        for dimension, details in analysis.items():
+            if isinstance(details, dict):
+                dim_score = details.get("score")
+                rationale = details.get("rationale", "")
+                if dim_score is not None:
+                    parts.append(f"  • {dimension}: {dim_score:.1f} - {rationale}")
+    
+    return "\n".join(parts)
 
 
 def extract_structured_feedback(text: str, evaluator_type: str = "basic", context: dict[str, Any] | None = None, mode: str | None = None) -> dict[str, Any]:
@@ -475,22 +526,39 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
     if evaluator_type == "basic":
         # Basic evaluator calibration rules with phase-mode adaptation
         
-        # SIMPLIFIED fractional score validation for critical range
-        # Standardize on .5 increments only for consistent discrimination
-        if 4.0 <= score <= 7.0 and score % 1 != 0:  # Fractional score in critical range
-            fractional_part = score % 1
-            if fractional_part != 0.5:
-                warnings.append(f"Score {score}: Use .5 increments only for consistent discrimination in critical 4-7 range")
-            
-            # Clear, simple guidance for fractional scores
-            if fractional_part == 0.5:
-                base_score = int(score)
-                if base_score == 4:
-                    warnings.append(f"Score 4.5: Between generic and specific - justify specific elements present vs missing")
-                elif base_score == 5:
-                    warnings.append(f"Score 5.5: Between specific and mostly complete - justify edge cases addressed vs major gaps")
-                elif base_score == 6:
-                    warnings.append(f"Score 6.5: Between mostly complete and complete - justify testability vs remaining issues")
+        # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
+        # Clear, simple criteria that guide discrimination without overwhelming
+        if 4.0 <= score <= 7.0:
+            # Simplified discrimination guidance with clear thresholds
+            if score < 5.0:
+                warnings.append(f"Score {score} (<5.0): Generic approach - lacks specific implementation details")
+                if score >= 4.5:
+                    warnings.append(f"  → For 4.5+: Must mention SOME specific elements (files/functions)")
+            elif score < 6.0:
+                warnings.append(f"Score {score} (5.0-5.9): Specific but incomplete - names concrete files/functions")
+                if score >= 5.5:
+                    warnings.append(f"  → For 5.5+: Must address SOME edge cases beyond basic implementation")
+            elif score < 7.0:
+                warnings.append(f"Score {score} (6.0-6.9): Mostly complete - addresses main requirements")
+                if score >= 6.5:
+                    warnings.append(f"  → For 6.5+: Must show testability evidence and handle SOME edge cases")
+            else:  # score == 7.0
+                warnings.append(f"Score {score} (7.0): Complete with minor issues - full requirement coverage")
+
+            # Simplified fractional score guidance
+            if score % 1 != 0:  # Fractional score
+                fractional_part = score - int(score)
+                # Encourage .5 increments for better discrimination
+                if fractional_part not in [0.0, 0.5]:
+                    warnings.append(f"Score {score}: Use .5 increments (4.5, 5.5, 6.5) for clearer discrimination")
+                elif fractional_part == 0.5:
+                    base = int(score)
+                    if base == 4:
+                        warnings.append(f"Score 4.5: Generic with SOME specificity - between generic (4) and specific (5)")
+                    elif base == 5:
+                        warnings.append(f"Score 5.5: Specific with SOME completeness - between specific (5) and mostly complete (6)")
+                    elif base == 6:
+                        warnings.append(f"Score 6.5: Mostly complete with SOME edge cases - between mostly complete (6) and complete (7)")
         if mode == "debate":
             # SIMPLIFIED debate mode validation
             # Debate mode: evaluating text proposals with clear discrimination
@@ -689,52 +757,32 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         elif mode == "implement" and score >= 5.0:
             warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
     
-    # FOCUSED DISCRIMINATION for critical 4-7 range (Spearman ρ optimization)
-    # SIMPLIFIED: Clear discrimination between adjacent scores is the most important factor
+    # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
+    # Simplified, consistent criteria that guide discrimination effectively
     if 4.0 <= score <= 7.0:
-        # 1. CRITICAL DISCRIMINATION CHECK: Ensure scores are properly anchored
-        # This is the most important factor for Spearman ρ - clear separation between scores
-        if score in [4.0, 5.0, 6.0, 7.0]:  # Integer scores in critical range
-            # Clear guidance for each integer score to ensure discrimination
-            if score == 4.0:
-                warnings.append(f"Score 4.0: Generic approach - must verify no specific file/function references present")
-            elif score == 5.0:
-                warnings.append(f"Score 5.0: Specific but incomplete - must cite concrete file/function references but show major gaps")
-            elif score == 6.0:
-                warnings.append(f"Score 6.0: Mostly complete - must show testability evidence and address main requirements")
-            elif score == 7.0:
-                warnings.append(f"Score 7.0: Complete with minor issues - must demonstrate full requirement coverage with only edge cases missing")
-        
-        # 2. SIMPLIFIED FRACTIONAL SCORE VALIDATION
-        # Only allow .5 increments for better discrimination consistency
-        if score % 1.0 != 0:  # Fractional score
-            fractional_part = score - int(score)
-            base_score = int(score)
-            
-            # Standardize on .5 increments only
-            if fractional_part != 0.5:
-                warnings.append(f"Score {score}: Use .5 increments only for consistent discrimination")
-            
-            # Clear, simple guidance for fractional scores
-            if fractional_part == 0.5:
-                if base_score == 4:
-                    warnings.append(f"Score 4.5: Between generic and specific - justify specific elements present vs missing")
-                elif base_score == 5:
-                    warnings.append(f"Score 5.5: Between specific and mostly complete - justify edge cases addressed vs major gaps")
-                elif base_score == 6:
-                    warnings.append(f"Score 6.5: Between mostly complete and complete - justify testability vs remaining issues")
-                elif base_score == 7:
-                    warnings.append(f"Score 7.5: Between complete and excellent - justify full coverage vs polish needed")
-        
-        # 3. MODE-AWARE DISCRIMINATION (simplified)
-        if mode == "debate" and 5.0 <= score <= 7.0:
-            # Debate mode: Focus on reasoning structure
-            if critique_structure_score < 0.5:
-                warnings.append(f"Score {score} in debate mode - ensure strong reasoning structure (current: {critique_structure_score:.1f})")
-        elif mode == "implement" and 5.0 <= score <= 7.0:
-            # Implement mode: Focus on concrete changes
-            if file_count == 0:
-                warnings.append(f"Score {score} in implement mode - critical range requires concrete file references")
+        # Clear discrimination thresholds
+        if score < 5.0:
+            # Generic approach range
+            if mode == "implement" and file_count > 0:
+                warnings.append(f"Score {score} in implement mode with file changes - generic scores (<5) inappropriate for concrete implementation")
+        elif score < 6.0:
+            # Specific but incomplete range
+            if mode == "debate" and critique_structure_score < 0.4:
+                warnings.append(f"Score {score} in debate mode - requires clear argument structure for specific scores")
+            if mode == "implement" and file_count == 0:
+                warnings.append(f"Score {score} in implement mode - requires concrete file references for specific scores (≥5)")
+        elif score < 7.0:
+            # Mostly complete range
+            if mode == "implement" and not has_tests:
+                warnings.append(f"Score {score} in implement mode - requires test evidence for mostly complete scores (≥6)")
+            if mode == "debate" and score >= 6.0 and line_count == 0:
+                warnings.append(f"Score {score} in debate mode - high scores require substantive argumentation")
+        else:  # score == 7.0
+            # Complete with minor issues
+            if mode == "debate" and critique_structure_score < 0.6:
+                warnings.append(f"Score {score} in debate mode - complete reasoning requires strong structure")
+            if mode == "implement" and line_count > 100:
+                warnings.append(f"Score {score} in implement mode - large changes require exceptional justification")
 
     # Mode-specific score distribution validation
     if mode == "debate" and score > 8.0:
@@ -1424,10 +1472,14 @@ class DualEvaluator:
         basic_feedback = extract_structured_feedback(basic_resp.text, "basic")
         diffusion_feedback = extract_structured_feedback(diffusion_resp.text, "diffusion")
         
+        # Create critique strings from structured feedback
+        basic_critique = format_critique_from_feedback(basic_feedback)
+        diffusion_critique = format_critique_from_feedback(diffusion_feedback)
+        
         # Calculate proper combined score using DualScore.combined property
         temp_dual_score = DualScore(
-            basic=ScoreItem(basic_score, ""),
-            diffusion=ScoreItem(diffusion_score, "")
+            basic=ScoreItem(basic_score, basic_critique),
+            diffusion=ScoreItem(diffusion_score, diffusion_critique)
         )
         combined_score = temp_dual_score.combined
         
@@ -1445,6 +1497,6 @@ class DualEvaluator:
             log.debug("Diffusion evaluator key risk: %s", diffusion_feedback["defect"])
 
         return DualScore(
-            basic=ScoreItem(basic_score, basic_resp.text),
-            diffusion=ScoreItem(diffusion_score, diffusion_resp.text),
+            basic=ScoreItem(basic_score, basic_critique),
+            diffusion=ScoreItem(diffusion_score, diffusion_critique),
         )

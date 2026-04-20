@@ -11,9 +11,9 @@ import logging
 import os  # Import for path operations; do not re-import in _check_path.
 import stat
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Union
 
 from harness.core.config import HarnessConfig
 from harness.core.security import validate_path_security
@@ -29,6 +29,7 @@ class ToolResult:
     error: str = ""
     is_error: bool = False
     elapsed_s: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_api(self) -> dict[str, Any]:
         """Format as a tool_result content block for the Claude API."""
@@ -73,7 +74,7 @@ class Tool(ABC):
 
     # ---- helpers ----
 
-    def _check_path(self, config: HarnessConfig, path: str) -> str | ToolResult:
+    def _check_path(self, config: HarnessConfig, path: str, require_exists: bool = True, resolve_symlinks: bool = True) -> str | ToolResult:
         """Validate a file path against security rules.
         
         Returns: str on success, ToolResult on validation failure.
@@ -82,6 +83,10 @@ class Tool(ABC):
         1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
         2. Resolve path with Path.resolve(strict=True) to eliminate symlink TOCTOU
         3. Check if resolved path is allowed
+        
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
         
         This method addresses the TOCTOU vulnerability by using atomic symlink
         resolution before checking allowed paths.
@@ -98,9 +103,13 @@ class Tool(ABC):
             path_to_check = os.path.join(config.workspace, path_to_check)
         
         try:
-            # 2. Create a Path object and call its resolve(strict=True) method
+            # 2. Create a Path object and resolve it based on resolve_symlinks parameter
             # Catch OSError and return a ToolResult with error
-            resolved_path = Path(path_to_check).resolve(strict=True)
+            if resolve_symlinks:
+                resolved_path = Path(path_to_check).resolve(strict=True)
+            else:
+                # Don't follow symlinks - use absolute path without resolving symlinks
+                resolved_path = Path(path_to_check).absolute()
             resolved_str = str(resolved_path)
         except OSError as exc:
             # Handle broken symlinks or non-existent paths
@@ -111,29 +120,31 @@ class Tool(ABC):
                 resolved_str = str(resolved_path)
                 
                 # Check if all parent directory components exist and are within allowed paths
-                current = Path(resolved_str)
-                while current != current.parent:  # Stop at root
-                    if not current.parent.exists():
-                        return ToolResult(
-                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
-                            is_error=True,
-                        )
-                    # Check if parent directory is within allowed paths
-                    parent_allowed = False
-                    for allowed_path in config.allowed_paths:
-                        allowed_resolved = str(Path(allowed_path).resolve(strict=False))
-                        parent_str = str(current.parent)
-                        if parent_str == allowed_resolved or parent_str.startswith(allowed_resolved + os.sep):
-                            parent_allowed = True
-                            break
-                    
-                    if not parent_allowed:
-                        return ToolResult(
-                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} is outside allowed paths",
-                            is_error=True,
-                        )
-                    
-                    current = current.parent
+                # Only do this check when require_exists=True
+                if require_exists:
+                    current = Path(resolved_str)
+                    while current != current.parent:  # Stop at root
+                        if not current.parent.exists():
+                            return ToolResult(
+                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
+                                is_error=True,
+                            )
+                        # Check if parent directory is within allowed paths
+                        parent_allowed = False
+                        for allowed_path in config.allowed_paths:
+                            allowed_resolved = str(Path(allowed_path).resolve(strict=False))
+                            parent_str = str(current.parent)
+                            if parent_str == allowed_resolved or parent_str.startswith(allowed_resolved + os.sep):
+                                parent_allowed = True
+                                break
+                        
+                        if not parent_allowed:
+                            return ToolResult(
+                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} is outside allowed paths",
+                                is_error=True,
+                            )
+                        
+                        current = current.parent
             except Exception as exc2:
                 return ToolResult(
                     error=f"Cannot resolve path {path_to_check!r}: {exc2}",
@@ -180,7 +191,7 @@ class Tool(ABC):
 
     def _validate_atomic_path_sync(
         self, config: HarnessConfig, path_str: str, require_exists: bool = True, 
-        directory: bool = False, check_scope: bool = False
+        directory: bool = False, check_scope: bool = False, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Synchronous atomic path validation with inode verification.
@@ -188,10 +199,14 @@ class Tool(ABC):
         Opens path with os.O_RDONLY | os.O_NOFOLLOW, validates via _check_path,
         and verifies file hasn't changed using st_dev and st_ino.
         
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
+        
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
         # 1. Use existing path validation
-        path_result = self._check_path(config, path_str)
+        path_result = self._check_path(config, path_str, require_exists=require_exists, resolve_symlinks=resolve_symlinks)
         is_valid, validated = self._validate_path_result(path_result)
         if not is_valid:
             return False, validated
@@ -207,8 +222,13 @@ class Tool(ABC):
         except OSError as exc:
             if exc.errno == errno.ELOOP:
                 return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
-            elif exc.errno == errno.ENOENT and require_exists:
-                return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
+            elif exc.errno == errno.ENOENT:
+                if require_exists:
+                    return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
+                else:
+                    # File/directory doesn't exist, but that's OK for create operations
+                    # We've already validated the path is within allowed directories via _check_path
+                    return True, resolved
             elif exc.errno == errno.ENOTDIR and directory:
                 return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
             elif exc.errno == errno.EINVAL and directory:
@@ -265,27 +285,67 @@ class Tool(ABC):
 
     async def _validate_atomic_path(
         self, config: HarnessConfig, path_str: str, require_exists: bool = True, 
-        directory: bool = False, check_scope: bool = False
+        directory: bool = False, check_scope: bool = False, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Atomically validate a path is accessible and is a regular file or directory.
         Returns (is_valid, validated_path_str | ToolResult_error).
         
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
+        
         This async wrapper delegates to the synchronous implementation.
         """
         return await asyncio.to_thread(
-            self._validate_atomic_path_sync, config, path_str, require_exists, directory, check_scope
+            self._validate_atomic_path_sync, config, path_str, require_exists, directory, check_scope, resolve_symlinks
         )
 
     async def _validate_directory_atomic(
-        self, config: HarnessConfig, path_str: str
+        self, config: HarnessConfig, path_str: str, resolve_symlinks: bool = True
     ) -> tuple[bool, str | ToolResult]:
         """
         Atomically validate a path is accessible and is a directory.
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
         # Use the consolidated atomic path validation with directory flag
-        return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True)
+        return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True, resolve_symlinks=resolve_symlinks)
+
+    async def _validate_and_prepare_parent_directory(
+        self, config: HarnessConfig, parent_path: str, require_exists: bool = True, 
+        check_scope: bool = False, resolve_symlinks: bool = True
+    ) -> tuple[bool, str | ToolResult]:
+        """
+        Atomically validate and optionally create a parent directory.
+        
+        Args:
+            resolve_symlinks: If True, symlinks are resolved to their final target 
+                before scope checking. If False, the symlink path itself is validated.
+        
+        Returns (is_valid, validated_path_str | ToolResult_error).
+        If require_exists=False and directory doesn't exist, it will be created.
+        """
+        # Skip if parent is current directory
+        if parent_path == ".":
+            return True, parent_path
+            
+        # Validate parent directory exists and is not a symlink
+        is_valid_parent, parent_validated = await self._validate_atomic_path(
+            config, parent_path, require_exists=require_exists, directory=True, 
+            check_scope=check_scope, resolve_symlinks=resolve_symlinks
+        )
+        if not is_valid_parent:
+            return is_valid_parent, parent_validated
+            
+        # Create parent directory if it doesn't exist and require_exists=False
+        if not require_exists:
+            try:
+                import os
+                os.makedirs(parent_validated, exist_ok=True)
+            except OSError as exc:
+                return False, ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+                
+        return True, parent_validated
 
     async def _validate_path_atomic(
         self, config: HarnessConfig, path: str
@@ -493,6 +553,28 @@ class Tool(ABC):
             except OSError:
                 pass  # FD may already be closed; ignore secondary error
             return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
+
+    async def _validate_and_read_atomic(
+        self, 
+        config: HarnessConfig, 
+        path: str, 
+        **validation_kwargs
+    ) -> Union[Tuple[str, str], ToolResult]:
+        """
+        Atomically validate a path and read its content.
+        Returns (content, resolved_path) on success, or a ToolResult error.
+        """
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, **validation_kwargs)
+        if not is_valid_path:
+            return path_validated  # This is the ToolResult error
+        
+        # The validated path is now locked; read from the same file descriptor
+        content, read_error = await self._atomic_read_text(config, path_validated)
+        if read_error is not None:
+            return read_error
+        
+        return content, path_validated
 
     async def _atomic_read_text(self, config: HarnessConfig, resolved_path: str) -> Tuple[str | None, ToolResult | None]:
         """

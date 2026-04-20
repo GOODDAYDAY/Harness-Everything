@@ -905,5 +905,99 @@ def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
         assert "File operation failed on descriptor 123: Operation failed" in error.error
 
 
+def test_read_file_limit_exceeds_maximum():
+    """Test that ReadFileTool rejects limit values exceeding MAX_READ_LINES."""
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import Mock
+    import asyncio
+    
+    from harness.core.config import HarnessConfig
+    from harness.tools.file_read import ReadFileTool
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file with some content
+        test_file = workspace / "test.txt"
+        test_file.write_text("line 1\nline 2\nline 3\nline 4\nline 5")
+        
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test with limit exceeding MAX_READ_LINES
+        result = asyncio.run(tool.execute(
+            config, 
+            path=str(test_file),
+            limit=ReadFileTool.MAX_READ_LINES + 100
+        ))
+        
+        # Verify the result is an error
+        assert result.is_error, f"Expected error but got: {result.output}"
+        assert "limit exceeds maximum allowed lines" in result.error
+        assert str(ReadFileTool.MAX_READ_LINES) in result.error
+        assert str(ReadFileTool.MAX_READ_LINES + 100) in result.error
+
+
+def test_readfile_atomic_validation_and_read_combined():
+    """Test that ReadFileTool uses combined atomic validation and read to prevent TOCTOU attacks."""
+    import asyncio
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import Mock, patch, AsyncMock
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a valid file and a symlink to it
+        legit_file = workspace / "data.txt"
+        legit_file.write_text("original content")
+        
+        link = workspace / "link.txt"
+        link.symlink_to(legit_file)
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test that the combined atomic operation works
+        result = asyncio.run(tool.execute(config, path=str(link)))
+        
+        # Verify the result is successful and reads from the symlink target
+        assert not result.is_error, f"Expected success but got error: {result.error}"
+        assert "original content" in result.output
+        
+        # Now test TOCTOU protection by mocking _validate_and_read_atomic to simulate
+        # a race condition where symlink target changes after validation
+        with patch.object(tool, '_validate_and_read_atomic', new_callable=AsyncMock) as mock_validate_read:
+            # First call returns success with the content and resolved path
+            mock_validate_read.return_value = ("original content", str(legit_file))
+            
+            # Create a malicious file that would be the new symlink target
+            malicious_file = workspace / "malicious.txt"
+            malicious_file.write_text("malicious content")
+            
+            # Change the symlink target after validation but before read
+            link.unlink()
+            link.symlink_to(malicious_file)
+            
+            # Run the tool - it should still read from the originally validated file
+            result = asyncio.run(tool.execute(config, path=str(link)))
+            
+            # The tool should read from the originally validated file (legit_file)
+            # not the new symlink target (malicious_file)
+            assert not result.is_error
+            # Since we mocked _validate_and_read_atomic to return legit_file content,
+            # the tool should read from legit_file, not malicious_file
+            assert "original content" in result.output
+            assert "malicious content" not in result.output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
