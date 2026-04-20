@@ -93,12 +93,11 @@ class MoveFileTool(Tool):
             if not is_valid_parent:
                 return parent_validated  # This is a ToolResult error
             
-            # Create parent directory if it doesn't exist
-            if not os.path.exists(parent_validated):
-                try:
-                    os.makedirs(parent_validated, exist_ok=False)
-                except OSError as exc:
-                    return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+            # Create parent directory atomically if it doesn't exist
+            try:
+                os.makedirs(parent_validated, exist_ok=True)
+            except OSError as exc:
+                return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
 
         try:
             os.rename(src, dst)  # Atomic operation on validated path strings
@@ -162,12 +161,11 @@ class CopyFileTool(Tool):
             if not is_valid_parent:
                 return parent_validated  # This is a ToolResult error
             
-            # Create parent directory if it doesn't exist
-            if not os.path.exists(parent_validated):
-                try:
-                    os.makedirs(parent_validated, exist_ok=False)
-                except OSError as exc:
-                    return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+            # Create parent directory atomically if it doesn't exist
+            try:
+                os.makedirs(parent_validated, exist_ok=True)
+            except OSError as exc:
+                return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
         
         # Proceed with the copy using async thread
         try:
