@@ -73,7 +73,7 @@ class Tool(ABC):
 
     # ---- helpers ----
 
-    def _check_path(self, config: HarnessConfig, path: str) -> str | ToolResult:
+    def _check_path(self, config: HarnessConfig, path: str, require_exists: bool = True) -> str | ToolResult:
         """Validate a file path against security rules.
         
         Returns: str on success, ToolResult on validation failure.
@@ -111,29 +111,31 @@ class Tool(ABC):
                 resolved_str = str(resolved_path)
                 
                 # Check if all parent directory components exist and are within allowed paths
-                current = Path(resolved_str)
-                while current != current.parent:  # Stop at root
-                    if not current.parent.exists():
-                        return ToolResult(
-                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
-                            is_error=True,
-                        )
-                    # Check if parent directory is within allowed paths
-                    parent_allowed = False
-                    for allowed_path in config.allowed_paths:
-                        allowed_resolved = str(Path(allowed_path).resolve(strict=False))
-                        parent_str = str(current.parent)
-                        if parent_str == allowed_resolved or parent_str.startswith(allowed_resolved + os.sep):
-                            parent_allowed = True
-                            break
-                    
-                    if not parent_allowed:
-                        return ToolResult(
-                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} is outside allowed paths",
-                            is_error=True,
-                        )
-                    
-                    current = current.parent
+                # Only do this check when require_exists=True
+                if require_exists:
+                    current = Path(resolved_str)
+                    while current != current.parent:  # Stop at root
+                        if not current.parent.exists():
+                            return ToolResult(
+                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
+                                is_error=True,
+                            )
+                        # Check if parent directory is within allowed paths
+                        parent_allowed = False
+                        for allowed_path in config.allowed_paths:
+                            allowed_resolved = str(Path(allowed_path).resolve(strict=False))
+                            parent_str = str(current.parent)
+                            if parent_str == allowed_resolved or parent_str.startswith(allowed_resolved + os.sep):
+                                parent_allowed = True
+                                break
+                        
+                        if not parent_allowed:
+                            return ToolResult(
+                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} is outside allowed paths",
+                                is_error=True,
+                            )
+                        
+                        current = current.parent
             except Exception as exc2:
                 return ToolResult(
                     error=f"Cannot resolve path {path_to_check!r}: {exc2}",
@@ -191,7 +193,7 @@ class Tool(ABC):
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
         # 1. Use existing path validation
-        path_result = self._check_path(config, path_str)
+        path_result = self._check_path(config, path_str, require_exists=require_exists)
         is_valid, validated = self._validate_path_result(path_result)
         if not is_valid:
             return False, validated
@@ -207,8 +209,13 @@ class Tool(ABC):
         except OSError as exc:
             if exc.errno == errno.ELOOP:
                 return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
-            elif exc.errno == errno.ENOENT and require_exists:
-                return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
+            elif exc.errno == errno.ENOENT:
+                if require_exists:
+                    return False, ToolResult(error=f"File not found: {resolved}", is_error=True)
+                else:
+                    # File/directory doesn't exist, but that's OK for create operations
+                    # We've already validated the path is within allowed directories via _check_path
+                    return True, resolved
             elif exc.errno == errno.ENOTDIR and directory:
                 return False, ToolResult(error=f"Not a directory: {resolved}", is_error=True)
             elif exc.errno == errno.EINVAL and directory:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -30,12 +31,12 @@ class WriteFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, content: str
     ) -> ToolResult:
-        # Use atomic validation for the file path to prevent TOCTOU attacks
-        # For write operations, we don't require the file to exist
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True)
-        if not is_valid_path:
-            return path_validated  # This is a ToolResult error
-        resolved = path_validated
+        # First, validate the path is within allowed directories
+        # For write operations, we don't require the file or parent directories to exist
+        path_result = self._check_path(config, path, require_exists=False)
+        if isinstance(path_result, ToolResult):
+            return path_result  # This is a ToolResult error
+        resolved = path_result
 
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(resolved).parent
@@ -45,6 +46,8 @@ class WriteFileTool(Tool):
             )
             if not is_valid_parent:
                 return parent_result  # This is a ToolResult error
+            # Ensure parent directories exist
+            await asyncio.to_thread(parent_dir.mkdir, parents=True, exist_ok=True)
 
         # Write back using the async atomic helper
         write_error = await self._atomic_write_text(resolved, content)
