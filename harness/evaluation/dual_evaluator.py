@@ -526,73 +526,39 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
     if evaluator_type == "basic":
         # Basic evaluator calibration rules with phase-mode adaptation
         
-        # ENHANCED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
+        # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
+        # Clear, simple criteria that guide discrimination without overwhelming
         if 4.0 <= score <= 7.0:
-            # Provide specific discrimination guidance for each score level
-            if score == 4.0:
-                warnings.append(f"Score 4.0 (Generic approach): Proposal identifies correct area but lacks ANY specific implementation details. NO concrete file/function references. If ANY file/function named → must be ≥4.5.")
-            elif score == 4.25:
-                warnings.append(f"Score 4.25: Fractional score slightly above generic - justify specific elements pushing beyond 4.0")
-            elif score == 4.5:
-                warnings.append(f"Score 4.5 (Generic with hints): Proposal mentions SOME specific elements but not enough for full 5.0. MUST cite which specific elements push it above 4.0 AND what's missing for 5.0.")
-            elif score == 4.75:
-                warnings.append(f"Score 4.75: Fractional score approaching specific - justify why not quite reaching 5.0")
-            elif score == 5.0:
-                warnings.append(f"Score 5.0 (Specific but incomplete): Proposal names concrete files/functions but has MAJOR gaps. MUST cite specific evidence of both: (1) concrete references AND (2) major missing details.")
-            elif score == 5.25:
-                warnings.append(f"Score 5.25: Fractional score slightly above specific - justify edge cases addressed beyond 5.0")
-            elif score == 5.5:
-                warnings.append(f"Score 5.5 (Specific with partial details): Proposal has some implementation details but not enough for 6.0. MUST explain: (1) which edge cases are addressed (pushing toward 6) AND (2) what major gaps remain (keeping at 5).")
-            elif score == 5.75:
-                warnings.append(f"Score 5.75: Fractional score approaching mostly complete - justify why not quite reaching 6.0")
-            elif score == 6.0:
-                warnings.append(f"Score 6.0 (Mostly complete): Proposal addresses main requirements but missing important edge cases. MUST show: (1) testability evidence AND (2) which edge cases are missing.")
-            elif score == 6.25:
-                warnings.append(f"Score 6.25: Fractional score slightly above mostly complete - justify testability elements beyond 6.0")
-            elif score == 6.5:
-                warnings.append(f"Score 6.5 (Nearly complete): Proposal handles main requirements and some edge cases but not all. MUST explain: (1) which testability elements are present (pushing toward 7) AND (2) what edge cases are missing (keeping at 6).")
-            elif score == 6.75:
-                warnings.append(f"Score 6.75: Fractional score approaching complete - justify why not quite reaching 7.0")
-            elif score == 7.0:
-                warnings.append(f"Score 7.0 (Complete with minor issues): Proposal demonstrates FULL requirement coverage with only minor polish needed. MUST show: (1) execution validation AND (2) specific minor issues remaining.")
-            elif score == 7.25:
-                warnings.append(f"Score 7.25: Fractional score slightly above complete - justify polish elements beyond 7.0")
-            elif score == 7.5:
-                warnings.append(f"Score 7.5 (Complete with polish needed): Proposal is fully complete but needs minor polish. MUST explain: (1) full coverage achieved AND (2) specific polish items needed.")
-            elif score == 7.75:
-                warnings.append(f"Score 7.75: Fractional score approaching excellent - justify why not quite reaching 8.0")
-            
-            # Enhanced discrimination checklist for Spearman ρ improvement
-            discrimination_checks = []
-            if score >= 5.0:
-                discrimination_checks.append("✓ Does proposal name SPECIFIC files/functions?")
-            if score >= 6.0:
-                discrimination_checks.append("✓ Does proposal address MAIN requirement COMPLETELY with testability?")
-            if score >= 7.0:
-                discrimination_checks.append("✓ Does proposal handle EDGE CASES with execution validation?")
-            
-            if discrimination_checks:
-                warnings.append(f"Discrimination checklist for score {score}: " + " ".join(discrimination_checks))
-        
-        # ENHANCED fractional score validation for critical range - Spearman ρ optimization
-        # Use ONLY .5 increments for consistent discrimination in 4-7 range
-        if 4.0 <= score <= 7.0 and score % 1 != 0:  # Fractional score in critical range
-            fractional_part = score % 1
-            
-            # STRICT: Only allow .5 increments for discrimination consistency
-            if fractional_part != 0.5:
-                warnings.append(f"Score {score}: Use ONLY .5 increments (4.5, 5.5, 6.5, 7.5) for consistent discrimination in critical 4-7 range")
-            else:
-                # Enhanced fractional score discrimination with clear criteria
-                base_score = int(score)
-                if base_score == 4:
-                    warnings.append(f"Score 4.5: Generic with SOME specificity - MUST show: (1) specific elements mentioned AND (2) what's missing for 5.0")
-                elif base_score == 5:
-                    warnings.append(f"Score 5.5: Specific with SOME completeness - MUST show: (1) edge cases addressed AND (2) major gaps remaining for 6.0")
-                elif base_score == 6:
-                    warnings.append(f"Score 6.5: Mostly complete with SOME edge cases - MUST show: (1) testability evidence AND (2) specific edge cases missing for 7.0")
-                elif base_score == 7:
-                    warnings.append(f"Score 7.5: Complete with SOME polish - MUST show: (1) full requirement coverage AND (2) specific polish items needed for 8.0+")
+            # Simplified discrimination guidance with clear thresholds
+            if score < 5.0:
+                warnings.append(f"Score {score} (<5.0): Generic approach - lacks specific implementation details")
+                if score >= 4.5:
+                    warnings.append(f"  → For 4.5+: Must mention SOME specific elements (files/functions)")
+            elif score < 6.0:
+                warnings.append(f"Score {score} (5.0-5.9): Specific but incomplete - names concrete files/functions")
+                if score >= 5.5:
+                    warnings.append(f"  → For 5.5+: Must address SOME edge cases beyond basic implementation")
+            elif score < 7.0:
+                warnings.append(f"Score {score} (6.0-6.9): Mostly complete - addresses main requirements")
+                if score >= 6.5:
+                    warnings.append(f"  → For 6.5+: Must show testability evidence and handle SOME edge cases")
+            else:  # score == 7.0
+                warnings.append(f"Score {score} (7.0): Complete with minor issues - full requirement coverage")
+
+            # Simplified fractional score guidance
+            if score % 1 != 0:  # Fractional score
+                fractional_part = score - int(score)
+                # Encourage .5 increments for better discrimination
+                if fractional_part not in [0.0, 0.5]:
+                    warnings.append(f"Score {score}: Use .5 increments (4.5, 5.5, 6.5) for clearer discrimination")
+                elif fractional_part == 0.5:
+                    base = int(score)
+                    if base == 4:
+                        warnings.append(f"Score 4.5: Generic with SOME specificity - between generic (4) and specific (5)")
+                    elif base == 5:
+                        warnings.append(f"Score 5.5: Specific with SOME completeness - between specific (5) and mostly complete (6)")
+                    elif base == 6:
+                        warnings.append(f"Score 6.5: Mostly complete with SOME edge cases - between mostly complete (6) and complete (7)")
         if mode == "debate":
             # SIMPLIFIED debate mode validation
             # Debate mode: evaluating text proposals with clear discrimination
@@ -791,79 +757,32 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         elif mode == "implement" and score >= 5.0:
             warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
     
-    # STRENGTHENED DISCRIMINATION for critical 4-7 range (Spearman ρ optimization)
-    # ENHANCED: Clear, consistent discrimination with mode-specific requirements
+    # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
+    # Simplified, consistent criteria that guide discrimination effectively
     if 4.0 <= score <= 7.0:
-        # 1. ENHANCED INTEGER SCORE DISCRIMINATION - Clear anchors for Spearman ρ
-        if score in [4.0, 5.0, 6.0, 7.0]:  # Integer scores in critical range
-            # Enhanced discrimination with clear, consistent criteria
-            if score == 4.0:
-                warnings.append(f"Score 4.0: Generic approach - MUST have NO specific file/function references. If ANY specific reference → must be ≥4.5")
-                # Mode-specific validation
-                if mode == "implement" and file_count > 0:
-                    warnings.append(f"Score 4.0 in implement mode with file changes - generic score inappropriate for concrete implementation")
-            elif score == 5.0:
-                warnings.append(f"Score 5.0: Specific but incomplete - MUST show: (1) concrete file/function references AND (2) major gaps preventing 6.0")
-                # Mode-specific validation
-                if mode == "debate" and critique_structure_score < 0.4:
-                    warnings.append(f"Score 5.0 in debate mode - requires clear argument structure showing specific but incomplete reasoning")
-            elif score == 6.0:
-                warnings.append(f"Score 6.0: Mostly complete - MUST show: (1) testability evidence AND (2) main requirements addressed (edge cases missing)")
-                # Mode-specific validation
-                if mode == "implement" and not has_tests:
-                    warnings.append(f"Score 6.0 in implement mode without tests - mostly complete requires test evidence")
-            elif score == 7.0:
-                warnings.append(f"Score 7.0: Complete with minor issues - MUST show: (1) FULL requirement coverage AND (2) only edge cases missing")
-                # Mode-specific validation
-                if mode == "debate" and critique_structure_score < 0.6:
-                    warnings.append(f"Score 7.0 in debate mode - complete reasoning requires strong structure for full coverage")
-
-        # 2. ENHANCED FRACTIONAL SCORE DISCRIMINATION - Clear guidance for .5 increments
-        if score % 1.0 != 0:  # Fractional score
-            fractional_part = score - int(score)
-            base_score = int(score)
-
-            # STRICT: Only allow .5 increments for discrimination consistency
-            if fractional_part != 0.5:
-                warnings.append(f"Score {score}: Use ONLY .5 increments (4.5, 5.5, 6.5, 7.5) for consistent discrimination in 4-7 range")
-            else:
-                # Enhanced fractional score discrimination with clear criteria
-                if base_score == 4:
-                    warnings.append(f"Score 4.5: Generic with SOME specificity - MUST show: (1) specific elements mentioned AND (2) what's missing for 5.0")
-                    if mode == "implement" and file_count == 0:
-                        warnings.append(f"Score 4.5 in implement mode - requires concrete file/function references for partial specificity")
-                elif base_score == 5:
-                    warnings.append(f"Score 5.5: Specific with SOME completeness - MUST show: (1) edge cases addressed AND (2) major gaps remaining for 6.0")
-                    if mode == "debate" and critique_structure_score < 0.5:
-                        warnings.append(f"Score 5.5 in debate mode - requires clear reasoning structure showing partial completeness")
-                elif base_score == 6:
-                    warnings.append(f"Score 6.5: Mostly complete with SOME edge cases - MUST show: (1) testability evidence AND (2) specific edge cases missing for 7.0")
-                    if mode == "implement" and not has_tests:
-                        warnings.append(f"Score 6.5 in implement mode - requires test evidence showing near-complete functionality")
-                elif base_score == 7:
-                    warnings.append(f"Score 7.5: Complete with SOME polish - MUST show: (1) full requirement coverage AND (2) specific polish items needed for 8.0+")
-                    if mode == "debate" and critique_structure_score < 0.7:
-                        warnings.append(f"Score 7.5 in debate mode - requires excellent reasoning structure")
-
-        # 3. STRENGTHENED MODE-AWARE DISCRIMINATION - Critical for Spearman ρ
-        if mode == "debate" and 5.0 <= score <= 7.0:
-            # Debate mode: STRICT reasoning structure requirements
-            if critique_structure_score < 0.5:
-                warnings.append(f"Score {score} in debate mode - INSUFFICIENT reasoning structure (current: {critique_structure_score:.1f}, required: ≥0.5)")
-            # Debate mode requires argument depth
-            if score >= 6.0 and line_count == 0:
-                warnings.append(f"Score {score} in debate mode - high score requires substantive argumentation, not just surface analysis")
-                
-        elif mode == "implement" and 5.0 <= score <= 7.0:
-            # Implement mode: STRICT concrete evidence requirements
-            if file_count == 0:
-                warnings.append(f"Score {score} in implement mode - CRITICAL: requires concrete file references for any score ≥5")
-            # Implement mode requires execution validation
-            if score >= 6.0 and not has_tests:
-                warnings.append(f"Score {score} in implement mode - requires test evidence for scores ≥6")
-            # Large changes need careful assessment
-            if score >= 7.0 and line_count > 100:
-                warnings.append(f"Score {score} in implement mode - large changes ({line_count} lines) require exceptional justification for high scores")
+        # Clear discrimination thresholds
+        if score < 5.0:
+            # Generic approach range
+            if mode == "implement" and file_count > 0:
+                warnings.append(f"Score {score} in implement mode with file changes - generic scores (<5) inappropriate for concrete implementation")
+        elif score < 6.0:
+            # Specific but incomplete range
+            if mode == "debate" and critique_structure_score < 0.4:
+                warnings.append(f"Score {score} in debate mode - requires clear argument structure for specific scores")
+            if mode == "implement" and file_count == 0:
+                warnings.append(f"Score {score} in implement mode - requires concrete file references for specific scores (≥5)")
+        elif score < 7.0:
+            # Mostly complete range
+            if mode == "implement" and not has_tests:
+                warnings.append(f"Score {score} in implement mode - requires test evidence for mostly complete scores (≥6)")
+            if mode == "debate" and score >= 6.0 and line_count == 0:
+                warnings.append(f"Score {score} in debate mode - high scores require substantive argumentation")
+        else:  # score == 7.0
+            # Complete with minor issues
+            if mode == "debate" and critique_structure_score < 0.6:
+                warnings.append(f"Score {score} in debate mode - complete reasoning requires strong structure")
+            if mode == "implement" and line_count > 100:
+                warnings.append(f"Score {score} in implement mode - large changes require exceptional justification")
 
     # Mode-specific score distribution validation
     if mode == "debate" and score > 8.0:
