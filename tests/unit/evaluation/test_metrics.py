@@ -8,7 +8,7 @@ from harness.evaluation.metrics import calculate_critical_range_discrimination
 
 def _filter_and_calculate_std(evaluations, lower=4.0, upper=7.0):
     """
-    Filter evaluations for scores within [lower, upper] inclusive and return the population standard deviation.
+    Filter evaluations for scores within [lower, upper] inclusive and return the sample standard deviation.
     Returns 0.0 if fewer than two valid scores are found.
     """
     scores = []
@@ -22,7 +22,8 @@ def _filter_and_calculate_std(evaluations, lower=4.0, upper=7.0):
     if len(scores) < 2:
         return 0.0
     mean = sum(scores) / len(scores)
-    variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+    # Use sample variance (dividing by N-1) for consistency with the main function
+    variance = sum((s - mean) ** 2 for s in scores) / (len(scores) - 1)
     return math.sqrt(variance)
 
 
@@ -131,8 +132,9 @@ def test__filter_and_calculate_std_edge_inclusive():
     evaluations = [{"score": 4.0}, {"score": 7.0}, {"score": 3.999}, {"score": 7.001}]
     result = _filter_and_calculate_std(evaluations)
     # Should only include 4.0 and 7.0
-    expected_std = math.sqrt(((4.0-5.5)**2 + (7.0-5.5)**2) / 2)  # 1.5
-    assert math.isclose(result, 1.5, rel_tol=1e-9)
+    # With sample standard deviation (N-1), variance = ((4.0-5.5)**2 + (7.0-5.5)**2) / 1 = 4.5
+    expected_std = math.sqrt(((4.0-5.5)**2 + (7.0-5.5)**2) / 1)  # sqrt(4.5) ≈ 2.1213203435596424
+    assert math.isclose(result, expected_std, rel_tol=1e-9)
 
 
 if __name__ == "__main__":

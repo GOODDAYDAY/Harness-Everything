@@ -11,11 +11,15 @@ def calculate_critical_range_discrimination(evaluations: List[Dict]) -> float:
     This metric measures how well the evaluator discriminates between submissions
     in the critical middle range where scoring decisions are most difficult.
     
+    Uses SAMPLE standard deviation (dividing by N-1) rather than population
+    standard deviation (dividing by N) to provide better discrimination sensitivity
+    for small sample sizes typical in the critical range.
+    
     Args:
         evaluations: List of evaluation dictionaries, each expected to have a 'score' key.
         
     Returns:
-        Standard deviation of scores in the 4-7 range (inclusive). Returns 0.0 if
+        Sample standard deviation of scores in the 4-7 range (inclusive). Returns 0.0 if
         there are fewer than 2 scores in this range.
     """
     # Type guard: ensure evaluations is a list
@@ -43,8 +47,9 @@ def calculate_critical_range_discrimination(evaluations: List[Dict]) -> float:
     # Calculate mean
     mean = sum(critical_scores) / len(critical_scores)
     
-    # Calculate variance
-    variance = sum((x - mean) ** 2 for x in critical_scores) / len(critical_scores)
+    # Calculate SAMPLE variance (dividing by N-1 for unbiased estimator)
+    # This provides better discrimination sensitivity for small sample sizes
+    variance = sum((x - mean) ** 2 for x in critical_scores) / (len(critical_scores) - 1)
     
-    # Return standard deviation
+    # Return sample standard deviation
     return math.sqrt(variance)
