@@ -245,7 +245,7 @@ class Tool(ABC):
             # If we get here, file is not within any allowed path
             os.close(fd)
             return False, ToolResult(
-                error=f"File validation failed: resolved path not within allowed directories",
+                error=f"TOCTOU security violation: file path changed during validation - resolved path not within allowed directories",
                 is_error=True
             )
         except Exception as exc:
@@ -253,7 +253,7 @@ class Tool(ABC):
                 os.close(fd)
             except OSError:
                 pass
-            return False, ToolResult(error=f"File validation failed: {exc}", is_error=True)
+            return False, ToolResult(error=f"TOCTOU security violation: file validation failed - {exc}", is_error=True)
 
     async def _validate_atomic_path(
         self, config: HarnessConfig, path_str: str, require_exists: bool = True, directory: bool = False
