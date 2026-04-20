@@ -29,7 +29,7 @@ def test_writefile_atomic_symlink_protection():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         # Test: symlink should be rejected
@@ -49,7 +49,7 @@ def test_writefile_valid_file():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -69,7 +69,7 @@ def test_writefile_new_file():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -91,7 +91,7 @@ def test_writefile_overwrite_existing():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=new_content))
@@ -110,13 +110,35 @@ def test_writefile_creates_parent_directories():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
         assert not result.is_error
         assert file_path.exists()
         assert file_path.read_text() == content
+
+
+def test_writefile_atomic_validation_raises_on_path_traversal():
+    """Test that WriteFileTool's atomic validation rejects path traversal attempts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a legitimate file inside workspace
+        legit_file = workspace / "data.txt"
+        legit_file.write_text("safe")
+        
+        tool = WriteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test path with '..' traversal attempt
+        result = asyncio.run(tool.execute(config, path="../outside.txt", content="malicious"))
+        assert result.is_error
+        # Should be rejected by atomic validation
+        assert "outside workspace" in result.error.lower() or "not allowed" in result.error.lower() or "path traversal" in result.error.lower()
 
 
 if __name__ == "__main__":

@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
 
 
+@enforce_atomic_validation
 class WriteFileTool(Tool):
     name = "write_file"
     description = "Create a new file or completely overwrite an existing file with the given content."

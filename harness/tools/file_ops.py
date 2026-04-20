@@ -83,9 +83,10 @@ class MoveFileTool(Tool):
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
 
+        # Create parent directories immediately after validation to prevent TOCTOU
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+
         try:
-            # Create parent directories inside try block to minimize TOCTOU window
-            Path(dst).parent.mkdir(parents=True, exist_ok=True)
             os.rename(src, dst)  # Atomic operation on validated path strings
         except FileNotFoundError:
             # File was deleted/moved by another process after validation
