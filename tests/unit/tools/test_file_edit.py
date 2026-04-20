@@ -33,10 +33,11 @@ def test_editfile_atomic_symlink_protection():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
-        # Test: symlink should be rejected
+        # Test: symlink should be followed and target file edited
         result = asyncio.run(tool.execute(config, path=str(link), old_str="safe", new_str="unsafe"))
-        assert result.is_error
-        assert "symlink" in result.error.lower()
+        assert not result.is_error
+        # Should edit the target of the symlink
+        assert legit.read_text() == "unsafe content"
 
 
 def test_editfile_valid_replacement():
