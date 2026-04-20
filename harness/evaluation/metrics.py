@@ -18,6 +18,10 @@ def calculate_critical_range_discrimination(evaluations: List[Dict]) -> float:
         Standard deviation of scores in the 4-7 range (inclusive). Returns 0.0 if
         there are fewer than 2 scores in this range.
     """
+    # Type guard: ensure evaluations is a list
+    if not isinstance(evaluations, list):
+        raise TypeError("evaluations must be a list")
+    
     # Extract scores from evaluations
     scores = []
     for eval_dict in evaluations:

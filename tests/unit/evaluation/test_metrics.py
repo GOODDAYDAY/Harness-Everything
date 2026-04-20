@@ -87,7 +87,7 @@ def test_calculate_critical_range_discrimination_edge_cases():
     # Mean = (4 + 7) / 2 = 5.5
     # Variance = ((4-5.5)^2 + (7-5.5)^2) / 2 = (2.25 + 2.25) / 2 = 2.25
     # Std dev = sqrt(2.25) = 1.5
-    assert math.isclose(result, 1.5, rel_t_tol=1e-9)
+    assert math.isclose(result, 1.5, rel_tol=1e-9)
 
 
 def test_calculate_critical_range_discrimination_multiple_occurrences():
@@ -110,6 +110,25 @@ def test_calculate_critical_range_discrimination_multiple_occurrences():
     # Variance = 2.75 / 4 = 0.6875
     # Std dev = sqrt(0.6875) ≈ 0.82915619758885
     assert math.isclose(result, 0.82915619758885, rel_tol=1e-9)
+
+
+def test_calculate_critical_range_discrimination_invalid_input_type():
+    """Test that calculate_critical_range_discrimination raises TypeError for non-list inputs."""
+    # Test with dictionary (non-list)
+    with pytest.raises(TypeError, match="evaluations must be a list"):
+        calculate_critical_range_discrimination({})
+    
+    # Test with string (non-list)
+    with pytest.raises(TypeError, match="evaluations must be a list"):
+        calculate_critical_range_discrimination("not a list")
+    
+    # Test with integer (non-list)
+    with pytest.raises(TypeError, match="evaluations must be a list"):
+        calculate_critical_range_discrimination(42)
+    
+    # Test with None (non-list)
+    with pytest.raises(TypeError, match="evaluations must be a list"):
+        calculate_critical_range_discrimination(None)
 
 
 if __name__ == "__main__":
