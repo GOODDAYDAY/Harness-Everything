@@ -152,5 +152,58 @@ def test_editfile_file_not_found():
         assert "not found" in result.error.lower()
 
 
+def test_editfile_respects_allowed_edit_globs():
+    """Test that EditFileTool respects allowed_edit_globs phase scope."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+
+        # Create test files
+        py_file = workspace / "test.py"
+        py_file.write_text("# Python file")
+        
+        txt_file = workspace / "test.txt"
+        txt_file.write_text("Text file")
+
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test 1: With allowed_edit_globs restricting to .py files
+        config.phase_edit_globs = ["*.py"]
+        
+        # Editing a .py file should succeed
+        result = asyncio.run(tool.execute(
+            config, 
+            path=str(py_file),
+            old_str="# Python file",
+            new_str="# Modified Python file"
+        ))
+        assert not result.is_error, f"Editing .py file should succeed, got error: {result.error}"
+        
+        # Editing a .txt file should fail with phase scope error
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(txt_file),
+            old_str="Text file",
+            new_str="Modified text file"
+        ))
+        assert result.is_error, "Editing .txt file should fail when only .py files are allowed"
+        assert "PHASE SCOPE ERROR" in result.error
+        assert "*.py" in result.error
+        
+        # Test 2: Empty allowed_edit_globs should allow all files
+        config.phase_edit_globs = []
+        
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(txt_file),
+            old_str="Text file",
+            new_str="Modified text file"
+        ))
+        assert not result.is_error, f"Empty allowed_edit_globs should allow all files, got error: {result.error}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
