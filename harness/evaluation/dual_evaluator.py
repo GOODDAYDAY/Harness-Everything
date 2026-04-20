@@ -474,8 +474,8 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
     if evaluator_type == "basic":
         # Basic evaluator calibration rules with phase-mode adaptation
         if mode == "debate":
-            # Debate mode: evaluating text proposals
-            # Score calibration anchors for debate mode with enhanced discrimination
+            # Debate mode: evaluating text proposals with enhanced discrimination
+            # Score calibration anchors for debate mode with strict mode discrimination
             if score < 4.0 and not has_critical_issues:
                 warnings.append(f"Score {score} seems too low for debate mode without critical issues - typical debate scores range 5-9")
             elif score > 9.0 and file_count == 0 and line_count == 0:
@@ -486,93 +486,136 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
                 # Log a warning for debate mode scores without file references
                 log.warning(f"Debate mode score {score} lacks file reference in {evaluator_type} evaluator")
 
-            # Enhanced discrimination: Check for calibration anchor usage
+            # Enhanced discrimination: Check for calibration anchor usage with mode-specific anchors
             if score >= 8.0 and not has_calibration_anchors:
-                warnings.append(f"High score {score} without calibration anchor references - scores ≥8 should explicitly reference calibration criteria")
-            
-            # Enhanced discrimination: Check critique structure quality
-            if score >= 7.0 and critique_structure_score < 0.5:
-                warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - high scores require well-structured analysis")
+                warnings.append(f"High score {score} without calibration anchor references - debate mode scores ≥8 should explicitly reference calibration criteria")
+            # Mode-specific anchor check: debate mode should reference reasoning quality anchors
+            if score >= 7.0 and not has_calibration_anchors:
+                warnings.append(f"Score {score} in debate mode without calibration anchors - debate evaluations should reference reasoning quality criteria")
+
+            # Enhanced discrimination: Check critique structure quality with mode-specific expectations
+            if score >= 7.0 and critique_structure_score < 0.6:
+                warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - debate mode requires well-structured reasoning analysis")
+            # Debate mode should have strong reasoning structure
+            if score >= 6.0 and critique_structure_score < 0.4:
+                warnings.append(f"Score {score} for debate mode has insufficient structure - debate evaluations require clear argument analysis")
 
             # Phase-specific calibration anchors with enhanced discrimination
             if "analysis" in phase_name.lower():
-                # Analysis phases should have more nuanced scoring
+                # Analysis phases should have more nuanced scoring with strict discrimination
                 if score > 8.5 and not has_tests:
                     warnings.append(f"Score {score} seems high for analysis phase without test considerations - analysis phases focus on reasoning quality")
-                # Analysis phases should have strong structure
-                if score > 7.0 and critique_structure_score < 0.6:
+                # Analysis phases should have strong structure with mode-specific expectations
+                if score > 7.0 and critique_structure_score < 0.7:
                     warnings.append(f"Score {score} for analysis phase has weak structure - analysis requires clear dimension scoring and rationale")
-            
+                # Analysis phases should show dimension discrimination
+                if score > 6.0 and critique_structure_score < 0.5:
+                    warnings.append(f"Score {score} for analysis phase lacks dimension discrimination - analysis should show clear scoring differences")
+
+            # Debate mode specific: Check for reasoning depth indicators
+            if score >= 8.0 and line_count == 0:
+                warnings.append(f"Score {score} for debate mode with no code changes - verify reasoning depth and argument quality")
+
         elif mode == "implement":
             # Implement mode: evaluating executed code with enhanced discrimination
-            # Score calibration anchors for implement mode with phase adaptation
+            # Score calibration anchors for implement mode with strict phase adaptation
             if score < 5.0 and not has_critical_issues:
                 warnings.append(f"Score {score} seems too low for implement mode without critical issues - working implementations typically score ≥6")
             elif score > 9.5 and not has_tests:
                 warnings.append(f"Score {score} seems too high for implement mode without test coverage - scores >9.5 require comprehensive testing")
 
-            # Enhanced discrimination: Check for calibration anchor usage
+            # Enhanced discrimination: Check for calibration anchor usage with mode-specific anchors
             if score >= 8.0 and not has_calibration_anchors:
                 warnings.append(f"High score {score} without calibration anchor references - implement mode scores ≥8 should reference execution quality anchors")
-            
-            # Enhanced discrimination: Check critique structure quality
-            if score >= 7.0 and critique_structure_score < 0.6:
+            # Mode-specific anchor check: implement mode should reference execution quality anchors
+            if score >= 7.0 and not has_calibration_anchors:
+                warnings.append(f"Score {score} in implement mode without calibration anchors - implement evaluations should reference execution quality criteria")
+
+            # Enhanced discrimination: Check critique structure quality with mode-specific expectations
+            if score >= 7.0 and critique_structure_score < 0.7:
                 warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - implement evaluations require detailed analysis of code changes")
+            # Implement mode should have strong execution analysis
+            if score >= 6.0 and critique_structure_score < 0.5:
+                warnings.append(f"Score {score} for implement mode has insufficient structure - implement evaluations require clear code analysis")
 
             # Phase-specific implement mode calibration with enhanced discrimination
             if "improvement" in phase_name.lower():
-                # Improvement phases should have stricter scoring
+                # Improvement phases should have stricter scoring with enhanced discrimination
                 if score > 8.0 and not has_tests:
                     warnings.append(f"Score {score} seems high for improvement phase without test coverage - improvements require validation")
                 if score > 9.0 and has_syntax_errors:
                     warnings.append(f"Score {score} seems too high for improvement phase with syntax errors - syntax errors are critical failures")
-                # Improvement phases need strong structure
-                if score > 7.0 and critique_structure_score < 0.7:
+                # Improvement phases need strong structure with mode-specific expectations
+                if score > 7.0 and critique_structure_score < 0.8:
                     warnings.append(f"Score {score} for improvement phase has weak structure - improvements require clear before/after analysis")
-            
+                # Improvement phases should show measurable impact
+                if score > 8.0 and line_count < 10:
+                    warnings.append(f"Score {score} for improvement phase with minimal changes - verify impact and justification")
+
             elif "framework" in phase_name.lower():
                 # Framework changes need careful evaluation with enhanced discrimination
                 if score > 8.5 and file_count > 2:
                     warnings.append(f"Score {score} for framework change affecting {file_count} files - verify backward compatibility and impact analysis")
-                # Framework changes require excellent structure
-                if score > 7.0 and critique_structure_score < 0.8:
+                # Framework changes require excellent structure with mode-specific expectations
+                if score > 7.0 and critique_structure_score < 0.9:
                     warnings.append(f"Score {score} for framework change has weak structure - framework evaluations require comprehensive impact analysis")
+                # Framework changes should have architectural analysis
+                if score > 8.0 and critique_structure_score < 0.8:
+                    warnings.append(f"Score {score} for framework change lacks architectural analysis - framework changes require impact assessment")
 
             # Implementations with many changes but perfect score are suspicious
             if score == 10.0 and line_count > 50:
                 warnings.append(f"Perfect score {score} for large change ({line_count} lines) - verify no edge cases missed and all tests pass")
-            
-            # Perfect scores require perfect structure
-            if score == 10.0 and critique_structure_score < 0.9:
-                warnings.append(f"Perfect score {score} has imperfect structure (score={critique_structure_score:.1f}) - perfect scores require flawless critique structure")
 
-            # Critical issues should significantly lower scores
+            # Perfect scores require perfect structure with mode-specific expectations
+            if score == 10.0 and critique_structure_score < 0.95:
+                warnings.append(f"Perfect score {score} has imperfect structure (score={critique_structure_score:.1f}) - perfect scores require flawless critique structure")
+            # Perfect implement scores require comprehensive testing
+            if score == 10.0 and not has_tests:
+                warnings.append(f"Perfect score {score} without test coverage - perfect implement scores require comprehensive testing")
+
+            # Critical issues should significantly lower scores with enhanced discrimination
             if score > 7.0 and has_critical_issues:
                 warnings.append(f"Score {score} seems high despite critical issues - critical issues should reduce scores to ≤6")
+            # Critical issues in implement mode are severe
+            if score > 6.0 and has_critical_issues:
+                warnings.append(f"Score {score} seems high with critical issues - implement mode critical issues typically reduce scores to ≤5")
 
-            # Import errors should severely impact scores
+            # Import errors should severely impact scores with enhanced discrimination
             if score > 6.0 and has_import_errors:
                 warnings.append(f"Score {score} seems high with import errors - import errors typically reduce scores to ≤5")
+            # Import errors in implement mode are critical
+            if score > 5.0 and has_import_errors:
+                warnings.append(f"Score {score} seems high with import errors - implement mode import errors are critical failures")
 
-            # Test failures should impact scores
+            # Test failures should impact scores with enhanced discrimination
             if score > 8.0 and has_test_failures:
                 warnings.append(f"Score {score} seems high with test failures - test failures typically reduce scores to ≤7")
+            # Test failures in implement mode are significant
+            if score > 7.0 and has_test_failures:
+                warnings.append(f"Score {score} seems high with test failures - implement mode test failures indicate functional issues")
 
-            # Structure issues should impact scores
+            # Structure issues should impact scores with enhanced discrimination
             if score > 8.0 and has_structure_issues:
                 warnings.append(f"Score {score} seems high with structure issues - output structure problems indicate evaluation quality issues")
-                
+            # Structure issues in implement mode affect reliability
+            if score > 7.0 and has_structure_issues:
+                warnings.append(f"Score {score} seems high with structure issues - implement mode structure issues affect code reliability")
+
         else:
             # Generic basic evaluator rules with enhanced discrimination
             if score < 3.0 and not has_critical_issues:
                 warnings.append(f"Score {score} seems too low for basic evaluator without critical issues - typical minimum for functional proposals is 4")
             elif score > 9.5:
                 warnings.append(f"Score {score} seems too high for basic evaluator - check for score inflation and verify calibration anchors")
-            
-            # Check for calibration anchor usage
+
+            # Check for calibration anchor usage with enhanced discrimination
             if score >= 8.0 and not has_calibration_anchors:
                 warnings.append(f"High score {score} without calibration anchor references - scores ≥8 should explicitly justify near-perfect assessment")
-                
+            # Generic evaluator should still use calibration anchors
+            if score >= 7.0 and not has_calibration_anchors:
+                warnings.append(f"Score {score} without calibration anchors - evaluator should reference calibration criteria for consistency")
+
     else:  # diffusion evaluator
         # Diffusion evaluator focuses on risk assessment with enhanced discrimination
         if score < 2.0 and not has_critical_issues:
@@ -580,40 +623,71 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         elif score > 9.0:
             warnings.append(f"Score {score} seems too high for diffusion evaluator - risk assessment may be too optimistic, verify mitigation analysis")
 
-        # Enhanced discrimination: Check for calibration anchor usage
+        # Enhanced discrimination: Check for calibration anchor usage with mode-specific anchors
         if score >= 8.0 and not has_calibration_anchors:
             warnings.append(f"High risk score {score} without calibration anchor references - diffusion scores ≥8 should reference risk assessment criteria")
-        
-        # Enhanced discrimination: Check critique structure quality
-        if score >= 7.0 and critique_structure_score < 0.5:
-            warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - risk assessments require detailed impact analysis")
+        # Diffusion evaluator should always use risk anchors
+        if score >= 6.0 and not has_calibration_anchors:
+            warnings.append(f"Score {score} in diffusion evaluator without calibration anchors - risk assessments should reference risk criteria")
 
-        # Diffusion evaluator should penalize risky changes
+        # Enhanced discrimination: Check critique structure quality with mode-specific expectations
+        if score >= 7.0 and critique_structure_score < 0.6:
+            warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - risk assessments require detailed impact analysis")
+        # Diffusion evaluator needs strong risk analysis structure
+        if score >= 5.0 and critique_structure_score < 0.4:
+            warnings.append(f"Score {score} for diffusion evaluator has insufficient structure - risk assessments require clear impact analysis")
+
+        # Diffusion evaluator should penalize risky changes with enhanced discrimination
         if score > 7.0 and file_count > 3 and line_count > 100:
             warnings.append(f"Score {score} seems high for large, complex change in diffusion evaluation - complex changes typically have higher risk scores")
+        # Large changes in diffusion evaluation need careful assessment
+        if score > 6.0 and file_count > 2 and line_count > 50:
+            warnings.append(f"Score {score} for moderate change in diffusion evaluation - verify risk assessment accounts for complexity")
 
-        # Perfect diffusion scores are extremely rare
+        # Perfect diffusion scores are extremely rare with enhanced discrimination
         if score == 10.0:
             warnings.append(f"Perfect diffusion score {score} is extremely rare - verify no second-order effects and trivial rollback")
-    
+        # High diffusion scores need justification
+        if score >= 9.0:
+            warnings.append(f"Very high diffusion score {score} - verify comprehensive risk mitigation analysis")
+
     # Check for suspicious patterns with enhanced discrimination
     if score == 0.0 or score == 10.0:
         warnings.append(f"Extreme score {score} - verify calibration anchors were used and justification is explicit")
         if score == 10.0 and not has_calibration_anchors:
             warnings.append(f"Perfect score {score} without calibration anchors - perfect scores require explicit reference to calibration criteria")
-    
-    # Round number scores (5.0, 6.0, etc.) might indicate lazy scoring
+        # Extreme scores need strong justification
+        if score == 0.0 and not has_critical_issues:
+            warnings.append(f"Zero score {score} without critical issues - verify justification for complete failure assessment")
+
+    # Round number scores (5.0, 6.0, etc.) might indicate lazy scoring with enhanced discrimination
     if score % 1.0 == 0.0 and 3.0 <= score <= 8.0:
         warnings.append(f"Round number score {score} - check if proper calibration anchors were used and fractional scoring considered")
         # Enhanced: Check if this is in a range where fractional scores are expected
         if 5.0 <= score <= 7.0:
             warnings.append(f"Score {score} in middle range where fractional scores (5.5, 6.5, etc.) provide better discrimination")
+        # Round scores in critical ranges need verification
+        if score == 5.0 or score == 6.0:
+            warnings.append(f"Round score {score} at decision boundary - verify calibration anchors support this exact score")
 
-    # Enhanced discrimination: Check score distribution patterns
+    # Enhanced discrimination: Check score distribution patterns with mode awareness
     if 4.0 <= score <= 6.0 and not has_critical_issues:
         # Middle scores without critical issues should have clear rationale
         warnings.append(f"Middle score {score} without critical issues - ensure dimension scores justify this middle-ground assessment")
-    
+        # Middle scores should show dimension discrimination
+        if mode == "debate" and score >= 5.0:
+            warnings.append(f"Middle debate score {score} - verify reasoning quality and argument structure")
+        elif mode == "implement" and score >= 5.0:
+            warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
+
+    # Mode-specific score distribution validation
+    if mode == "debate" and score > 8.0:
+        # High debate scores need strong reasoning justification
+        warnings.append(f"High debate score {score} - verify reasoning depth and argument quality")
+    elif mode == "implement" and score > 8.0:
+        # High implement scores need comprehensive validation
+        warnings.append(f"High implement score {score} - verify comprehensive testing and code quality")
+
     return warnings
 
 
