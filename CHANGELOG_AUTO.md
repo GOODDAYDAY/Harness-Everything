@@ -194,3 +194,7 @@
 - **Test Coverage**: Added `test_deletefile_atomic_unlink_no_exists_check` test verifying `Path.exists()` is never called after atomic validation and proper error handling for race conditions.
 - **Security Improvement**: Direct atomic deletion prevents symlink swapping attacks between validation and deletion operations.
 
+### Test Configuration Fix
+- **Broken Test Fixed**: Corrected `config.workspace_root` to `config.workspace` in all test functions in `tests/unit/tools/test_file_edit.py` to match the actual HarnessConfig API.
+- **Test Reliability**: Fixed two test cases (`test_editfile_valid_replacement` and `test_editfile_single_replacement`) that had incorrect expectations about multiple string occurrences without `replace_all=True`.
+- **API Consistency**: Ensured tests use the correct field name (`workspace`) as defined in the HarnessConfig dataclass, improving test reliability and maintainability.

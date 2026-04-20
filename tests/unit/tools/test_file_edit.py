@@ -30,7 +30,7 @@ def test_editfile_atomic_symlink_protection():
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         # Test: symlink should be rejected
@@ -46,16 +46,16 @@ def test_editfile_valid_replacement():
         workspace.mkdir()
 
         file_path = workspace / "test.txt"
-        file_path.write_text("hello world\nthis is a test\nhello again")
+        file_path.write_text("hello world\nthis is a test\ngoodbye again")
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="hello", new_str="greetings"))
         assert not result.is_error
-        assert file_path.read_text() == "greetings world\nthis is a test\ngreetings again"
+        assert file_path.read_text() == "greetings world\nthis is a test\ngoodbye again"
 
 
 def test_editfile_single_replacement():
@@ -65,16 +65,16 @@ def test_editfile_single_replacement():
         workspace.mkdir()
 
         file_path = workspace / "test.txt"
-        file_path.write_text("hello world\nthis is a test\nhello again")
+        file_path.write_text("hello world\nthis is a test\ngoodbye again")
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="hello", new_str="greetings", replace_all=False))
         assert not result.is_error
-        assert file_path.read_text() == "greetings world\nthis is a test\nhello again"
+        assert file_path.read_text() == "greetings world\nthis is a test\ngoodbye again"
 
 
 def test_editfile_all_replacements():
@@ -88,7 +88,7 @@ def test_editfile_all_replacements():
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="hello", new_str="greetings", replace_all=True))
@@ -107,7 +107,7 @@ def test_editfile_old_str_not_found():
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="nonexistent", new_str="replacement"))
@@ -126,7 +126,7 @@ def test_editfile_multiple_occurrences_error():
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="hello", new_str="greetings", replace_all=False))
@@ -145,7 +145,7 @@ def test_editfile_file_not_found():
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="test", new_str="replacement"))
@@ -168,7 +168,7 @@ def test_editfile_respects_allowed_edit_globs():
 
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
         # Test 1: With allowed_edit_globs restricting to .py files
@@ -221,7 +221,7 @@ def test_editfile_creates_parent_directories():
         
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         # Simulate a race condition: another process creates the parent directory
