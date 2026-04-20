@@ -50,7 +50,7 @@ class EditFileTool(Tool):
         replace_all: bool = False,
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True)
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True, resolve_symlinks=True)
         if not is_valid_path:
             return path_validated  # This is the ToolResult error
         resolved = path_validated
@@ -59,7 +59,7 @@ class EditFileTool(Tool):
         parent_dir = Path(resolved).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
             is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
-                config, str(parent_dir), require_exists=True, check_scope=True
+                config, str(parent_dir), require_exists=True, check_scope=True, resolve_symlinks=True
             )
             if not is_valid_parent:
                 return parent_result  # This is a ToolResult error

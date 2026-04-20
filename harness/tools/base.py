@@ -102,9 +102,13 @@ class Tool(ABC):
             path_to_check = os.path.join(config.workspace, path_to_check)
         
         try:
-            # 2. Create a Path object and call its resolve(strict=True) method
+            # 2. Create a Path object and resolve it based on resolve_symlinks parameter
             # Catch OSError and return a ToolResult with error
-            resolved_path = Path(path_to_check).resolve(strict=True)
+            if resolve_symlinks:
+                resolved_path = Path(path_to_check).resolve(strict=True)
+            else:
+                # Don't follow symlinks - use absolute path without resolving symlinks
+                resolved_path = Path(path_to_check).absolute()
             resolved_str = str(resolved_path)
         except OSError as exc:
             # Handle broken symlinks or non-existent paths
@@ -201,7 +205,7 @@ class Tool(ABC):
         Returns (is_valid, validated_path_str | ToolResult_error).
         """
         # 1. Use existing path validation
-        path_result = self._check_path(config, path_str, require_exists=require_exists)
+        path_result = self._check_path(config, path_str, require_exists=require_exists, resolve_symlinks=resolve_symlinks)
         is_valid, validated = self._validate_path_result(path_result)
         if not is_valid:
             return False, validated
