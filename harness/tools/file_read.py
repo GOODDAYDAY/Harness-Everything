@@ -71,16 +71,13 @@ class ReadFileTool(Tool):
                 is_error=True
             )
 
-        # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)
-        if not is_valid_path:
-            return path_validated  # This is the ToolResult error
-        resolved = path_validated
-
-        # Use the shared atomic read helper
-        text, read_error = await self._atomic_read_text(config, resolved)
-        if read_error is not None:
-            return read_error
+        # Combined atomic validation and read
+        atomic_result = await self._validate_and_read_atomic(
+            config, path, require_exists=True, check_scope=True, resolve_symlinks=True
+        )
+        if isinstance(atomic_result, ToolResult):
+            return atomic_result  # Error from validation or read
+        text, resolved = atomic_result
         lines = text.splitlines(keepends=True)
 
         start = max(offset - 1, 0)

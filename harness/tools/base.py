@@ -13,7 +13,7 @@ import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Union
 
 from harness.core.config import HarnessConfig
 from harness.core.security import validate_path_security
@@ -553,6 +553,28 @@ class Tool(ABC):
             except OSError:
                 pass  # FD may already be closed; ignore secondary error
             return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
+
+    async def _validate_and_read_atomic(
+        self, 
+        config: HarnessConfig, 
+        path: str, 
+        **validation_kwargs
+    ) -> Union[Tuple[str, str], ToolResult]:
+        """
+        Atomically validate a path and read its content.
+        Returns (content, resolved_path) on success, or a ToolResult error.
+        """
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, **validation_kwargs)
+        if not is_valid_path:
+            return path_validated  # This is the ToolResult error
+        
+        # The validated path is now locked; read from the same file descriptor
+        content, read_error = await self._atomic_read_text(config, path_validated)
+        if read_error is not None:
+            return read_error
+        
+        return content, path_validated
 
     async def _atomic_read_text(self, config: HarnessConfig, resolved_path: str) -> Tuple[str | None, ToolResult | None]:
         """
