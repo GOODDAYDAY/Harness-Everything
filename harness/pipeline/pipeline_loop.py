@@ -1070,6 +1070,8 @@ class PipelineLoop:
         }
         
         payload: dict = {
+            "run_id": self.config.run_id,
+            "config_hash": self._compute_config_hash(),
             "total_rounds": rounds_completed,
             "best_score": round(best_score, 2),
             "score_history": score_history,
