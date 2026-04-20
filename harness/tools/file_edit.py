@@ -88,7 +88,7 @@ class EditFileTool(Tool):
                 is_error=True,
             )
 
-        new_text = text.replace(old_str, new_str) if replace_all else text.replace(old_str, new_str, 1)
+        new_text = text.replace(old_str, new_str, -1 if replace_all else 1)
         
         # Write back using atomic write pattern (temp file + os.replace)
         try:
