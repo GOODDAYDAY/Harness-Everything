@@ -29,7 +29,7 @@ def test_writefile_atomic_symlink_protection():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
+        config.workspace_root = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         # Test: symlink should be rejected
@@ -49,7 +49,7 @@ def test_writefile_valid_file():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
+        config.workspace_root = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -69,7 +69,7 @@ def test_writefile_new_file():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
+        config.workspace_root = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -91,7 +91,7 @@ def test_writefile_overwrite_existing():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
+        config.workspace_root = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=new_content))
@@ -110,7 +110,7 @@ def test_writefile_creates_parent_directories():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
+        config.workspace_root = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -131,7 +131,7 @@ def test_writefile_atomic_validation_raises_on_path_traversal():
         
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
+        config.workspace_root = str(workspace)
         config.allowed_paths = [str(workspace)]
         
         # Test path with '..' traversal attempt
