@@ -545,10 +545,16 @@ def validate_calibration_anchors(
     CALIBRATION ANCHORS blocks. When scores are near extremes, the evaluator
     should reference the anchor language to demonstrate proper calibration.
     
+    Enhanced validation now includes:
+    1. Anchor keyword presence check
+    2. Justification quality assessment (minimum 15 words for extreme scores)
+    3. Score-justification consistency check
+    4. Mode-specific anchor validation for debate/implement modes
+    
     Args:
         text: Evaluator output text to validate
         evaluator_type: "basic" or "diffusion" to check appropriate anchors
-        mode: Optional mode ("debate" or "implement") - not used for anchor validation
+        mode: Optional mode ("debate" or "implement") for mode-specific validation
         
     Returns:
         List of issues found, empty if none
@@ -582,14 +588,16 @@ def validate_calibration_anchors(
             anchor_keywords = [
                 "broken", "dangerous", "off-topic", "fundamentally wrong",
                 "complete rewrite", "trivial case", "major requirement missed",
-                "partially correct", "missing core functionality", "fail basic tests"
+                "partially correct", "missing core functionality", "fail basic tests",
+                "critical issue", "severe flaw", "unusable", "incomplete"
             ]
         else:  # is_high_extreme
             # High extreme anchors for basic evaluator
             anchor_keywords = [
                 "correct + specific", "testable", "tested", "measurable",
                 "covers main requirement", "pass code review", "edge cases",
-                "named test", "metric", "every claim backed"
+                "named test", "metric", "every claim backed", "comprehensive",
+                "thorough", "well-structured", "actionable", "specific"
             ]
     else:  # diffusion
         if is_low_extreme:
@@ -597,15 +605,43 @@ def validate_calibration_anchors(
             anchor_keywords = [
                 "catastrophic", "irreversible", "systemically destabilising",
                 "dangerous", "breaks unrelated functionality", "no mitigation",
-                "concerning", "significant cascade", "explicit mitigation"
+                "concerning", "significant cascade", "explicit mitigation",
+                "high risk", "unacceptable risk", "severe impact", "cascading failure"
             ]
         else:  # is_high_extreme
             # High extreme anchors for diffusion evaluator
             anchor_keywords = [
                 "minor", "trivial ripple", "easily addressed", "negligible",
                 "zero maintenance", "trivial rollback", "bounded effects",
-                "clear mitigation", "minimal impact"
+                "clear mitigation", "minimal impact", "low risk", "acceptable",
+                "contained", "manageable", "isolated"
             ]
+    
+    # Mode-specific anchor keywords
+    if mode == "debate":
+        # Debate mode anchors - focus on reasoning quality
+        if is_low_extreme:
+            anchor_keywords.extend([
+                "vague", "unspecific", "no concrete plan", "missing details",
+                "poor reasoning", "unclear", "incomplete analysis"
+            ])
+        else:
+            anchor_keywords.extend([
+                "specific plan", "concrete steps", "clear reasoning",
+                "detailed analysis", "well-justified", "comprehensive plan"
+            ])
+    elif mode == "implement":
+        # Implement mode anchors - focus on code quality
+        if is_low_extreme:
+            anchor_keywords.extend([
+                "syntax error", "broken code", "untested", "import error",
+                "test failure", "buggy", "incorrect implementation"
+            ])
+        else:
+            anchor_keywords.extend([
+                "working code", "tests pass", "clean implementation",
+                "well-tested", "correct syntax", "proper imports"
+            ])
     
     # Check if any anchor keywords appear in the analysis section
     analysis_section = ""
@@ -624,14 +660,42 @@ def validate_calibration_anchors(
                 if section_pos > 0 and section_pos < section_end:
                     section_end = section_pos
         
-        analysis_section = analysis_text[:section_end].lower()
+        analysis_section = analysis_text[:section_end]
     
     # Check for anchor keyword presence
     found_anchor = False
+    anchor_matches = []
+    analysis_lower = analysis_section.lower()
+    
     for keyword in anchor_keywords:
-        if keyword.lower() in analysis_section:
+        if keyword.lower() in analysis_lower:
             found_anchor = True
-            break
+            anchor_matches.append(keyword)
+    
+    # Enhanced validation: Check justification quality for extreme scores
+    if analysis_section:
+        # Count words in analysis (excluding section header)
+        analysis_words = len(analysis_section.replace("ANALYSIS:", "").split())
+        
+        # Extreme scores require more detailed justification
+        if is_low_extreme or is_high_extreme:
+            if analysis_words < 15:
+                issues.append(
+                    f"Extreme score {score} has insufficient justification "
+                    f"({analysis_words} words). Extreme scores require at least 15 words "
+                    f"of detailed analysis referencing calibration anchors."
+                )
+            
+            # Check for justification of extreme nature
+            justification_indicators = ["because", "since", "due to", "as", "given that"]
+            has_justification = any(indicator in analysis_lower for indicator in justification_indicators)
+            
+            if not has_justification and analysis_words < 25:
+                issues.append(
+                    f"Extreme score {score} lacks explicit justification connectors "
+                    f"('because', 'since', 'due to', etc.). Extreme scores require "
+                    f"clear causal reasoning."
+                )
     
     if not found_anchor:
         score_range = "low" if is_low_extreme else "high"
@@ -640,6 +704,31 @@ def validate_calibration_anchors(
             f"When scoring {score_range} extremes, the analysis should reference the "
             f"calibration anchor language (e.g., '{anchor_keywords[0]}', '{anchor_keywords[1]}')."
         )
+    elif anchor_matches:
+        # Log successful anchor matches for debugging
+        log.debug(f"Found calibration anchors for score {score}: {', '.join(anchor_matches[:3])}")
+    
+    # Additional validation: Check for score-justification consistency
+    if analysis_section and found_anchor:
+        # For low extreme scores, check for negative language
+        if is_low_extreme:
+            negative_indicators = ["good", "excellent", "great", "well", "properly", "correctly"]
+            positive_count = sum(1 for indicator in negative_indicators if indicator in analysis_lower)
+            if positive_count > 2:
+                issues.append(
+                    f"Low extreme score {score} has inconsistent positive language "
+                    f"in analysis. Low scores should align with negative assessment."
+                )
+        
+        # For high extreme scores, check for negative language
+        elif is_high_extreme:
+            negative_indicators = ["bad", "poor", "wrong", "incorrect", "flawed", "broken", "missing"]
+            negative_count = sum(1 for indicator in negative_indicators if indicator in analysis_lower)
+            if negative_count > 2:
+                issues.append(
+                    f"High extreme score {score} has inconsistent negative language "
+                    f"in analysis. High scores should align with positive assessment."
+                )
     
     return issues
 
