@@ -38,6 +38,12 @@
 - Removed test `test_writefile_creates_parent_directories` which tested now-unneeded behavior
 - Updated `test_writefile_atomic_symlink_protection` to reflect actual symlink-following behavior
 
+## 2026-04-16: Restored parent directory creation for WriteFileTool
+- Fixed WriteFileTool's inability to create parent directories by changing `require_exists=True` to `require_exists=False` in parent directory validation
+- This restores the tool's ability to create files in non-existent subdirectories while maintaining security
+- Added test `test_writefile_creates_parent_directories` to verify the fix works correctly
+- Aligns WriteFileTool behavior with MoveFileTool and CopyFileTool which also use `require_exists=False`
+
 ---
 
 ## Summary

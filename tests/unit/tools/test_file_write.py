@@ -79,6 +79,30 @@ def test_writefile_new_file():
         assert file_path.read_text() == content
 
 
+def test_writefile_creates_parent_directories():
+    """Test that WriteFileTool can create files in non-existent subdirectories."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+
+        # Create a file in a non-existent subdirectory
+        file_path = workspace / "subdir" / "nested" / "test.txt"
+        content = "test content in nested directory"
+
+        tool = WriteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
+        assert not result.is_error
+        assert file_path.exists()
+        assert file_path.read_text() == content
+        # Verify parent directories were created
+        assert file_path.parent.exists()
+        assert file_path.parent.parent.exists()
+
+
 def test_writefile_overwrite_existing():
     """Test that WriteFileTool overwrites existing files."""
     with tempfile.TemporaryDirectory() as tmpdir:
