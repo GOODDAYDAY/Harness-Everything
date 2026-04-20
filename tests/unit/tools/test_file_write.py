@@ -29,7 +29,7 @@ def test_writefile_atomic_symlink_protection():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         # Test: symlink should be rejected
@@ -49,7 +49,7 @@ def test_writefile_valid_file():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -69,7 +69,7 @@ def test_writefile_new_file():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -91,7 +91,7 @@ def test_writefile_overwrite_existing():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=new_content))
@@ -110,7 +110,7 @@ def test_writefile_creates_parent_directories():
 
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
         result = asyncio.run(tool.execute(config, path=str(file_path), content=content))
@@ -131,7 +131,7 @@ def test_writefile_atomic_validation_raises_on_path_traversal():
         
         tool = WriteFileTool()
         config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
+        config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
         # Test path with '..' traversal attempt
@@ -139,6 +139,49 @@ def test_writefile_atomic_validation_raises_on_path_traversal():
         assert result.is_error
         # Should be rejected by atomic validation
         assert "outside workspace" in result.error.lower() or "not allowed" in result.error.lower() or "path traversal" in result.error.lower()
+
+
+def test_writefile_atomic_parent_symlink_protection():
+    """Test that WriteFileTool prevents TOCTOU symlink attacks on parent directories."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        outside = Path(tmpdir) / "outside"
+        outside.mkdir()
+
+        # Create a legitimate file in workspace
+        legit_file = workspace / "data.txt"
+        legit_file.write_text("safe")
+        
+        # Create a secret file outside workspace
+        secret_file = outside / "secret.txt"
+        secret_file.write_text("classified")
+        
+        # Create a symlink to a parent directory
+        parent_link = workspace / "link_parent"
+        parent_link.mkdir()
+        
+        # Create a symlink inside the parent_link directory pointing outside
+        nested_link = parent_link / "nested"
+        nested_link.symlink_to(outside)
+        
+        # Try to write a file through the symlinked parent directory
+        target_path = nested_link / "target.txt"
+        
+        tool = WriteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Test: writing through symlinked parent directory should be rejected
+        result = asyncio.run(tool.execute(
+            config, 
+            path=str(target_path), 
+            content="malicious content"
+        ))
+        assert result.is_error
+        # Should be rejected by atomic parent directory validation
+        assert "symlink" in result.error.lower() or "not allowed" in result.error.lower()
 
 
 if __name__ == "__main__":
