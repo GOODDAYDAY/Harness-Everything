@@ -350,5 +350,44 @@ def test_movefile_cross_device_error_no_copy_suggestion():
             assert "separate copy and delete" in result.error.lower()
 
 
+def test_delete_file_atomic_validation_race_condition():
+    """Test that DeleteFileTool properly handles FileNotFoundError after atomic validation.
+    
+    This test specifically validates the TOCTOU protection behavior by mocking
+    _validate_atomic_path to return a valid path, then mocking os.unlink to
+    raise FileNotFoundError, simulating a race condition where the file is
+    deleted between validation and deletion.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        test_file = workspace / "test.txt"
+        test_file.write_text("content")
+        test_file_path_str = str(test_file)
+        
+        tool = DeleteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Mock _validate_atomic_path to return a valid path
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            mock_validate.return_value = (True, test_file_path_str)
+            
+            # Mock os.unlink to raise FileNotFoundError
+            with patch('os.unlink', side_effect=FileNotFoundError):
+                result = asyncio.run(tool.execute(config, path=test_file_path_str))
+                
+                # Should return an error about file disappearing after validation
+                assert result.is_error
+                assert "File disappeared after validation" in result.error
+                
+                # Verify _validate_atomic_path was called with correct parameters
+                mock_validate.assert_called_once_with(
+                    config, test_file_path_str, require_exists=True, check_scope=True
+                )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
