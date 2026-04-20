@@ -19,6 +19,9 @@ class ReadFileTool(Tool):
     )
     requires_path_check = True
     tags = frozenset({"file_read"})
+    
+    # Maximum allowed lines to prevent resource exhaustion attacks
+    MAX_READ_LINES = 10000
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -62,6 +65,11 @@ class ReadFileTool(Tool):
             return ToolResult(error=f"offset must be ≥ 1, got {offset}", is_error=True)
         if limit < 1:
             return ToolResult(error=f"limit must be ≥ 1, got {limit}", is_error=True)
+        if limit > self.MAX_READ_LINES:
+            return ToolResult(
+                error=f"limit exceeds maximum allowed lines ({self.MAX_READ_LINES}), got {limit}",
+                is_error=True
+            )
 
         # Use atomic validation for source file to prevent TOCTOU attacks
         is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)

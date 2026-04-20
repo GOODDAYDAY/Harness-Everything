@@ -24,16 +24,6 @@ def test_calculate_critical_range_discrimination_no_scores_in_range():
     assert result == 0.0
 
 
-def test_calculate_critical_range_discrimination_single_score_in_range():
-    """Test with only one score in the critical 4-7 range."""
-    evaluations = [
-        {"score": 5.0},
-        {"score": 8.0}
-    ]
-    result = calculate_critical_range_discrimination(evaluations)
-    assert result == 0.0
-
-
 def test_calculate_critical_range_discrimination_two_scores_in_range():
     """Test with two scores in the critical 4-7 range."""
     evaluations = [

@@ -905,5 +905,42 @@ def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
         assert "File operation failed on descriptor 123: Operation failed" in error.error
 
 
+def test_read_file_limit_exceeds_maximum():
+    """Test that ReadFileTool rejects limit values exceeding MAX_READ_LINES."""
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import Mock
+    import asyncio
+    
+    from harness.core.config import HarnessConfig
+    from harness.tools.file_read import ReadFileTool
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file with some content
+        test_file = workspace / "test.txt"
+        test_file.write_text("line 1\nline 2\nline 3\nline 4\nline 5")
+        
+        tool = ReadFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test with limit exceeding MAX_READ_LINES
+        result = asyncio.run(tool.execute(
+            config, 
+            path=str(test_file),
+            limit=ReadFileTool.MAX_READ_LINES + 100
+        ))
+        
+        # Verify the result is an error
+        assert result.is_error, f"Expected error but got: {result.output}"
+        assert "limit exceeds maximum allowed lines" in result.error
+        assert str(ReadFileTool.MAX_READ_LINES) in result.error
+        assert str(ReadFileTool.MAX_READ_LINES + 100) in result.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
