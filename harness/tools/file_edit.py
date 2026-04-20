@@ -72,23 +72,10 @@ class EditFileTool(Tool):
 
         new_text = text.replace(old_str, new_str, -1 if replace_all else 1)
         
-        # Write back using atomic write pattern (temp file + os.replace)
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=os.path.dirname(resolved), delete=False
-            ) as tmp:
-                tmp.write(new_text)
-                tmp_path = tmp.name
-            os.replace(tmp_path, resolved)
-        except Exception as exc:
-            # Clean up temp file if it exists
-            try:
-                if tmp_path is not None and os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-            except Exception:
-                pass
-            return ToolResult(error=f"Failed to write file: {exc}", is_error=True)
+        # Write back using the new async atomic helper
+        write_error = await self._atomic_write_text(resolved, new_text)
+        if write_error is not None:
+            return write_error
         
         replaced = count if replace_all else 1
         return ToolResult(output=f"Replaced {replaced} occurrence(s) in {resolved}")

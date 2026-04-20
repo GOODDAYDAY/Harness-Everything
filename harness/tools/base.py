@@ -530,6 +530,41 @@ class Tool(ABC):
         finally:
             file_obj.close()
 
+    async def _atomic_write_text(self, resolved_path: str, content: str) -> ToolResult | None:
+        """Atomically write content to resolved_path using temp file + os.replace.
+        
+        All disk I/O runs in asyncio.to_thread to avoid blocking the event loop.
+        Returns None on success, ToolResult error on failure.
+        """
+        import tempfile
+        import os
+        
+        def _sync_write():
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", 
+                    dir=os.path.dirname(resolved_path) or ".", 
+                    delete=False
+                ) as tmp:
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                os.replace(tmp_path, resolved_path)
+                return None
+            except Exception as exc:
+                # Clean up temp file if it exists
+                try:
+                    if tmp_path is not None and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                except Exception:
+                    pass
+                return ToolResult(error=f"Failed to write file: {exc}", is_error=True)
+        
+        try:
+            return await asyncio.to_thread(_sync_write)
+        except Exception as exc:
+            return ToolResult(error=f"Async write failed: {exc}", is_error=True)
+
     def _find_path_by_inode(self, st_dev: int, st_ino: int, original_path_hint: str, workspace_root: str) -> str:
         """
         Find a file by its device and inode numbers within the workspace.
