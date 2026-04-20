@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Callable, Optional, Tuple
+from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
 
 
+@enforce_atomic_validation
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
@@ -38,24 +39,7 @@ class ReadFileTool(Tool):
             "required": ["path"],
         }
 
-    def _guaranteed_fd_cleanup(self, fd: int, operation: Callable[[int], Any]) -> Tuple[Any, Optional[ToolResult]]:
-        """
-        Execute `operation(fd)` and guarantee `os.close(fd)` is called on failure.
-        Returns (result, None) on success, or (None, ToolResult) on failure.
-        
-        On success, ownership of `fd` is transferred to the result of `operation`.
-        On failure, `fd` is closed before returning an error.
-        """
-        try:
-            result = operation(fd)  # e.g., os.fdopen(fd, 'rb')
-            return result, None
-        except Exception as exc:
-            # Close fd only on operation failure
-            try:
-                os.close(fd)
-            except OSError:
-                pass  # FD may already be closed; ignore secondary error
-            return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
+
 
     async def execute(
         self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
@@ -72,6 +56,12 @@ class ReadFileTool(Tool):
                 error=f"offset and limit must be integers, got offset={offset!r} limit={limit!r}: {exc}",
                 is_error=True,
             )
+        
+        # Validate offset and limit values
+        if offset < 1:
+            return ToolResult(error=f"offset must be ≥ 1, got {offset}", is_error=True)
+        if limit < 1:
+            return ToolResult(error=f"limit must be ≥ 1, got {limit}", is_error=True)
 
         # Use atomic validation for source file to prevent TOCTOU attacks
         is_valid_path, path_validated = await self._validate_atomic_path(config, path)
@@ -79,28 +69,11 @@ class ReadFileTool(Tool):
             return path_validated  # This is the ToolResult error
         resolved = path_validated
 
-        # Use the atomic fallback helper from base class
-        fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, os.O_RDONLY)
-        if error is not None:
-            return error
-        
-        # Use the new helper to safely convert fd to a file object
-        def fdopen_operation(fd: int):
-            return os.fdopen(fd, 'rb')
-        
-        file_obj, open_error = await asyncio.to_thread(self._guaranteed_fd_cleanup, fd, fdopen_operation)
-        if open_error is not None:
-            return open_error
-        # file_obj is now guaranteed to be open, and the original fd is closed.
-        
-        try:
-            # Read binary and decode with same error handling as original
-            content = file_obj.read()
-            lines = content.decode('utf-8', errors='replace').splitlines(keepends=True)
-        except Exception as exc:
-            return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
-        finally:
-            file_obj.close()
+        # Use the shared atomic read helper
+        text, read_error = await self._atomic_read_text(config, resolved)
+        if read_error is not None:
+            return read_error
+        lines = text.splitlines(keepends=True)
 
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]

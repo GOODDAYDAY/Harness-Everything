@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
 
 
+@enforce_atomic_validation
 class DeleteFileTool(Tool):
     name = "delete_file"
     description = "Delete a file."
@@ -30,12 +31,10 @@ class DeleteFileTool(Tool):
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, path)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         resolved = src_validated
-        if scope_err := self._check_phase_scope(config, resolved):
-            return scope_err
 
         # Atomic deletion without a separate existence check
         try:
@@ -51,6 +50,7 @@ class DeleteFileTool(Tool):
         return ToolResult(output=f"Deleted {resolved}")
 
 
+@enforce_atomic_validation
 class MoveFileTool(Tool):
     name = "move_file"
     description = "Move or rename a file."
@@ -71,27 +71,35 @@ class MoveFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source, require_exists=True, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
-        
-        # Scope check both source (we're removing it) and destination (we're
-        # creating it) — a move out of scope is effectively both a delete and
-        # a write.
-        if scope_err := self._check_phase_scope(config, src):
-            return scope_err
-        if scope_err := self._check_phase_scope(config, dst):
-            return scope_err
 
-        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        # Validate parent directory atomically to prevent TOCTOU symlink attacks
+        parent_dir = Path(dst).parent
+        if str(parent_dir) != ".":  # Skip if parent is current directory
+            # Validate parent directory exists and is not a symlink
+            is_valid_parent, parent_validated = await self._validate_atomic_path(
+                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+            )
+            if not is_valid_parent:
+                return parent_validated  # This is a ToolResult error
+            
+            # Create parent directory if it doesn't exist
+            if not os.path.exists(parent_validated):
+                try:
+                    os.makedirs(parent_validated, exist_ok=False)
+                except OSError as exc:
+                    return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+
         try:
             os.rename(src, dst)  # Atomic operation on validated path strings
         except FileNotFoundError:
@@ -111,6 +119,7 @@ class MoveFileTool(Tool):
         return ToolResult(output=f"Moved {src} -> {dst}")
 
 
+@enforce_atomic_validation
 class CopyFileTool(Tool):
     name = "copy_file"
     description = "Copy a file to a new location."
@@ -131,28 +140,57 @@ class CopyFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source, require_exists=True, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
         
-        # Scope check on destination only — copying out of scope is still a
-        # write; reading the source does not create new state.
-        if scope_err := self._check_phase_scope(config, dst):
-            return scope_err
-        
-        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        # Validate parent directory atomically to prevent TOCTOU symlink attacks
+        parent_dir = Path(dst).parent
+        if str(parent_dir) != ".":  # Skip if parent is current directory
+            # Validate parent directory exists and is not a symlink
+            is_valid_parent, parent_validated = await self._validate_atomic_path(
+                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+            )
+            if not is_valid_parent:
+                return parent_validated  # This is a ToolResult error
+            
+            # Create parent directory if it doesn't exist
+            if not os.path.exists(parent_validated):
+                try:
+                    os.makedirs(parent_validated, exist_ok=False)
+                except OSError as exc:
+                    return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
         
         # Proceed with the copy using async thread
         try:
             await asyncio.to_thread(shutil.copy2, src, dst)
+        except FileNotFoundError:
+            # File was deleted by another process after validation
+            return ToolResult(
+                error=f"Source file disappeared after validation: {src}",
+                is_error=True
+            )
+        except OSError as exc:
+            # Handle specific OS errors with user-friendly messages
+            if exc.errno == errno.EXDEV:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': cross-device copy not supported. Use separate copy operations.",
+                    is_error=True
+                )
+            if exc.errno == errno.ENOSPC:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': disk full (ENOSPC).",
+                    is_error=True
+                )
+            return ToolResult(error=f"Copy failed: {exc}", is_error=True)
         except Exception as exc:
             return ToolResult(error=f"Copy failed: {exc}", is_error=True)
         

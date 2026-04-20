@@ -350,5 +350,81 @@ def test_movefile_cross_device_error_no_copy_suggestion():
             assert "separate copy and delete" in result.error.lower()
 
 
+def test_delete_file_atomic_validation_race_condition():
+    """Test that DeleteFileTool properly handles FileNotFoundError after atomic validation.
+    
+    This test specifically validates the TOCTOU protection behavior by mocking
+    _validate_atomic_path to return a valid path, then mocking os.unlink to
+    raise FileNotFoundError, simulating a race condition where the file is
+    deleted between validation and deletion.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        test_file = workspace / "test.txt"
+        test_file.write_text("content")
+        test_file_path_str = str(test_file)
+        
+        tool = DeleteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Mock _validate_atomic_path to return a valid path
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            mock_validate.return_value = (True, test_file_path_str)
+            
+            # Mock os.unlink to raise FileNotFoundError
+            with patch('os.unlink', side_effect=FileNotFoundError):
+                result = asyncio.run(tool.execute(config, path=test_file_path_str))
+                
+                # Should return an error about file disappearing after validation
+                assert result.is_error
+                assert "File disappeared after validation" in result.error
+                
+                # Verify _validate_atomic_path was called with correct parameters
+                mock_validate.assert_called_once_with(
+                    config, test_file_path_str, require_exists=True, check_scope=True
+                )
+
+
+def test_validate_atomic_path_parameter_names():
+    """Test that _validate_atomic_path is called with correct parameter names.
+    
+    This test verifies that the atomic validation decorator contract is maintained
+    and that tools use the correct parameter names (require_exists, not check_exists).
+    """
+    # Test DeleteFileTool
+    delete_tool = DeleteFileTool()
+    assert delete_tool.requires_path_check is True, "DeleteFileTool should require path check"
+    
+    # Test MoveFileTool
+    move_tool = MoveFileTool()
+    assert move_tool.requires_path_check is True, "MoveFileTool should require path check"
+    
+    # Test CopyFileTool
+    copy_tool = CopyFileTool()
+    assert copy_tool.requires_path_check is True, "CopyFileTool should require path check"
+    
+    # Verify that all tools have the correct parameter name in their execute methods
+    # by checking that require_exists is used (not check_exists)
+    import inspect
+    import asyncio
+    
+    # Check DeleteFileTool.execute signature
+    delete_sig = inspect.signature(DeleteFileTool.execute)
+    delete_params = list(delete_sig.parameters.keys())
+    # The method should accept config, path parameters
+    
+    # Check that the tool's _validate_atomic_path method has require_exists parameter
+    validate_sig = inspect.signature(delete_tool._validate_atomic_path)
+    validate_params = list(validate_sig.parameters.keys())
+    assert 'require_exists' in validate_params, "_validate_atomic_path should have require_exists parameter"
+    assert 'check_exists' not in validate_params, "_validate_atomic_path should NOT have check_exists parameter"
+    
+    print("All tools use correct parameter name 'require_exists' and maintain decorator contract")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

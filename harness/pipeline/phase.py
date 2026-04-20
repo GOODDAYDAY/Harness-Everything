@@ -84,6 +84,39 @@ class PhaseConfig:
                 f"PhaseConfig.skip_cycle must be >= 1 (or None to disable), "
                 f"got {self.skip_cycle}"
             )
+        self._validate_allowed_edit_globs()
+
+    def _validate_allowed_edit_globs(self) -> None:
+        """Validate allowed_edit_globs to prevent path traversal outside workspace.
+        
+        Raises:
+            ValueError: If any glob pattern contains '..' or starts with an
+                absolute path indicator ('/' on Unix or '[A-Z]:\\' on Windows).
+        """
+        import os
+        from pathlib import PurePath
+        
+        for pattern in self.allowed_edit_globs:
+            # Check for parent directory traversal
+            if '..' in pattern:
+                raise ValueError(
+                    f"Glob pattern '{pattern}' contains '..' which could allow "
+                    f"path traversal outside workspace"
+                )
+            
+            # Check for absolute paths
+            if os.path.isabs(pattern):
+                raise ValueError(
+                    f"Glob pattern '{pattern}' is an absolute path. "
+                    f"Use relative patterns only."
+                )
+            
+            # Windows-specific: check for drive letter absolute paths
+            if len(pattern) >= 2 and pattern[1] == ':' and pattern[2:].startswith('\\'):
+                raise ValueError(
+                    f"Glob pattern '{pattern}' is an absolute Windows path. "
+                    f"Use relative patterns only."
+                )
 
     def should_skip(self, outer: int) -> bool:
         """Whether this phase should be skipped in the given outer round.
@@ -123,7 +156,23 @@ class DualScore:
 
     @property
     def combined(self) -> float:
-        return self.basic.score + self.diffusion.score
+        """Combined score (weighted average of basic and diffusion, 0-10).
+        
+        Uses 60% weight for basic score (detailed correctness evaluation) and
+        40% weight for diffusion score (system-level impact evaluation).
+        The result is clamped to the [0.0, 10.0] range.
+        """
+        # Validate that both scores are within the expected 0-10 range
+        if not (0.0 <= self.basic.score <= 10.0):
+            raise ValueError(f"Basic score {self.basic.score} is outside valid range [0.0, 10.0]")
+        if not (0.0 <= self.diffusion.score <= 10.0):
+            raise ValueError(f"Diffusion score {self.diffusion.score} is outside valid range [0.0, 10.0]")
+        
+        # Calculate weighted average: 60% basic, 40% diffusion
+        weighted_score = 0.6 * self.basic.score + 0.4 * self.diffusion.score
+        
+        # Clamp to [0.0, 10.0] range
+        return max(0.0, min(10.0, weighted_score))
 
 
 @dataclass

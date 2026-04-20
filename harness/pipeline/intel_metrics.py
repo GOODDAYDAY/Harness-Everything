@@ -110,13 +110,33 @@ async def run_eval_probe(
 
     ok, reason = verify_hash(workspace)
     if not ok:
-        log.warning("intel_probe: hash check failed (%s) — skipping", reason)
-        return None
+        log.warning("intel_probe: hash verification failed: %s", reason)
+        return {"rho": 0.0, "hash_verification_failed": True, "error": reason}
+
+    # Compute hash to pass to subprocess for dual-layer verification
+    current_hash = _compute_hash(workspace)
+    if not current_hash:
+        log.warning("intel_probe: cannot compute benchmark hash — skipping")
+        return {"rho": 0.0, "hash_verification_failed": True, "error": "cannot compute benchmark hash"}
 
     argv = [sys.executable, str(script)]
     if pipeline_config_path:
-        argv.append(pipeline_config_path)
+        # Add validation as per Round 1, item #3
+        config_path = Path(pipeline_config_path)
+        workspace_path = Path(workspace)
+        try:
+            config_path.resolve().relative_to(workspace_path.resolve())
+        except ValueError:
+            log.warning("intel_probe: config path outside workspace — skipping")
+            return None
+        if config_path.suffix != '.json':
+            log.warning("intel_probe: config must be JSON file — skipping")
+            return None
+        argv.append(str(config_path))
 
+    # Pass hash via environment variable for subprocess self-verification
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "HARNESS_PROBE_HASH": current_hash}
+    
     proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -124,7 +144,7 @@ async def run_eval_probe(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env=env,
         )
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(), timeout=_PROBE_TIMEOUT_S
@@ -168,13 +188,17 @@ def format_trajectory(
     injecting into prompts or memory entries.
 
     Schema: {"trajectory": [ρ, ρ, ρ, ...], "current": ρ, "delta": Δ,
-             "target": 0.85, "regressions_in_last_5": int}
+             "target": 0.85, "regressions_in_last_5": int,
+             "valid_points": int, "corrupt_lines": int,
+             "hash_verification_failed": bool}
     """
     path = Path(latest_results_path)
     if not path.exists():
         return {"trajectory": [], "current": None, "delta": None, "target": 0.85,
-                "regressions_in_last_5": 0}
+                "regressions_in_last_5": 0, "valid_points": 0, "corrupt_lines": 0,
+                "hash_verification_failed": False}
     rows: list[dict] = []
+    corrupt_lines = 0
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -182,10 +206,18 @@ def format_trajectory(
                 try:
                     rows.append(json.loads(line))
                 except json.JSONDecodeError:
+                    corrupt_lines += 1
                     continue
     if not rows:
         return {"trajectory": [], "current": None, "delta": None, "target": 0.85,
-                "regressions_in_last_5": 0}
+                "regressions_in_last_5": 0, "valid_points": 0, "corrupt_lines": corrupt_lines,
+                "hash_verification_failed": False}
+    
+    # Check for hash verification failures in the results
+    hash_verification_failed = any(
+        r.get("hash_verification_failed", False) for r in rows[-max_points:]
+    )
+    
     trajectory = [r.get("rho", 0.0) for r in rows[-max_points:]]
     current = trajectory[-1] if trajectory else None
     delta = (
@@ -204,4 +236,7 @@ def format_trajectory(
         "delta": delta,
         "target": 0.85,
         "regressions_in_last_5": regressions,
+        "valid_points": len(rows),
+        "corrupt_lines": corrupt_lines,
+        "hash_verification_failed": hash_verification_failed,
     }

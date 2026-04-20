@@ -32,12 +32,47 @@ CONCRETE SCORING EXAMPLES:
 - Score 9: Proposal includes code, tests, and validation for main scenarios
 - Score 10: Proposal includes code, tests, and validation of edge cases with metrics
 
-SCORING GUIDELINES (0-10 scale):
-- 0-3: Critical failure — task fundamentally incomplete or broken
-- 4-5: Major issues — core functionality missing or incorrect
-- 6-7: Moderate issues — works but with significant problems
-- 8-9: Minor issues — works well with small improvements needed
-- 10: Perfect — no issues found, all requirements fully met
+DISCRIMINATION GUIDELINES (critical for consistent scoring):
+- Scores 1-3: Proposal is fundamentally wrong or broken
+- Score 4: Proposal identifies correct area but lacks any concrete implementation
+- Score 5: Proposal has correct direction but missing key details (what/where/how)
+- Score 6: Proposal is specific (names files/functions) but incomplete
+- Score 7: Proposal is specific and mostly complete but missing edge cases
+- Score 8: Proposal is complete, specific, and testable
+- Score 9: Proposal includes tests/validation for main scenarios
+- Score 10: Proposal includes comprehensive validation with metrics
+
+SCORING GUIDELINES (0-10 scale — enforce strict discrimination):
+- 0-3: Critical failure — proposal is fundamentally wrong, dangerous, or broken
+- 4: Identifies correct area but lacks any concrete implementation details
+- 5: Correct direction but missing key details (what/where/how) for implementation
+- 6: Specific (names files/functions) but implementation is incomplete
+- 7: Specific and mostly complete but missing important edge cases
+- 8: Complete, specific, and testable — would pass basic code review
+- 9: Includes tests/validation for main scenarios — near production quality
+- 10: Comprehensive with edge case validation and metrics — production ready
+
+DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
+- CRITICAL RANGE (4-7): Most proposals fall here — focus on clear differentiation
+  - Score 4 vs 5: Does proposal name specific files/functions? If yes → ≥5, if no → 4
+  - Score 5 vs 6: Does proposal address main requirement completely? If yes → ≥6, if no → 5
+  - Score 6 vs 7: Does proposal handle edge cases? If yes → ≥7, if no → 6
+  - Score 7 vs 8: Is proposal testable and ready for code review? If yes → ≥8, if no → 7
+- FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
+  - Score 4.5: Generic approach with some specific elements, but not enough for full 5
+  - Score 5.5: Specific but incomplete with some edge cases addressed, but not enough for 6
+  - Score 6.5: Mostly complete with some testability elements, but not enough for 7
+  - Use fractional scores when proposal falls between integer score criteria
+  - Always justify fractional scores with specific reasons why not higher/lower integer
+- FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
+  - 4.5: Must explain which specific elements push it above 4, and what's missing for 5
+  - 5.5: Must explain which edge cases are addressed (pushing toward 6) and what major gaps remain (keeping at 5)
+  - 6.5: Must explain which testability elements are present (pushing toward 7) and what edge cases are missing (keeping at 6)
+- DIMENSION DISCRIMINATION: Each checklist item (1-5) must show clear score differences
+  - Scores 4-5: Major gaps in one or more dimensions
+  - Scores 6-7: Moderate issues across dimensions
+  - Scores 8-9: Minor issues in specific dimensions
+  - Score 10: No issues in any dimension
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \
@@ -105,6 +140,26 @@ SCORING CALIBRATION (0-10 scale):
 - 8-9: Core goal fully achieved — minor polish needed
 - 10: Core goal perfectly achieved — no issues, ready to ship
 
+DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
+- CRITICAL RANGE (4-7): Most proposals fall here — focus on clear differentiation
+  - Score 4 vs 5: Does execution achieve ANY part of core goal? If yes → ≥5, if no → 4
+  - Score 5 vs 6: Does execution achieve MAJOR functionality? If yes → ≥6, if no → 5
+  - Score 6 vs 7: Does execution MOSTLY work with only minor issues? If yes → ≥7, if no → 6
+  - Score 7 vs 8: Is core goal FULLY achieved with only polish needed? If yes → ≥8, if no → 7
+- FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range (Spearman ρ optimization):
+  - Score 4.5: Core goal partially achieved with at least ONE specific implementation element named (file/function). MUST cite specific evidence.
+  - Score 5.5: Major functionality present but missing EXACTLY 2+ key requirements or edge cases. MUST list the missing requirements.
+  - Score 6.5: Core goal mostly achieved but has EXACTLY 1-2 significant issues preventing full 7. MUST specify the issues.
+  - Score 7.5: Core goal fully achieved but has MINOR polish issues preventing full 8. MUST describe the polish needed.
+  - Use fractional scores ONLY when execution clearly falls between integer score criteria
+  - ALWAYS justify fractional scores with SPECIFIC evidence of what pushes toward higher score AND what prevents reaching it
+- DISCRIMINATION CHECKLIST for Spearman ρ improvement:
+  - For score 4.0: Verify this isn't actually 5.0 - does execution achieve ANY part of core goal?
+  - For score 5.0: Verify clear distinction from 4.0 (generic) and 6.0 (specific) - cite specific file/function elements
+  - For score 6.0: Verify clear distinction from 5.0 (partial) and 7.0 (mostly complete) - show testability evidence
+  - For score 7.0: Verify this isn't actually 6.0 or 8.0 - is core goal fully achieved with only minor issues?
+  - For fractional scores: ALWAYS explain why it's not the integer above or below
+
 EVALUATION APPROACH:
 1. STATE the core goal of the task in one sentence — be specific, not vague \
    ("add X to Y so that Z" not "improve the system")
@@ -116,13 +171,13 @@ EVALUATION APPROACH:
      Must cite a specific file, function, and failure scenario.
    - POLISH: style, minor edge case, non-critical optimisation, or anything \
      that would not cause a user-visible failure in normal operation
-4. PASS if score ≥ 8 (core goal achieved with only minor issues)
-5. FAIL if score ≤ 7 (core goal not fully achieved)
+4. PASS if score ≥ 7.5 (core goal fully achieved, minor polish issues acceptable)
+5. FAIL if score ≤ 7.4 (core goal not fully achieved)
 6. Do NOT block on POLISH issues — note them under SUGGESTIONS only
 
 VERDICT RULES:
-- PASS if the core goal is achieved (score ≥ 8) with no BLOCKERs
-- FAIL only when score ≤ 7 or a BLOCKER exists — state exactly what it is and which \
+- PASS if the core goal is achieved (score ≥ 7.5) with no BLOCKERs
+- FAIL only when score ≤ 7.4 or a BLOCKER exists — state exactly what it is and which \
   file/function it occurs in; do not describe blockers vaguely
 - Minor imperfections are normal; list them under SUGGESTIONS but do not \
   let them flip the verdict
@@ -150,24 +205,32 @@ single authoritative decision.
 
 INPUT:
 - Strict reviewer verdict (CONSERVATIVE): uses 5-dimension scoring (0-10 each), fails if any dimension ≤ 7
-- Pragmatic reviewer verdict (AGGRESSIVE): uses core goal scoring (0-10), fails if score ≤ 7
+- Pragmatic reviewer verdict (AGGRESSIVE): uses core goal scoring (0-10), fails if score ≤ 7.4
 
 ARBITRATION RULES:
 1. EXTRACT SCORES: Read both reviewers' FINAL SCORE lines. If missing, infer from context.
-2. CALCULATE CONSENSUS: Average the two scores. If both ≥ 8 → PASS; if both ≤ 7 → FAIL.
-3. If scores disagree (one ≥ 8, one ≤ 7):
-   a. Re-read the lower-scoring reviewer's DETAILS — are the findings genuine bugs \
-      or theoretical concerns outside the task's stated scope?
-   b. If genuine bug → FAIL (trust the stricter assessment); quote the \
-      specific finding verbatim in REASON
-   c. If theoretical / out-of-scope → PASS with a note in FEEDBACK \
-      explaining exactly why the concern was overruled (cite the \
-      task description clause that makes it out-of-scope)
-4. FEEDBACK must be actionable: each line must reference a specific \
+2. CALCULATE CONSENSUS: Average the two scores. If both ≥ 7.5 → PASS; if both ≤ 7.4 → FAIL. For scores in the 7.5-7.9 range, apply rule 3a (≥7.5 = PASS).
+3. HANDLE FRACTIONAL SCORES: When reviewers use fractional scores (e.g., 6.5, 7.5):
+   a. For PASS/FAIL determination: treat scores ≥ 7.5 as PASS, scores ≤ 7.4 as FAIL
+   b. Use the exact fractional value for COMBINED_SCORE calculation
+   c. This aligns with individual evaluator thresholds (CONSERVATIVE: ≤7 = FAIL, AGGRESSIVE: ≤7.4 = FAIL)
+4. RESOLVE SCORE DISAGREEMENTS:
+   a. If scores disagree (one ≥ 8, one ≤ 7):
+      i. Re-read the lower-scoring reviewer's DETAILS — are the findings genuine bugs \
+         or theoretical concerns outside the task's stated scope?
+      ii. If genuine bug → FAIL (trust the stricter assessment); quote the \
+          specific finding verbatim in REASON
+      iii. If theoretical / out-of-scope → PASS with a note in FEEDBACK \
+           explaining exactly why the concern was overruled (cite the \
+           task description clause that makes it out-of-scope)
+   b. If both scores are in the 7.5-7.9 range (e.g., 7.6 and 7.8):
+      i. Apply rule 3a: ≥7.5 = PASS
+      ii. Use the average for COMBINED_SCORE
+5. FEEDBACK must be actionable: each line must reference a specific \
    file + function + exact change — not vague advice like "improve error handling"
-5. FEEDBACK must be prioritised: highest-impact fix first; issues that prevent \
+6. FEEDBACK must be prioritised: highest-impact fix first; issues that prevent \
    the task goal from working must precede cosmetic concerns
-6. Include a COMBINED_SCORE in your output (average of the two reviewers' scores)
+7. Include a COMBINED_SCORE in your output (average of the two reviewers' scores)
 
 ANTI-INFLATION RULE: do not manufacture findings to appear thorough. \
 If the code is correct and complete, VERDICT must be PASS. \
