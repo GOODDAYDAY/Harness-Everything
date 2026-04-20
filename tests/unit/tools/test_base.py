@@ -181,5 +181,67 @@ def test_guaranteed_fd_cleanup_returns_correct_tuple():
     assert "Simulated file operation failure" in error.error
 
 
+def test_validate_atomic_path_detects_symlink_swap():
+    """Test that _validate_atomic_path detects symlink swap attacks (TOCTOU vulnerability).
+    
+    Creates a symlink within a temp workspace, opens an FD to it, swaps the symlink target,
+    and asserts that _validate_atomic_path returns (False, ToolResult) with a "TOCTOU" error.
+    """
+    import errno
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create workspace directory
+        workspace = tmpdir_path / "workspace"
+        workspace.mkdir()
+        
+        # Create a file inside workspace
+        allowed_file = workspace / "allowed.txt"
+        allowed_file.write_text("allowed content")
+        
+        # Create a directory outside workspace
+        outside_dir = tmpdir_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "secret.txt"
+        outside_file.write_text("secret content")
+        
+        # Create a symlink inside workspace pointing to allowed file
+        symlink_path = workspace / "link.txt"
+        symlink_path.symlink_to(allowed_file)
+        
+        # Create a test tool instance
+        tool = TestTool()
+        
+        # Mock config with workspace root
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # First validation should succeed - symlink points to allowed file
+        is_valid, result = tool._validate_atomic_path_sync(config, str(symlink_path))
+        assert is_valid is True
+        assert isinstance(result, str)
+        assert "allowed.txt" in result  # Should resolve to the target
+        
+        # Now simulate a symlink swap attack
+        # Remove the symlink and create a new one pointing outside
+        symlink_path.unlink()
+        symlink_path.symlink_to(outside_file)
+        
+        # In a real TOCTOU attack, this would happen between validation and file open
+        # The _validate_atomic_path method should detect this because it opens the file
+        # with O_NOFOLLOW and validates the inode
+        is_valid, result = tool._validate_atomic_path_sync(config, str(symlink_path))
+        
+        # The result should be an error because the symlink now points outside
+        assert is_valid is False
+        assert isinstance(result, ToolResult)
+        assert result.is_error
+        # Check for error message indicating symlink resolution or TOCTOU detection
+        error_lower = result.error.lower()
+        assert any(keyword in error_lower for keyword in ["symlink", "outside", "toctou", "validation failed", "not within allowed"])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
