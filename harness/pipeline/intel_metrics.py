@@ -110,14 +110,14 @@ async def run_eval_probe(
 
     ok, reason = verify_hash(workspace)
     if not ok:
-        log.warning("intel_probe: hash check failed (%s) — skipping", reason)
-        return None
+        log.warning("intel_probe: hash verification failed: %s", reason)
+        return {"rho": 0.0, "hash_verification_failed": True, "error": reason}
 
     # Compute hash to pass to subprocess for dual-layer verification
     current_hash = _compute_hash(workspace)
     if not current_hash:
-        log.warning("intel_probe: cannot compute hash — skipping")
-        return None
+        log.warning("intel_probe: cannot compute benchmark hash — skipping")
+        return {"rho": 0.0, "hash_verification_failed": True, "error": "cannot compute benchmark hash"}
 
     argv = [sys.executable, str(script)]
     if pipeline_config_path:

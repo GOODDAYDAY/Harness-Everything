@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -37,11 +36,9 @@ class WriteFileTool(Tool):
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 
-        p = Path(resolved)
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-        except Exception as exc:
-            return ToolResult(error=str(exc), is_error=True)
-
+        # Write back using the async atomic helper
+        write_error = await self._atomic_write_text(resolved, content)
+        if write_error is not None:
+            return write_error
+        
         return ToolResult(output=f"Wrote {len(content)} bytes to {resolved}")
