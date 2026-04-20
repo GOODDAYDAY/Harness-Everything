@@ -78,7 +78,7 @@ class MoveFileTool(Tool):
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True)
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
@@ -87,7 +87,7 @@ class MoveFileTool(Tool):
         parent_dir = Path(dst).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
             is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
-                config, str(parent_dir), require_exists=False, check_scope=True
+                config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=True
             )
             if not is_valid_parent:
                 return parent_result  # This is a ToolResult error
@@ -150,7 +150,7 @@ class CopyFileTool(Tool):
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True)
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
@@ -159,7 +159,7 @@ class CopyFileTool(Tool):
         parent_dir = Path(dst).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
             is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
-                config, str(parent_dir), require_exists=False, check_scope=True
+                config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=True
             )
             if not is_valid_parent:
                 return parent_result  # This is a ToolResult error
