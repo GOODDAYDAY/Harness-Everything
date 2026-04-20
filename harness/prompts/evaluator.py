@@ -140,12 +140,22 @@ SCORING CALIBRATION (0-10 scale):
 - 8-9: Core goal fully achieved — minor polish needed
 - 10: Core goal perfectly achieved — no issues, ready to ship
 
-FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
-- Score 4.5: Core goal partially achieved with some specific implementation elements
-- Score 5.5: Major functionality present but with significant gaps preventing full 6
-- Score 6.5: Mostly works but has issues that prevent reaching 7
-- Use fractional scores when execution falls between integer score criteria
-- Always justify fractional scores with specific evidence of what pushes toward higher score and what prevents reaching it
+DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
+- CRITICAL RANGE (4-7): Most proposals fall here — focus on clear differentiation
+  - Score 4 vs 5: Does execution achieve any part of core goal? If yes → ≥5, if no → 4
+  - Score 5 vs 6: Does execution achieve major functionality? If yes → ≥6, if no → 5
+  - Score 6 vs 7: Does execution mostly work with only minor issues? If yes → ≥7, if no → 6
+  - Score 7 vs 8: Is core goal fully achieved with only polish needed? If yes → ≥8, if no → 7
+- FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
+  - Score 4.5: Core goal partially achieved with some specific implementation elements
+  - Score 5.5: Major functionality present but with significant gaps preventing full 6
+  - Score 6.5: Mostly works but has issues that prevent reaching 7
+  - Use fractional scores when execution falls between integer score criteria
+  - Always justify fractional scores with specific evidence of what pushes toward higher score and what prevents reaching it
+- FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
+  - 4.5: Must explain which specific elements push it above 4, and what's missing for 5
+  - 5.5: Must explain which major functionality is present (pushing toward 6) and what gaps remain (keeping at 5)
+  - 6.5: Must explain which aspects mostly work (pushing toward 7) and what issues remain (keeping at 6)
 
 EVALUATION APPROACH:
 1. STATE the core goal of the task in one sentence — be specific, not vague \
@@ -196,10 +206,11 @@ INPUT:
 
 ARBITRATION RULES:
 1. EXTRACT SCORES: Read both reviewers' FINAL SCORE lines. If missing, infer from context.
-2. CALCULATE CONSENSUS: Average the two scores. If both ≥ 8 → PASS; if both ≤ 7 → FAIL.
+2. CALCULATE CONSENSUS: Average the two scores. If both ≥ 8 → PASS; if both ≤ 7 → FAIL. For scores in the 7.5-7.9 range, apply rule 3a (≥7.5 = PASS).
 3. HANDLE FRACTIONAL SCORES: When reviewers use fractional scores (e.g., 6.5, 7.5):
-   a. Treat fractional scores as their integer part for PASS/FAIL thresholds (6.5 → 6, 7.5 → 7)
+   a. For PASS/FAIL determination: treat scores ≥ 7.5 as PASS, scores ≤ 7.4 as FAIL
    b. Use the exact fractional value for COMBINED_SCORE calculation
+   c. This aligns with individual evaluator thresholds (CONSERVATIVE: ≤7 = FAIL, AGGRESSIVE: ≤7 = FAIL)
 4. If scores disagree (one ≥ 8, one ≤ 7):
    a. Re-read the lower-scoring reviewer's DETAILS — are the findings genuine bugs \
       or theoretical concerns outside the task's stated scope?
