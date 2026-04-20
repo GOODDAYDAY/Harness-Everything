@@ -113,10 +113,30 @@ async def run_eval_probe(
         log.warning("intel_probe: hash check failed (%s) — skipping", reason)
         return None
 
+    # Compute hash to pass to subprocess for dual-layer verification
+    current_hash = _compute_hash(workspace)
+    if not current_hash:
+        log.warning("intel_probe: cannot compute hash — skipping")
+        return None
+
     argv = [sys.executable, str(script)]
     if pipeline_config_path:
-        argv.append(pipeline_config_path)
+        # Add validation as per Round 1, item #3
+        config_path = Path(pipeline_config_path)
+        workspace_path = Path(workspace)
+        try:
+            config_path.resolve().relative_to(workspace_path.resolve())
+        except ValueError:
+            log.warning("intel_probe: config path outside workspace — skipping")
+            return None
+        if config_path.suffix != '.json':
+            log.warning("intel_probe: config must be JSON file — skipping")
+            return None
+        argv.append(str(config_path))
 
+    # Pass hash via environment variable for subprocess self-verification
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", "HARNESS_PROBE_HASH": current_hash}
+    
     proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -124,7 +144,7 @@ async def run_eval_probe(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env=env,
         )
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(), timeout=_PROBE_TIMEOUT_S
