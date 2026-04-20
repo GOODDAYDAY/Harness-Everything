@@ -1,6 +1,7 @@
 """Unit tests for harness.tools.file_edit."""
 
 import asyncio
+import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock
@@ -203,6 +204,38 @@ def test_editfile_respects_allowed_edit_globs():
             new_str="Modified text file"
         ))
         assert not result.is_error, f"Empty allowed_edit_globs should allow all files, got error: {result.error}"
+
+
+def test_editfile_creates_parent_directories():
+    """Test that EditFileTool creates parent directories if needed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+
+        file_path = workspace / "deep" / "nested" / "file.txt"
+        content = "original content"
+
+        # Create the file with content
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content)
+
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace_root = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Delete parent directories to test creation
+        shutil.rmtree(workspace / "deep")
+
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="original",
+            new_str="modified"
+        ))
+        assert not result.is_error
+        assert file_path.exists()
+        assert file_path.read_text() == "modified content"
 
 
 if __name__ == "__main__":

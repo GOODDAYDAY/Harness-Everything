@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -53,6 +54,23 @@ class EditFileTool(Tool):
         if not is_valid_path:
             return path_validated  # This is the ToolResult error
         resolved = path_validated
+
+        # Validate parent directory atomically to prevent TOCTOU symlink attacks
+        parent_dir = Path(resolved).parent
+        if str(parent_dir) != ".":  # Skip if parent is current directory
+            # Validate parent directory exists and is not a symlink
+            is_valid_parent, parent_validated = await self._validate_atomic_path(
+                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+            )
+            if not is_valid_parent:
+                return parent_validated  # This is a ToolResult error
+            
+            # Create parent directory if it doesn't exist
+            if not os.path.exists(parent_validated):
+                try:
+                    os.makedirs(parent_validated, exist_ok=False)
+                except OSError as exc:
+                    return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
 
         # Use the shared atomic read helper
         text, read_error = await self._atomic_read_text(config, resolved)
