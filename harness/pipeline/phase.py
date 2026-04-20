@@ -70,6 +70,14 @@ class PhaseConfig:
     # not be editing evaluator code. Globs are matched against paths relative
     # to the workspace root using fnmatch semantics (** for recursive).
     allowed_edit_globs: list[str] = field(default_factory=list)
+    # When True AND mode == "implement", run the three-way Planner
+    # (conservative + aggressive + merge) BEFORE the executor tool-use loop,
+    # and prepend the merged plan to the executor prompt. The Planner's
+    # output is a plaintext implementation plan, not tool calls. Intended for
+    # free-form "orchestrate-then-code" phases where the LLM is expected to
+    # first decide what to do, then do it — two-stage reasoning within a
+    # single phase. Default False preserves legacy single-call behaviour.
+    use_planner: bool = False
     commit_on_success: bool = False
     commit_repos: list[str] = field(default_factory=list)
 

@@ -367,6 +367,14 @@ class PhaseRunner:
         self.artifacts = artifacts
         self.checkpoint = checkpoint
         self.dual_evaluator = DualEvaluator(llm)
+        # Planner — instantiated once, invoked only by phases that set
+        # use_planner=True. Safe to keep idle; the three-way resolver is
+        # pure data until resolve() is called. Imported lazily to avoid
+        # a module-top-level dependency (planner.py transitively imports
+        # three_way.py, which keeps the import graph shallow for tools that
+        # only need phase/hook helpers).
+        from harness.pipeline.planner import Planner
+        self.planner = Planner(llm, self.harness)
 
     async def run_phase(
         self,
@@ -618,6 +626,49 @@ class PhaseRunner:
         )
 
         _impl_t0 = time.monotonic()
+        # Orchestrate-then-code: when the phase opts into use_planner, run
+        # the three-way planner first and prepend its merged plan to the
+        # executor's user message. The planner sees the same system_prompt
+        # and file_context the executor would, so there's no new context to
+        # build — we're splitting "decide what" from "do it" into two LLM
+        # stages within one phase.
+        if getattr(phase, "use_planner", False):
+            _plan_t0 = time.monotonic()
+            try:
+                planner_task = (
+                    "Pick the single most valuable improvement to make to this "
+                    "harness right now, then write a concrete implementation plan "
+                    "that the executor can follow step by step.\n\n"
+                    "Phase system prompt (for rubric + constraints):\n"
+                    f"{phase.system_prompt[:4000]}\n\n"
+                    f"Falsifiable criterion: {phase.falsifiable_criterion}"
+                )
+                merged_plan = await self.planner.plan(
+                    task=planner_task, context=file_context[:30_000],
+                )
+                self.artifacts.write(merged_plan, *segs, "planner_output.txt")
+                log.info(
+                    "R%d/phase=%s/inner=%d: planner done  %d chars  elapsed=%.1fs",
+                    outer + 1, phase.label, inner + 1,
+                    len(merged_plan), time.monotonic() - _plan_t0,
+                )
+                prompt = (
+                    prompt.rstrip()
+                    + "\n\n## Planned Implementation (from three-way planner — "
+                    "follow this unless it is clearly wrong)\n\n"
+                    + merged_plan
+                    + "\n\n"
+                    "Execute the plan above using the available tools. You may "
+                    "deviate if the plan is missing a detail you need to fill in, "
+                    "but do not silently pick a different target.\n"
+                )
+            except Exception as _plan_exc:
+                log.warning(
+                    "R%d/phase=%s/inner=%d: planner failed (%s) — falling back "
+                    "to single-call executor prompt",
+                    outer + 1, phase.label, inner + 1, _plan_exc,
+                )
+
         # Dynamic tool filtering: if the phase specifies tool_tags, only
         # expose matching tools to the executor LLM.
         active_registry = self.registry

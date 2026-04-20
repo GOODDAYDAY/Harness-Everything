@@ -1,0 +1,102 @@
+{
+  "//": "=== Server Self-Improve Pipeline v2 — single-phase orchestrate/code/evaluate ===",
+  "// purpose": "Replaces the v1 4-phase config. Each round: ThreeWay planner decides FOCUS + plan, executor implements, dual-evaluator scores. No fixed PRIORITY ORDER — the LLM picks its own focus. Soft reminder in the prompt discourages 3-round-same-file tunnel vision but does not hard-block it.",
+  "// v1 still available as pipeline_example_self_improve_server.json": "Switch by changing the cp line in .github/workflows/deploy.yml or by manually swapping pipeline_server.json on the server.",
+  "// why v2": "3.5-day v1 run (487 commits, docs/HARNESS_EXPERIMENT_LOG.md) showed the 4-phase decomposition caused tunnel vision and per-phase goodhart. Evaluator ρ driver didn't move the needle. Simpler config, more LLM agency.",
+  "harness": {
+    "model": "deepseek-chat",
+    "max_tokens": 8000,
+    "base_url": "https://api.deepseek.com/anthropic",
+    "api_key": "",
+    "workspace": "/home/ubuntu/harness-everything",
+    "allowed_paths": [
+      "/home/ubuntu/harness-everything"
+    ],
+    "allowed_tools": [],
+    "extra_tools": [],
+    "bash_command_denylist": [
+      "rm",
+      "shutdown",
+      "reboot",
+      "poweroff",
+      "mkfs",
+      "dd"
+    ],
+    "max_tool_turns": 20,
+    "log_level": "INFO"
+  },
+  "outer_rounds": 10,
+  "inner_rounds": 1,
+  "// inner_rounds=1": "The ThreeWay planner already does 3 LLM calls of deliberation; a second inner pass would be redundant.",
+  "patience": 5,
+  "evaluation_mode": "dual_isolated",
+  "output_dir": "/home/ubuntu/harness-everything/harness_output",
+  "min_synthesis_chars": 150,
+  "max_file_context_chars": 30000,
+  "meta_review_interval": 0,
+  "meta_review_system": "",
+  "meta_review_inject": false,
+  "auto_push_interval": 1,
+  "auto_push_remote": "origin",
+  "auto_push_branch": "main",
+  "auto_tag_interval": 10,
+  "auto_tag_prefix": "harness-r",
+  "auto_tag_push": true,
+  "auto_tag_min_score": 5.0,
+  "auto_tag_at_end": true,
+  "rich_commit_metadata": true,
+  "auto_update_prompts": false,
+  "run_mode": "automatic",
+  "dual_evaluator": {
+    "basic_system": "You are an adversarial code reviewer for an AI coding harness framework (Python 3.11+, async, Anthropic-compatible API).\n\nEvaluate the executed code change AND the FOCUS statement that preceded it.\n\n1. SINGLE BIGGEST DEFECT: Find one concrete problem (security, race, data loss, context leak, prompt injection). Quote the specific line or construct.\n2. FOCUS COHERENCE: Did the change actually match the FOCUS/TARGET stated by the planner? If the FOCUS said 'improve synthesis prompt' but the diff touches file_read.py, penalise heavily (-4).\n3. SPECIFICITY: Does the change cite real symbols (file::function), or is it generic? Generic changes score at most 5.\n4. BLOAT GATE (HARD): Net line increase >50 without matching deletions elsewhere? -3.\n5. TOOL GATE (HARD): Adds a new tool file without removing one? -5.\n6. ASYNC SAFETY: Blocking I/O in async context (open(), subprocess.run(), time.sleep())? -2.\n7. CONSOLIDATION BONUS: +2 for merging tools, +2 for extracting shared helpers, +1 for covering a previously untested path.\n8. DEAD CODE: -2 for introducing it, +1 for removing it alongside the improvement.\n9. Score 0-10 (10=excellent, 5=works but marginal, 0=broken or insecure).\n\nOutput: SCORE: <number>",
+    "diffusion_system": "You are a second-order effects analyst for an AI coding harness framework.\n\nDo NOT evaluate correctness. Analyze ripple effects:\n- Does this change break simple mode while improving pipeline mode (or vice versa)?\n- Does it increase context-window consumption measurably?\n- Does it make the framework harder to configure?\n- What happens when the LLM hallucinates tool names or params?\n- Does it affect checkpoint/resume reliability across restarts?\n- Will this change make path security (_check_path) bypassable?\n- SIGNAL SAFETY: Does it interact with the graceful shutdown mechanism?\n- CODE QUALITY RIPPLE: Does it leave orphaned imports, dead functions, or stale references in OTHER files?\n- TOOL COUNT INFLATION: Every new tool must be justified by removing one.\n- TUNNEL-VISION RIPPLE: Has this same file been the target in most of the recent rounds? If yes and no new angle is evident, mark it.\n\nForce yourself to find at least one negative second-order impact.\n\nScore 0-10 (10=excellent ripple, 0=dangerous cascade).\nOutput: SCORE: <number>"
+  },
+  "phases": [
+    {
+      "name": "improve",
+      "index": 0,
+      "mode": "implement",
+      "use_planner": true,
+      "inner_rounds": 1,
+      "glob_patterns": [
+        "harness/**/*.py",
+        "main.py",
+        "tests/**/*.py",
+        "CHANGELOG_AUTO.md",
+        "docs/**/*.md"
+      ],
+      "tool_tags": [],
+      "min_proposal_chars": 0,
+      "system_prompt": "You are a senior AI systems engineer improving an AI coding harness framework. Each round you choose ONE concrete improvement and implement it. No fixed agenda — you decide.\n\nCurrent code:\n$file_context\n\n$prior_best\n$syntax_errors\n\nORCHESTRATION — do this first (the three-way planner you just saw did the heavy lifting; the plan is already above):\n1. State your target in this exact shape BEFORE touching any tool:\n   FOCUS: <one-line description of the single change you'll make>\n   TARGET: <specific file(s) or module — be concrete>\n   WHY NOW: <why this matters now, not random drift>\n   SUCCESS: <how you'll know it worked; concrete check>\n2. Then implement it via tools. One focused change per round. Quality beats breadth.\n3. Append 3-5 lines to CHANGELOG_AUTO.md summarising FOCUS + what you did.\n\nSOFT REMINDERS (use your judgment, not hard rules):\n- If the same file has been edited in most of the last 3 rounds, ask yourself whether there's still highest-value work there or whether it's time to look elsewhere (recent focus history is in memory above).\n- evaluator / planner / synthesis / memory modules drive harness reasoning quality — they deserve periodic attention. If it's been a while, consider whether one of them is the current bottleneck.\n- A small, precise change beats a big generic refactor.\n\nSENSITIVE INFORMATION POLICY (HARD — violating loses 5 points):\n- NEVER write real domain names, internal URLs, company names, personal paths, API keys/tokens into any tracked file\n- Git commits are auto-signed — do not override git config\n\nSELF-IMPROVEMENT LOOP PROTECTION (HARD — violating loses 10 points):\nThe next pipeline chunk is only triggered by a git tag push from auto-tag. Modifying loop infrastructure breaks the cycle. Do NOT touch:\n- .github/workflows/ (CI deploy workflow)\n- deploy/ (systemd unit, heartbeat / cleanup scripts)\n- pipeline_loop.py functions: _maybe_auto_push, _maybe_auto_tag, _run_git\n- config.py fields: auto_push_*, auto_tag_*\n- main.py --pipeline argument handling\n- benchmarks/ (intelligence-metric ground truth; tampering inflates ρ without improving evaluator and is detected by hash check)\nIf you think the plumbing has a bug, write a note to CHANGELOG_AUTO.md and pick a different target.\n\nIMPLEMENTATION DISCIPLINE:\n- Follow existing patterns: async, dataclass config, Tool ABC, ToolResult, frozenset tags\n- Do NOT break existing APIs or config format\n- Do NOT create new tool files unless you're deleting/merging one to offset\n\nFalsifiable criterion: $falsifiable_criterion",
+      "falsifiable_criterion": "The round must produce: (a) a FOCUS/TARGET/WHY NOW/SUCCESS statement before any tool use, (b) a code change that materially addresses that FOCUS, (c) a CHANGELOG_AUTO.md entry. Vague commits that don't cite a specific file::function lose 3 points. Edits to a file that was the target in 3 of the last 3 rounds WITHOUT explicit new justification lose 2 points. Net line-count increase >50 without matching deletions loses 3 points.",
+      "syntax_check_patterns": [
+        "harness/**/*.py",
+        "main.py"
+      ],
+      "import_smoke_modules": [
+        "harness.core.config",
+        "harness.pipeline.pipeline_loop",
+        "harness.tools",
+        "harness.evaluation.dual_evaluator"
+      ],
+      "import_smoke_calls": [
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'basic', 'debate')",
+        "harness.evaluation.dual_evaluator.validate_evaluator_output('SCORE: 5.0', 'diffusion', 'implement')",
+        "harness.evaluation.dual_evaluator.parse_score('SCORE: 5.0')"
+      ],
+      "allowed_edit_globs": [
+        "harness/**",
+        "tests/**",
+        "main.py",
+        "CHANGELOG_AUTO.md",
+        "docs/**",
+        "config/pipeline_example_*.json",
+        "pyproject.toml"
+      ],
+      "commit_on_success": true,
+      "commit_repos": [
+        "."
+      ]
+    }
+  ]
+}
