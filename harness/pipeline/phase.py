@@ -84,6 +84,39 @@ class PhaseConfig:
                 f"PhaseConfig.skip_cycle must be >= 1 (or None to disable), "
                 f"got {self.skip_cycle}"
             )
+        self._validate_allowed_edit_globs()
+
+    def _validate_allowed_edit_globs(self) -> None:
+        """Validate allowed_edit_globs to prevent path traversal outside workspace.
+        
+        Raises:
+            ValueError: If any glob pattern contains '..' or starts with an
+                absolute path indicator ('/' on Unix or '[A-Z]:\\' on Windows).
+        """
+        import os
+        from pathlib import PurePath
+        
+        for pattern in self.allowed_edit_globs:
+            # Check for parent directory traversal
+            if '..' in pattern:
+                raise ValueError(
+                    f"Glob pattern '{pattern}' contains '..' which could allow "
+                    f"path traversal outside workspace"
+                )
+            
+            # Check for absolute paths
+            if os.path.isabs(pattern):
+                raise ValueError(
+                    f"Glob pattern '{pattern}' is an absolute path. "
+                    f"Use relative patterns only."
+                )
+            
+            # Windows-specific: check for drive letter absolute paths
+            if len(pattern) >= 2 and pattern[1] == ':' and pattern[2:].startswith('\\'):
+                raise ValueError(
+                    f"Glob pattern '{pattern}' is an absolute Windows path. "
+                    f"Use relative patterns only."
+                )
 
     def should_skip(self, outer: int) -> bool:
         """Whether this phase should be skipped in the given outer round.
