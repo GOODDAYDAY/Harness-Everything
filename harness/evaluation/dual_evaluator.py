@@ -689,52 +689,79 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         elif mode == "implement" and score >= 5.0:
             warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
     
-    # FOCUSED DISCRIMINATION for critical 4-7 range (Spearman ρ optimization)
-    # SIMPLIFIED: Clear discrimination between adjacent scores is the most important factor
+    # STRENGTHENED DISCRIMINATION for critical 4-7 range (Spearman ρ optimization)
+    # ENHANCED: Clear, consistent discrimination with mode-specific requirements
     if 4.0 <= score <= 7.0:
-        # 1. CRITICAL DISCRIMINATION CHECK: Ensure scores are properly anchored
-        # This is the most important factor for Spearman ρ - clear separation between scores
+        # 1. STRENGTHENED INTEGER SCORE ANCHORS - Clear differentiation is key for Spearman ρ
         if score in [4.0, 5.0, 6.0, 7.0]:  # Integer scores in critical range
-            # Clear guidance for each integer score to ensure discrimination
+            # Enhanced discrimination with mode-specific requirements
             if score == 4.0:
-                warnings.append(f"Score 4.0: Generic approach - must verify no specific file/function references present")
+                warnings.append(f"Score 4.0: Generic approach - must verify NO specific file/function references present")
+                # Mode-specific validation
+                if mode == "implement" and file_count > 0:
+                    warnings.append(f"Score 4.0 in implement mode with file changes - generic score inappropriate for concrete implementation")
             elif score == 5.0:
-                warnings.append(f"Score 5.0: Specific but incomplete - must cite concrete file/function references but show major gaps")
+                warnings.append(f"Score 5.0: Specific but incomplete - must cite concrete file/function references AND show major gaps")
+                # Mode-specific validation
+                if mode == "debate" and critique_structure_score < 0.4:
+                    warnings.append(f"Score 5.0 in debate mode - requires clear argument structure for specific but incomplete reasoning")
             elif score == 6.0:
-                warnings.append(f"Score 6.0: Mostly complete - must show testability evidence and address main requirements")
+                warnings.append(f"Score 6.0: Mostly complete - must show testability evidence AND address main requirements")
+                # Mode-specific validation
+                if mode == "implement" and not has_tests:
+                    warnings.append(f"Score 6.0 in implement mode without tests - mostly complete requires test evidence")
             elif score == 7.0:
-                warnings.append(f"Score 7.0: Complete with minor issues - must demonstrate full requirement coverage with only edge cases missing")
-        
-        # 2. SIMPLIFIED FRACTIONAL SCORE VALIDATION
-        # Only allow .5 increments for better discrimination consistency
+                warnings.append(f"Score 7.0: Complete with minor issues - must demonstrate FULL requirement coverage with only edge cases missing")
+                # Mode-specific validation
+                if mode == "debate" and critique_structure_score < 0.6:
+                    warnings.append(f"Score 7.0 in debate mode - complete reasoning requires strong structure")
+
+        # 2. STRENGTHENED FRACTIONAL SCORE VALIDATION - Only .5 increments for consistency
         if score % 1.0 != 0:  # Fractional score
             fractional_part = score - int(score)
             base_score = int(score)
-            
-            # Standardize on .5 increments only
+
+            # STRICT: Only allow .5 increments for discrimination consistency
             if fractional_part != 0.5:
-                warnings.append(f"Score {score}: Use .5 increments only for consistent discrimination")
-            
-            # Clear, simple guidance for fractional scores
-            if fractional_part == 0.5:
+                warnings.append(f"Score {score}: REJECTED - Use ONLY .5 increments for consistent discrimination in 4-7 range")
+            else:
+                # Enhanced fractional score guidance with mode awareness
                 if base_score == 4:
-                    warnings.append(f"Score 4.5: Between generic and specific - justify specific elements present vs missing")
+                    warnings.append(f"Score 4.5: Between generic and specific - MUST justify specific elements present vs missing")
+                    if mode == "implement" and file_count == 0:
+                        warnings.append(f"Score 4.5 in implement mode - requires concrete file references for partial specificity")
                 elif base_score == 5:
-                    warnings.append(f"Score 5.5: Between specific and mostly complete - justify edge cases addressed vs major gaps")
+                    warnings.append(f"Score 5.5: Between specific and mostly complete - MUST justify edge cases addressed vs major gaps")
+                    if mode == "debate" and critique_structure_score < 0.5:
+                        warnings.append(f"Score 5.5 in debate mode - requires clear reasoning structure for intermediate assessment")
                 elif base_score == 6:
-                    warnings.append(f"Score 6.5: Between mostly complete and complete - justify testability vs remaining issues")
+                    warnings.append(f"Score 6.5: Between mostly complete and complete - MUST justify testability vs remaining issues")
+                    if mode == "implement" and not has_tests:
+                        warnings.append(f"Score 6.5 in implement mode - requires test evidence for near-complete assessment")
                 elif base_score == 7:
-                    warnings.append(f"Score 7.5: Between complete and excellent - justify full coverage vs polish needed")
-        
-        # 3. MODE-AWARE DISCRIMINATION (simplified)
+                    warnings.append(f"Score 7.5: Between complete and excellent - MUST justify full coverage vs polish needed")
+                    if mode == "debate" and critique_structure_score < 0.7:
+                        warnings.append(f"Score 7.5 in debate mode - requires excellent reasoning structure")
+
+        # 3. STRENGTHENED MODE-AWARE DISCRIMINATION - Critical for Spearman ρ
         if mode == "debate" and 5.0 <= score <= 7.0:
-            # Debate mode: Focus on reasoning structure
+            # Debate mode: STRICT reasoning structure requirements
             if critique_structure_score < 0.5:
-                warnings.append(f"Score {score} in debate mode - ensure strong reasoning structure (current: {critique_structure_score:.1f})")
+                warnings.append(f"Score {score} in debate mode - INSUFFICIENT reasoning structure (current: {critique_structure_score:.1f}, required: ≥0.5)")
+            # Debate mode requires argument depth
+            if score >= 6.0 and line_count == 0:
+                warnings.append(f"Score {score} in debate mode - high score requires substantive argumentation, not just surface analysis")
+                
         elif mode == "implement" and 5.0 <= score <= 7.0:
-            # Implement mode: Focus on concrete changes
+            # Implement mode: STRICT concrete evidence requirements
             if file_count == 0:
-                warnings.append(f"Score {score} in implement mode - critical range requires concrete file references")
+                warnings.append(f"Score {score} in implement mode - CRITICAL: requires concrete file references for any score ≥5")
+            # Implement mode requires execution validation
+            if score >= 6.0 and not has_tests:
+                warnings.append(f"Score {score} in implement mode - requires test evidence for scores ≥6")
+            # Large changes need careful assessment
+            if score >= 7.0 and line_count > 100:
+                warnings.append(f"Score {score} in implement mode - large changes ({line_count} lines) require exceptional justification for high scores")
 
     # Mode-specific score distribution validation
     if mode == "debate" and score > 8.0:

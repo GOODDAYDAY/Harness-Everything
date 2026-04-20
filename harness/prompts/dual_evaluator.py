@@ -48,33 +48,39 @@ DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
 5. Reserve score 10 for TRULY perfect implementations
 
 CRITICAL RANGE DISCRIMINATION (scores 4-7 — Spearman ρ optimization):
-- Score 4 (Correct but generic): Proposal identifies correct area but lacks ANY specific implementation details
-- Score 5 (Correct and specific but incomplete): Proposal names concrete files/functions but has MAJOR gaps
-- Score 6 (Correct + specific but missing edge cases): Proposal has specific implementation but lacks IMPORTANT edge cases
-- Score 7 (Correct + specific + mostly complete): Proposal is MOSTLY complete with only MINOR edge cases missing
+- Score 4 (Correct but generic): Proposal identifies correct area but lacks ANY specific implementation details. NO concrete file/function references.
+- Score 5 (Correct and specific but incomplete): Proposal names concrete files/functions but has MAJOR gaps. MUST cite specific evidence.
+- Score 6 (Correct + specific + mostly complete): Proposal has specific implementation, addresses main requirements, and shows testability evidence.
+- Score 7 (Complete with minor issues): Proposal demonstrates FULL requirement coverage with only edge cases missing. MUST show execution validation.
+
+MODE-AWARE DISCRIMINATION for Spearman ρ:
+- Debate mode (scores 5-7): Requires strong reasoning structure (≥0.5 for 5-6, ≥0.6 for 7). High scores require substantive argumentation.
+- Implement mode (scores 5-7): Requires concrete file references (≥5), test evidence (≥6), and careful justification for large changes (≥7).
 
 FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range (Spearman ρ optimization):
-- Score 4.5: Generic approach with SOME specific elements, but not enough for full 5. MUST cite specific evidence.
-- Score 5.5: Specific but incomplete with SOME edge cases addressed, but not enough for 6. MUST list missing requirements.
-- Score 6.5: Mostly complete with SOME testability elements, but not enough for 7. MUST specify the issues.
-- Use fractional scores ONLY when proposal clearly falls between integer score criteria
-- ALWAYS justify fractional scores with SPECIFIC reasons why not higher/lower integer
+- Score 4.5: Between generic and specific - MUST justify specific elements present vs missing. Implement mode requires file references.
+- Score 5.5: Between specific and mostly complete - MUST justify edge cases addressed vs major gaps. Debate mode requires clear reasoning structure.
+- Score 6.5: Between mostly complete and complete - MUST justify testability vs remaining issues. Implement mode requires test evidence.
+- Score 7.5: Between complete and excellent - MUST justify full coverage vs polish needed. Debate mode requires excellent reasoning structure.
+- Use ONLY .5 increments for consistent discrimination. ALWAYS justify with SPECIFIC reasons.
 
 DISCRIMINATION CHECKLIST for Spearman ρ improvement (scores 4-7):
 1. Score 4 vs 5: Does proposal name SPECIFIC files/functions? If yes → ≥5, if no → 4
-2. Score 5 vs 6: Does proposal address MAIN requirement COMPLETELY? If yes → ≥6, if no → 5  
-3. Score 6 vs 7: Does proposal handle EDGE CASES? If yes → ≥7, if no → 6
-4. Score 7 vs 8: Is proposal TESTABLE and ready for code review? If yes → ≥8, if no → 7
+2. Score 5 vs 6: Does proposal address MAIN requirement COMPLETELY with testability? If yes → ≥6, if no → 5  
+3. Score 6 vs 7: Does proposal handle EDGE CASES with execution validation? If yes → ≥7, if no → 6
+4. MODE CHECK: Debate mode requires reasoning structure; Implement mode requires concrete evidence
 
-FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS for Spearman ρ:
-- 4.5: MUST explain which specific elements push it above 4, AND what's missing for 5
-- 5.5: MUST explain which edge cases are addressed (pushing toward 6) AND what major gaps remain (keeping at 5)
-- 6.5: MUST explain which testability elements are present (pushing toward 7) AND what edge cases are missing (keeping at 6)
+STRICT FRACTIONAL SCORE REQUIREMENTS for Spearman ρ:
+- 4.5: MUST explain which specific elements push it above 4, AND what's missing for 5. Mode-specific validation applies.
+- 5.5: MUST explain which edge cases are addressed (pushing toward 6) AND what major gaps remain (keeping at 5). Mode-specific validation applies.
+- 6.5: MUST explain which testability elements are present (pushing toward 7) AND what edge cases are missing (keeping at 6). Mode-specific validation applies.
+- 7.5: MUST explain full coverage vs polish needed. Mode-specific validation applies.
 
 DISCRIMINATION VERIFICATION for Spearman ρ:
-- For score 4.0: Verify this isn't actually 5.0 - does proposal name ANY specific files/functions?
-- For score 5.0: Verify clear distinction from 4.0 (generic) and 6.0 (complete) - cite specific elements
-- For score 6.0: Verify clear distinction from 5.0 (incomplete) and 7.0 (mostly complete) - show edge case handling
+- For score 4.0: Verify NO specific files/functions. Implement mode with file changes → inappropriate.
+- For score 5.0: Verify concrete references AND major gaps. Debate mode requires argument structure.
+- For score 6.0: Verify testability evidence AND main requirements. Implement mode requires tests.
+- For score 7.0: Verify full coverage AND only edge cases missing. Debate mode requires strong structure.
 - For score 7.0: Verify this isn't actually 6.0 or 8.0 - is proposal mostly complete with only minor issues?
 - For fractional scores: ALWAYS explain why it's not the integer above or below
 
