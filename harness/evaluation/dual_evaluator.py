@@ -531,20 +531,36 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             # Provide specific discrimination guidance for each score level
             if score == 4.0:
                 warnings.append(f"Score 4.0 (Generic approach): Proposal identifies correct area but lacks ANY specific implementation details. NO concrete file/function references. If ANY file/function named → must be ≥4.5.")
+            elif score == 4.25:
+                warnings.append(f"Score 4.25: Fractional score slightly above generic - justify specific elements pushing beyond 4.0")
             elif score == 4.5:
                 warnings.append(f"Score 4.5 (Generic with hints): Proposal mentions SOME specific elements but not enough for full 5.0. MUST cite which specific elements push it above 4.0 AND what's missing for 5.0.")
+            elif score == 4.75:
+                warnings.append(f"Score 4.75: Fractional score approaching specific - justify why not quite reaching 5.0")
             elif score == 5.0:
                 warnings.append(f"Score 5.0 (Specific but incomplete): Proposal names concrete files/functions but has MAJOR gaps. MUST cite specific evidence of both: (1) concrete references AND (2) major missing details.")
+            elif score == 5.25:
+                warnings.append(f"Score 5.25: Fractional score slightly above specific - justify edge cases addressed beyond 5.0")
             elif score == 5.5:
                 warnings.append(f"Score 5.5 (Specific with partial details): Proposal has some implementation details but not enough for 6.0. MUST explain: (1) which edge cases are addressed (pushing toward 6) AND (2) what major gaps remain (keeping at 5).")
+            elif score == 5.75:
+                warnings.append(f"Score 5.75: Fractional score approaching mostly complete - justify why not quite reaching 6.0")
             elif score == 6.0:
                 warnings.append(f"Score 6.0 (Mostly complete): Proposal addresses main requirements but missing important edge cases. MUST show: (1) testability evidence AND (2) which edge cases are missing.")
+            elif score == 6.25:
+                warnings.append(f"Score 6.25: Fractional score slightly above mostly complete - justify testability elements beyond 6.0")
             elif score == 6.5:
                 warnings.append(f"Score 6.5 (Nearly complete): Proposal handles main requirements and some edge cases but not all. MUST explain: (1) which testability elements are present (pushing toward 7) AND (2) what edge cases are missing (keeping at 6).")
+            elif score == 6.75:
+                warnings.append(f"Score 6.75: Fractional score approaching complete - justify why not quite reaching 7.0")
             elif score == 7.0:
                 warnings.append(f"Score 7.0 (Complete with minor issues): Proposal demonstrates FULL requirement coverage with only minor polish needed. MUST show: (1) execution validation AND (2) specific minor issues remaining.")
+            elif score == 7.25:
+                warnings.append(f"Score 7.25: Fractional score slightly above complete - justify polish elements beyond 7.0")
             elif score == 7.5:
                 warnings.append(f"Score 7.5 (Complete with polish needed): Proposal is fully complete but needs minor polish. MUST explain: (1) full coverage achieved AND (2) specific polish items needed.")
+            elif score == 7.75:
+                warnings.append(f"Score 7.75: Fractional score approaching excellent - justify why not quite reaching 8.0")
             
             # Enhanced discrimination checklist for Spearman ρ improvement
             discrimination_checks = []
@@ -558,22 +574,23 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             if discrimination_checks:
                 warnings.append(f"Discrimination checklist for score {score}: " + " ".join(discrimination_checks))
         
-        # SIMPLIFIED fractional score validation for critical range
-        # Standardize on .5 increments only for consistent discrimination
+        # Enhanced fractional score validation for critical range
+        # Accept .25, .5, or .75 increments for finer discrimination
         if 4.0 <= score <= 7.0 and score % 1 != 0:  # Fractional score in critical range
             fractional_part = score % 1
-            if fractional_part != 0.5:
-                warnings.append(f"Score {score}: Use .5 increments only for consistent discrimination in critical 4-7 range")
+            valid_fractions = {0.25, 0.5, 0.75}
             
-            # Clear, simple guidance for fractional scores
-            if fractional_part == 0.5:
-                base_score = int(score)
-                if base_score == 4:
-                    warnings.append(f"Score 4.5: Between generic and specific - justify specific elements present vs missing")
-                elif base_score == 5:
-                    warnings.append(f"Score 5.5: Between specific and mostly complete - justify edge cases addressed vs major gaps")
-                elif base_score == 6:
-                    warnings.append(f"Score 6.5: Between mostly complete and complete - justify testability vs remaining issues")
+            if fractional_part not in valid_fractions:
+                warnings.append(f"Score {score}: Fractional score should use .25, .5, or .75 increments for consistent discrimination in critical 4-7 range")
+            
+            # Clear, specific guidance for fractional scores
+            base_score = int(score)
+            if fractional_part == 0.25:
+                warnings.append(f"Score {score}: Fractional score slightly above {base_score}.0 - justify specific elements pushing beyond integer score")
+            elif fractional_part == 0.5:
+                warnings.append(f"Score {score}: Fractional score midway between {base_score}.0 and {base_score+1}.0 - justify balance of elements present vs missing")
+            elif fractional_part == 0.75:
+                warnings.append(f"Score {score}: Fractional score approaching {base_score+1}.0 - justify why not quite reaching next integer score")
         if mode == "debate":
             # SIMPLIFIED debate mode validation
             # Debate mode: evaluating text proposals with clear discrimination
