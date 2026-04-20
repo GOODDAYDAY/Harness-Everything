@@ -115,6 +115,56 @@ _MODE_HEADERS: dict[str, str] = {
 }
 
 
+def format_critique_from_feedback(feedback_dict: dict[str, Any]) -> str:
+    """Format structured feedback dictionary into a readable critique string.
+    
+    Args:
+        feedback_dict: The structured feedback dictionary from extract_structured_feedback
+        
+    Returns:
+        A formatted critique string
+    """
+    if not feedback_dict:
+        return "No feedback available"
+    
+    parts = []
+    
+    # Add score if available
+    score = feedback_dict.get("score")
+    if score is not None:
+        parts.append(f"Score: {score:.1f}")
+    
+    # Add feedback items
+    feedback_items = feedback_dict.get("feedback_items", [])
+    if feedback_items:
+        parts.append("Feedback:")
+        for item in feedback_items:
+            parts.append(f"  • {item}")
+    
+    # Add improvement suggestion
+    improvement = feedback_dict.get("improvement_suggestion")
+    if improvement:
+        parts.append(f"Improvement suggestion: {improvement}")
+    
+    # Add defect if present
+    defect = feedback_dict.get("defect")
+    if defect:
+        parts.append(f"Critical defect: {defect.get('description', 'Unknown')}")
+    
+    # Add analysis summary
+    analysis = feedback_dict.get("analysis", {})
+    if analysis:
+        parts.append("Analysis:")
+        for dimension, details in analysis.items():
+            if isinstance(details, dict):
+                dim_score = details.get("score")
+                rationale = details.get("rationale", "")
+                if dim_score is not None:
+                    parts.append(f"  • {dimension}: {dim_score:.1f} - {rationale}")
+    
+    return "\n".join(parts)
+
+
 def extract_structured_feedback(text: str, evaluator_type: str = "basic", context: dict[str, Any] | None = None, mode: str | None = None) -> dict[str, Any]:
     """Extract structured feedback from evaluator output text with enhanced parsing.
     
