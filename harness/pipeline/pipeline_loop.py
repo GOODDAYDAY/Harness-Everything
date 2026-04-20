@@ -120,6 +120,12 @@ class PipelineLoop:
         self.score_history: list[float] = []  # Track scores for trend detection
         self.score_trend_warnings: list[dict] = []  # Track score trend warnings
         self.phase_score_history: list[dict] = []  # Track phase-level scores with metadata
+        # Latest intelligence-probe result (Phase 1: evaluator discrimination).
+        # None until the first probe runs successfully. Surfaced in summary.json
+        # and injected into framework_improvement prompts by PhaseRunner via
+        # intel_metrics.format_trajectory.
+        self._latest_intel_probe: dict | None = None
+        self._intel_probe_pipeline_cfg_path: str | None = None
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -596,6 +602,30 @@ class PipelineLoop:
 
             # --- Priority 1: Per-round structured metrics.json ---
             self._write_round_metrics_json(outer, all_round_results[-1], round_score, round_elapsed)
+
+            # --- Intelligence probe: evaluator discrimination (ρ) ---
+            # Observation-only in Phase 1: records ρ and trajectory but does
+            # not gate commits or alter phase scoring. Failures are non-fatal
+            # (probe subprocess can't break the pipeline). Result is stashed
+            # on self for next round's framework_improvement prompt to read.
+            try:
+                from harness.pipeline import intel_metrics as _im
+                probe_result = await _im.run_eval_probe(
+                    self.config.harness,
+                    pipeline_config_path=self._intel_probe_pipeline_cfg_path,
+                )
+                if probe_result is not None:
+                    self._latest_intel_probe = probe_result
+                    log.info(
+                        "intel_probe: ρ=%.4f (basic=%.4f diffusion=%.4f) n=%d elapsed=%.1fs",
+                        probe_result.get("rho", 0.0),
+                        probe_result.get("rho_basic", 0.0),
+                        probe_result.get("rho_diffusion", 0.0),
+                        probe_result.get("n", 0),
+                        probe_result.get("elapsed_s", 0.0),
+                    )
+            except Exception as _probe_exc:
+                log.warning("intel_probe: unexpected error: %s", _probe_exc)
             # Accumulate run-level tool call counts from the round's inner results
             for _pr in all_round_results[-1]:
                 for _ir in _pr.inner_results:
@@ -1058,6 +1088,16 @@ class PipelineLoop:
             "round_metrics": round_metrics,
         }
         payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
+        # Intelligence metric: latest evaluator-discrimination probe (may be
+        # None if the benchmark isn't installed or probe failed this round).
+        if self._latest_intel_probe is not None:
+            payload["intel_metrics"] = {
+                "evaluator_rho": self._latest_intel_probe.get("rho"),
+                "evaluator_rho_basic": self._latest_intel_probe.get("rho_basic"),
+                "evaluator_rho_diffusion": self._latest_intel_probe.get("rho_diffusion"),
+                "probe_n": self._latest_intel_probe.get("n"),
+                "probe_elapsed_s": self._latest_intel_probe.get("elapsed_s"),
+            }
         try:
             self.artifacts.write(json.dumps(payload, indent=2), "summary.json")
             log.info(

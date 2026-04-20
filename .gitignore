@@ -40,3 +40,6 @@ logs/
 
 # Test artifacts
 test_*.py.bak
+
+# Intelligence probe results — append-only runtime artifact, not source
+benchmarks/evaluator_calibration/probe_results.jsonl

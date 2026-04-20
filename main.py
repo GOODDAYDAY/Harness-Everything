@@ -55,7 +55,7 @@ async def run_simple(task: str, config: HarnessConfig) -> None:
 # ===========================================================================
 
 
-async def run_pipeline(config: PipelineConfig) -> int:
+async def run_pipeline(config: PipelineConfig, config_path: str | None = None) -> int:
     """Run the pipeline. Returns the process exit code.
 
     Exit codes:
@@ -68,6 +68,10 @@ async def run_pipeline(config: PipelineConfig) -> int:
           where a missing function silently tanked 6 rounds × ~4 phases.
     """
     loop = PipelineLoop(config)
+    # Pipeline config path threads through to the intelligence probe so the
+    # probe subprocess uses the same base_url/api_key/model as the pipeline.
+    if config_path:
+        loop._intel_probe_pipeline_cfg_path = config_path
     result = await loop.run()
 
     print("\n" + "=" * 60)
@@ -111,7 +115,7 @@ def main() -> None:
         config_path = Path(args[idx + 1])
         with open(config_path) as f:
             config = PipelineConfig.from_dict(json.load(f))
-        exit_code = asyncio.run(run_pipeline(config))
+        exit_code = asyncio.run(run_pipeline(config, config_path=str(config_path)))
         sys.exit(exit_code)
 
     # Simple mode
