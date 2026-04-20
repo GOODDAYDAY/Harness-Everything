@@ -212,5 +212,57 @@ def test_writefile_atomic_read_text():
         assert text == content
 
 
+def test_writefile_parent_dir_symlink_resolution():
+    """Test that WriteFileTool resolves symlinks in parent directory paths.
+    
+    This specifically tests the resolve_symlinks=True parameter in the
+    _validate_and_prepare_parent_directory call, ensuring TOCTOU protection
+    against symlink attacks on parent directories.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        outside = Path(tmpdir) / "outside"
+        outside.mkdir()
+
+        # Create a file outside the workspace
+        secret_file = outside / "secret.txt"
+        secret_file.write_text("classified information")
+        
+        # Create a symlink in workspace pointing to outside directory
+        link_in_workspace = workspace / "link_to_outside"
+        link_in_workspace.symlink_to(outside)
+        
+        # Try to write a file whose parent is the symlink to outside
+        target_path = link_in_workspace / "new_file.txt"
+        
+        tool = WriteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Test: writing a file through a symlinked parent directory should fail
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(target_path),
+            content="attempt to write outside workspace"
+        ))
+        
+        # The operation should fail because the resolved parent directory
+        # is outside the allowed workspace
+        assert result.is_error, "Should reject file creation through symlink to outside workspace"
+        
+        # Verify the error indicates the path issue
+        error_lower = result.error.lower()
+        # Check for various possible error messages indicating path validation failure
+        assert any(keyword in error_lower for keyword in [
+            "outside", "not allowed", "scope", "symlink", "path", "validation"
+        ]), f"Expected path validation error, got: {result.error}"
+        
+        # Verify the outside file was not modified
+        assert secret_file.read_text() == "classified information", \
+            "Outside file should not be modified"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
