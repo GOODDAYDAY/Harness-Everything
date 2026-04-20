@@ -63,11 +63,11 @@ CRITICAL DISCRIMINATION CHECKLIST (4-7 range):
 - Score 6.0: MUST show testability evidence AND main requirements addressed (edge cases missing)
 - Score 7.0: MUST show FULL requirement coverage AND only edge cases missing
 
-FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
-- 4.5: MUST explain: (1) which specific elements push it above 4.0, AND (2) what's missing for 5.0
-- 5.5: MUST explain: (1) which implementation details are present (pushing toward 6.0), AND (2) what major gaps remain
-- 6.5: MUST explain: (1) which edge cases are addressed (pushing toward 7.0), AND (2) what issues remain
-- ALWAYS use fractional scores when proposal clearly falls between integer criteria
+STRICT FRACTIONAL SCORE REQUIREMENTS (ONLY .5 increments allowed in 4-7 range):
+- 4.5: Generic with SOME specificity - MUST show: (1) specific elements mentioned AND (2) what's missing for 5.0
+- 5.5: Specific with SOME completeness - MUST show: (1) edge cases addressed AND (2) major gaps remaining for 6.0
+- 6.5: Mostly complete with SOME edge cases - MUST show: (1) testability evidence AND (2) specific edge cases missing for 7.0
+- 7.5: Complete with SOME polish - MUST show: (1) full requirement coverage AND (2) specific polish items needed for 8.0+
 
 SCORING GUIDELINES (0-10 scale — enforce strict discrimination):
 - 0-3: Critical failure — proposal is fundamentally wrong, dangerous, or broken
@@ -85,16 +85,13 @@ DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
   - Score 5 vs 6: Does proposal address main requirement completely? If yes → ≥6, if no → 5
   - Score 6 vs 7: Does proposal handle edge cases? If yes → ≥7, if no → 6
   - Score 7 vs 8: Is proposal testable and ready for code review? If yes → ≥8, if no → 7
-- FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
-  - Score 4.5: Generic approach with some specific elements, but not enough for full 5
-  - Score 5.5: Specific but incomplete with some edge cases addressed, but not enough for 6
-  - Score 6.5: Mostly complete with some testability elements, but not enough for 7
-  - Use fractional scores when proposal falls between integer score criteria
-  - Always justify fractional scores with specific reasons why not higher/lower integer
-- FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
-  - 4.5: Must explain which specific elements push it above 4, and what's missing for 5
-  - 5.5: Must explain which edge cases are addressed (pushing toward 6) and what major gaps remain (keeping at 5)
-  - 6.5: Must explain which testability elements are present (pushing toward 7) and what edge cases are missing (keeping at 6)
+- STRICT FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range (ONLY .5 increments):
+  - Score 4.5: Generic with SOME specificity - MUST show: (1) specific elements mentioned AND (2) what's missing for 5.0
+  - Score 5.5: Specific with SOME completeness - MUST show: (1) edge cases addressed AND (2) major gaps remaining for 6.0
+  - Score 6.5: Mostly complete with SOME edge cases - MUST show: (1) testability evidence AND (2) specific edge cases missing for 7.0
+  - Score 7.5: Complete with SOME polish - MUST show: (1) full requirement coverage AND (2) specific polish items needed for 8.0+
+  - Use fractional scores ONLY when execution clearly falls between integer score criteria
+  - ALWAYS justify fractional scores with SPECIFIC evidence of what pushes toward higher score AND what prevents reaching it
 - DIMENSION DISCRIMINATION: Each checklist item (1-5) must show clear score differences
   - Scores 4-5: Major gaps in one or more dimensions
   - Scores 6-7: Moderate issues across dimensions

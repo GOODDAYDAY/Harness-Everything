@@ -574,23 +574,25 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
             if discrimination_checks:
                 warnings.append(f"Discrimination checklist for score {score}: " + " ".join(discrimination_checks))
         
-        # Enhanced fractional score validation for critical range
-        # Accept .25, .5, or .75 increments for finer discrimination
+        # ENHANCED fractional score validation for critical range - Spearman ρ optimization
+        # Use ONLY .5 increments for consistent discrimination in 4-7 range
         if 4.0 <= score <= 7.0 and score % 1 != 0:  # Fractional score in critical range
             fractional_part = score % 1
-            valid_fractions = {0.25, 0.5, 0.75}
             
-            if fractional_part not in valid_fractions:
-                warnings.append(f"Score {score}: Fractional score should use .25, .5, or .75 increments for consistent discrimination in critical 4-7 range")
-            
-            # Clear, specific guidance for fractional scores
-            base_score = int(score)
-            if fractional_part == 0.25:
-                warnings.append(f"Score {score}: Fractional score slightly above {base_score}.0 - justify specific elements pushing beyond integer score")
-            elif fractional_part == 0.5:
-                warnings.append(f"Score {score}: Fractional score midway between {base_score}.0 and {base_score+1}.0 - justify balance of elements present vs missing")
-            elif fractional_part == 0.75:
-                warnings.append(f"Score {score}: Fractional score approaching {base_score+1}.0 - justify why not quite reaching next integer score")
+            # STRICT: Only allow .5 increments for discrimination consistency
+            if fractional_part != 0.5:
+                warnings.append(f"Score {score}: Use ONLY .5 increments (4.5, 5.5, 6.5, 7.5) for consistent discrimination in critical 4-7 range")
+            else:
+                # Enhanced fractional score discrimination with clear criteria
+                base_score = int(score)
+                if base_score == 4:
+                    warnings.append(f"Score 4.5: Generic with SOME specificity - MUST show: (1) specific elements mentioned AND (2) what's missing for 5.0")
+                elif base_score == 5:
+                    warnings.append(f"Score 5.5: Specific with SOME completeness - MUST show: (1) edge cases addressed AND (2) major gaps remaining for 6.0")
+                elif base_score == 6:
+                    warnings.append(f"Score 6.5: Mostly complete with SOME edge cases - MUST show: (1) testability evidence AND (2) specific edge cases missing for 7.0")
+                elif base_score == 7:
+                    warnings.append(f"Score 7.5: Complete with SOME polish - MUST show: (1) full requirement coverage AND (2) specific polish items needed for 8.0+")
         if mode == "debate":
             # SIMPLIFIED debate mode validation
             # Debate mode: evaluating text proposals with clear discrimination

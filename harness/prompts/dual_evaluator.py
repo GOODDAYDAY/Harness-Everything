@@ -74,11 +74,11 @@ DISCRIMINATION CHECKLIST for Spearman ρ improvement (scores 4-7):
 3. Score 6 vs 7: Does proposal handle EDGE CASES with execution validation? If yes → ≥7, if no → 6
 4. MODE CHECK: Debate mode requires reasoning structure; Implement mode requires concrete evidence
 
-STRICT FRACTIONAL SCORE REQUIREMENTS for Spearman ρ:
-- 4.5: MUST explain which specific elements push it above 4, AND what's missing for 5. Mode-specific validation applies.
-- 5.5: MUST explain which edge cases are addressed (pushing toward 6) AND what major gaps remain (keeping at 5). Mode-specific validation applies.
-- 6.5: MUST explain which testability elements are present (pushing toward 7) AND what edge cases are missing (keeping at 6). Mode-specific validation applies.
-- 7.5: MUST explain full coverage vs polish needed. Mode-specific validation applies.
+STRICT FRACTIONAL SCORE REQUIREMENTS for Spearman ρ (ONLY .5 increments allowed in 4-7 range):
+- 4.5: Generic with SOME specificity - MUST show: (1) specific elements mentioned AND (2) what's missing for 5.0
+- 5.5: Specific with SOME completeness - MUST show: (1) edge cases addressed AND (2) major gaps remaining for 6.0
+- 6.5: Mostly complete with SOME edge cases - MUST show: (1) testability evidence AND (2) specific edge cases missing for 7.0
+- 7.5: Complete with SOME polish - MUST show: (1) full requirement coverage AND (2) specific polish items needed for 8.0+
 
 DISCRIMINATION VERIFICATION for Spearman ρ:
 - For score 4.0: Verify NO specific files/functions. Implement mode with file changes → inappropriate.
