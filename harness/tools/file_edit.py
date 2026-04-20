@@ -56,28 +56,10 @@ class EditFileTool(Tool):
         if scope_err := self._check_phase_scope(config, resolved):
             return scope_err
 
-        # Use atomic file opening to prevent TOCTOU attacks
-        fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, os.O_RDONLY)
-        if error is not None:
-            return ToolResult(error=f"Cannot open file for editing: {error.error}", is_error=True)
-        
-        # Use the helper to safely convert fd to a file object
-        def fdopen_operation(fd: int):
-            return os.fdopen(fd, 'rb')
-        
-        file_obj, open_error = await asyncio.to_thread(self._guaranteed_fd_cleanup, fd, fdopen_operation)
-        if open_error is not None:
-            return open_error
-        # file_obj is now guaranteed to be open, and the original fd is closed.
-        
-        try:
-            # Read binary and decode with same error handling as ReadFileTool
-            content = file_obj.read()
-            text = content.decode('utf-8', errors='replace')
-        except Exception as exc:
-            return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
-        finally:
-            file_obj.close()
+        # Use the shared atomic read helper
+        text, read_error = await self._atomic_read_text(config, resolved)
+        if read_error is not None:
+            return read_error
         count = text.count(old_str)
 
         if count == 0:
@@ -91,6 +73,7 @@ class EditFileTool(Tool):
         new_text = text.replace(old_str, new_str, -1 if replace_all else 1)
         
         # Write back using atomic write pattern (temp file + os.replace)
+        tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=os.path.dirname(resolved), delete=False
@@ -101,7 +84,7 @@ class EditFileTool(Tool):
         except Exception as exc:
             # Clean up temp file if it exists
             try:
-                if os.path.exists(tmp_path):
+                if tmp_path is not None and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
             except Exception:
                 pass

@@ -485,6 +485,51 @@ class Tool(ABC):
                 pass  # FD may already be closed; ignore secondary error
             return None, ToolResult(error=f"File operation failed on descriptor {fd}: {exc}", is_error=True)
 
+    async def _atomic_read_text(self, config: HarnessConfig, resolved_path: str) -> Tuple[str | None, ToolResult | None]:
+        """
+        Read file content atomically with TOCTOU protection.
+        
+        Encapsulates the common pattern used by EditFileTool and ReadFileTool:
+        1. Validate path atomically
+        2. Open file with atomic fallback
+        3. Use guaranteed FD cleanup
+        4. Read binary content and decode with error handling
+        
+        Returns:
+            Tuple of (text, None) on success, or (None, ToolResult) on error.
+        """
+        import asyncio
+        import os
+        
+        # Use atomic validation for source file to prevent TOCTOU attacks
+        is_valid_path, path_validated = await self._validate_atomic_path(config, resolved_path)
+        if not is_valid_path:
+            return None, path_validated  # This is the ToolResult error
+        
+        # Use atomic file opening to prevent TOCTOU attacks
+        fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, path_validated, os.O_RDONLY)
+        if error is not None:
+            return None, error
+        
+        # Use the helper to safely convert fd to a file object
+        def fdopen_operation(fd: int):
+            return os.fdopen(fd, 'rb')
+        
+        file_obj, open_error = await asyncio.to_thread(self._guaranteed_fd_cleanup, fd, fdopen_operation)
+        if open_error is not None:
+            return None, open_error
+        # file_obj is now guaranteed to be open, and the original fd is closed.
+        
+        try:
+            # Read binary and decode with same error handling as original
+            content = file_obj.read()
+            text = content.decode('utf-8', errors='replace')
+            return text, None
+        except Exception as exc:
+            return None, ToolResult(error=f"Failed to read file: {exc}", is_error=True)
+        finally:
+            file_obj.close()
+
     def _find_path_by_inode(self, st_dev: int, st_ino: int, original_path_hint: str, workspace_root: str) -> str:
         """
         Find a file by its device and inode numbers within the workspace.

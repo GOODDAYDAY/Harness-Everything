@@ -63,28 +63,11 @@ class ReadFileTool(Tool):
             return path_validated  # This is the ToolResult error
         resolved = path_validated
 
-        # Use the atomic fallback helper from base class
-        fd, error = await asyncio.to_thread(self._open_with_atomic_fallback, resolved, os.O_RDONLY)
-        if error is not None:
-            return error
-        
-        # Use the new helper to safely convert fd to a file object
-        def fdopen_operation(fd: int):
-            return os.fdopen(fd, 'rb')
-        
-        file_obj, open_error = await asyncio.to_thread(self._guaranteed_fd_cleanup, fd, fdopen_operation)
-        if open_error is not None:
-            return open_error
-        # file_obj is now guaranteed to be open, and the original fd is closed.
-        
-        try:
-            # Read binary and decode with same error handling as original
-            content = file_obj.read()
-            lines = content.decode('utf-8', errors='replace').splitlines(keepends=True)
-        except Exception as exc:
-            return ToolResult(error=f"Failed to read file: {exc}", is_error=True)
-        finally:
-            file_obj.close()
+        # Use the shared atomic read helper
+        text, read_error = await self._atomic_read_text(config, resolved)
+        if read_error is not None:
+            return read_error
+        lines = text.splitlines(keepends=True)
 
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
