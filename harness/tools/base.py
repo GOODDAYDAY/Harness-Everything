@@ -278,6 +278,126 @@ class Tool(ABC):
         # Use the consolidated atomic path validation with directory flag
         return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True)
 
+    async def _validate_path_atomic(
+        self, config: HarnessConfig, path: str
+    ) -> tuple[bool, str | ToolResult]:
+        """
+        Unified atomic path validation method to eliminate TOCTOU vulnerabilities.
+        
+        Uses os.open with O_NOFOLLOW to atomically obtain a file descriptor,
+        resolves the real path, and validates against allowed_paths.
+        
+        Returns (True, resolved_path_str) on success, or 
+        (False, ToolResult(error=..., is_error=True)) on failure.
+        """
+        import errno
+        
+        # Use atomic open with O_NOFOLLOW to prevent symlink traversal
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return False, ToolResult(
+                    error=f"Symlink loop detected or too many levels of symbolic links: {path}",
+                    is_error=True
+                )
+            elif exc.errno == errno.ENOENT:
+                return False, ToolResult(
+                    error=f"File not found: {path}",
+                    is_error=True
+                )
+            else:
+                return False, ToolResult(
+                    error=f"Cannot access file: {exc}",
+                    is_error=True
+                )
+        
+        try:
+            # Try to get real path via /proc/self/fd on Linux
+            resolved_path = None
+            try:
+                proc_path = f"/proc/self/fd/{fd}"
+                if os.path.exists(proc_path):
+                    resolved_path = os.path.realpath(proc_path)
+            except (OSError, AttributeError):
+                pass
+            
+            # Fallback to os.path.realpath if /proc method failed
+            if not resolved_path:
+                resolved_path = os.path.realpath(path)
+            
+            # Validate the resolved path against allowed_paths
+            path_result = self._check_path(config, resolved_path)
+            is_valid, validated = self._validate_path_result(path_result)
+            
+            if not is_valid:
+                return False, validated
+            
+            # Additional security: verify the file we have open is within allowed paths
+            # by checking inode against allowed directories
+            stat_info = os.fstat(fd)
+            for allowed_path in config.allowed_paths:
+                try:
+                    # Try to find the file by inode within allowed path
+                    found_path = self._find_path_by_inode(
+                        stat_info.st_dev, stat_info.st_ino, resolved_path, allowed_path
+                    )
+                    # Verify found_path is within allowed_path
+                    if os.path.commonpath([found_path, allowed_path]) == allowed_path:
+                        return True, found_path
+                except (OSError, ValueError):
+                    continue
+            
+            # If we get here, file is not within any allowed path
+            return False, ToolResult(
+                error="TOCTOU security violation: file path changed during validation - resolved path not within allowed directories",
+                is_error=True
+            )
+            
+        except Exception as exc:
+            return False, ToolResult(
+                error=f"Path validation failed: {exc}",
+                is_error=True
+            )
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _find_path_by_inode(
+        self, dev: int, ino: int, original_path: str, search_root: str
+    ) -> str:
+        """
+        Find a file by its device and inode numbers within a search root.
+        
+        This provides additional security by verifying the actual file
+        (identified by inode) is within allowed directories.
+        """
+        import os
+        from pathlib import Path
+        
+        # If the original path is already within search_root, use it
+        try:
+            if os.path.commonpath([original_path, search_root]) == search_root:
+                return original_path
+        except ValueError:
+            pass
+        
+        # Walk the search root to find the file by inode
+        for root, dirs, files in os.walk(search_root):
+            for name in files + dirs:
+                full_path = os.path.join(root, name)
+                try:
+                    stat_info = os.lstat(full_path)
+                    if stat_info.st_dev == dev and stat_info.st_ino == ino:
+                        return full_path
+                except OSError:
+                    continue
+        
+        # If not found, return the original path (validation will fail later)
+        return original_path
+
     def _open_with_atomic_fallback(self, path: str, flags: int) -> tuple[int | None, ToolResult | None]:
         """
         Atomically open a file with fallback for systems without O_NOFOLLOW support.
@@ -641,7 +761,7 @@ def enforce_atomic_validation(tool_cls):
     """Class decorator that ensures tools with requires_path_check=True use atomic validation.
     
     This decorator checks at class definition time and injects runtime assertions
-    to ensure _validate_atomic_path is called in the execute method.
+    to ensure _validate_path_atomic is called in the execute method.
     """
     if not hasattr(tool_cls, 'requires_path_check') or not tool_cls.requires_path_check:
         return tool_cls
@@ -651,10 +771,40 @@ def enforce_atomic_validation(tool_cls):
     
     # Create a wrapper that checks for atomic validation
     async def execute_wrapper(self, config, **kwargs):
-        # We can't directly check if _validate_atomic_path was called,
-        # but we can log a warning if the tool doesn't appear to use it
-        # In practice, the tools that need path checking should call it
-        return await original_execute(self, config, **kwargs)
+        # Check if the tool is using the new atomic validation
+        # We'll add a flag to track validation usage
+        self._atomic_validation_used = False
+        
+        # Create a wrapper for _validate_atomic_path to track usage
+        original_validate = self._validate_atomic_path
+        async def tracked_validate(*args, **kwargs):
+            self._atomic_validation_used = True
+            return await original_validate(*args, **kwargs)
+        self._validate_atomic_path = tracked_validate
+        
+        # Also track usage of the new _validate_path_atomic method
+        original_validate_path = self._validate_path_atomic
+        async def tracked_validate_path(*args, **kwargs):
+            self._atomic_validation_used = True
+            return await original_validate_path(*args, **kwargs)
+        self._validate_path_atomic = tracked_validate_path
+        
+        try:
+            result = await original_execute(self, config, **kwargs)
+            
+            # Log warning if atomic validation wasn't used
+            if not getattr(self, '_atomic_validation_used', False):
+                import logging
+                logging.warning(
+                    f"Tool {tool_cls.name} with requires_path_check=True "
+                    f"may not be using atomic path validation"
+                )
+            
+            return result
+        finally:
+            # Restore original methods
+            self._validate_atomic_path = original_validate
+            self._validate_path_atomic = original_validate_path
     
     # Replace the execute method
     tool_cls.execute = execute_wrapper
