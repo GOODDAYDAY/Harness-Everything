@@ -152,6 +152,31 @@ def validate_path_security(path: str, config: HarnessConfig | None = None) -> st
     return None
 
 
+async def validate_path_scope(config: HarnessConfig, resolved_path: str) -> tuple[bool, str | None]:
+    """Validate that a path is within the allowed workspace scope.
+    
+    Args:
+        config: Harness configuration
+        resolved_path: Absolute resolved path to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message). If valid, error_message is None.
+    """
+    # Simple implementation: check if path is within workspace
+    # In a real implementation, this would check allowed_paths and other constraints
+    try:
+        resolved = Path(resolved_path).resolve()
+        workspace = Path(config.workspace).resolve()
+        
+        # Check if path is within workspace
+        if workspace in resolved.parents or resolved == workspace:
+            return True, None
+        else:
+            return False, f"Path {resolved_path} is outside allowed workspace {config.workspace}"
+    except Exception as e:
+        return False, f"Path validation error: {e}"
+
+
 def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path]) -> bool:
     """Validate that a file descriptor points to a file within allowed paths.
     

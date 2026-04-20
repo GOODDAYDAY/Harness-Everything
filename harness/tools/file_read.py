@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, handle_atomic_result
 
 
 @enforce_atomic_validation
@@ -52,11 +53,47 @@ class ReadFileTool(Tool):
         # callers get a clear error instead of a confusing TypeError deep inside
         # arithmetic on line 57.
         try:
-            offset = int(offset)
-            limit = int(limit)
-        except (TypeError, ValueError) as exc:
+            # First check if values are None (can happen with malformed JSON)
+            if offset is None or limit is None:
+                return ToolResult(
+                    error=f"offset and limit cannot be None, got offset={offset!r} limit={limit!r}",
+                    is_error=True,
+                )
+            
+            # Attempt conversion to integer - try each separately for better error messages
+            try:
+                offset = int(offset)
+            except (TypeError, ValueError) as offset_exc:
+                # Provide specific error for offset conversion failure
+                if isinstance(offset, str) and not offset.strip():
+                    offset_desc = "empty string"
+                elif isinstance(offset, str):
+                    offset_desc = f"string '{offset}'"
+                else:
+                    offset_desc = f"{type(offset).__name__} {offset!r}"
+                return ToolResult(
+                    error=f"offset must be an integer, got {offset_desc}: {offset_exc}",
+                    is_error=True,
+                )
+            
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError) as limit_exc:
+                # Provide specific error for limit conversion failure
+                if isinstance(limit, str) and not limit.strip():
+                    limit_desc = "empty string"
+                elif isinstance(limit, str):
+                    limit_desc = f"string '{limit}'"
+                else:
+                    limit_desc = f"{type(limit).__name__} {limit!r}"
+                return ToolResult(
+                    error=f"limit must be an integer, got {limit_desc}: {limit_exc}",
+                    is_error=True,
+                )
+        except Exception as exc:
+            # Catch any other unexpected exceptions
             return ToolResult(
-                error=f"offset and limit must be integers, got offset={offset!r} limit={limit!r}: {exc}",
+                error=f"Unexpected error converting offset/limit to integers: {exc}",
                 is_error=True,
             )
         
@@ -72,32 +109,54 @@ class ReadFileTool(Tool):
             )
 
         # Combined atomic validation and read
-        atomic_result = await self._validate_and_read_atomic(
-            config, path, require_exists=True, check_scope=True, resolve_symlinks=True
+        atomic_result = await self.file_security.atomic_validate_and_read(
+            config, path, require_exists=True, check_scope=True, resolve_symlinks=False
         )
-        if isinstance(atomic_result, ToolResult):
-            return atomic_result  # Error from validation or read
-        text, resolved = atomic_result
-        lines = text.splitlines(keepends=True)
+        # Use centralized handler for atomic validation results
+        result = handle_atomic_result(atomic_result, metadata_keys=("text", "resolved_path"))
+        if result.is_error:
+            return result
+        # Extract data from successful result
+        text = result.metadata["text"]
+        resolved = result.metadata["resolved_path"]
+        
 
+        lines = text.splitlines(keepends=True)
+        total_lines = len(lines)
+        
+        # Validate that offset is within file bounds
+        # Offset can be 1 to total_lines (to read lines) or total_lines+1 (to create empty selection)
+        # This follows 1-based indexing where offset=1 means start at first line
+        if offset > total_lines + 1 or (total_lines == 0 and offset > 1):
+            filename = os.path.basename(resolved)
+            if total_lines == 0:
+                return ToolResult(
+                    error=f"Offset {offset} exceeds maximum allowed value (1) for empty file {filename}. Valid offset is 1 (empty files have no lines to read).",
+                    is_error=True
+                )
+            else:
+                return ToolResult(
+                    error=f"Offset {offset} exceeds maximum allowed value ({total_lines + 1}) for file with {total_lines} lines in {filename}. Valid offset range is 1 to {total_lines} (to read lines) or {total_lines + 1} (to create empty selection).",
+                    is_error=True
+                )
+        
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
-        total = len(lines)
         
-        # Handle empty selection (when start >= total)
+        # Handle empty selection (when start >= total_lines for non-empty files, or empty file)
         if not selected:
             # Extract filename from resolved path
             filename = os.path.basename(resolved)
-            header = f"[{filename}] lines 0-0 of {total}\n"
+            header = f"[{filename}] lines {offset}-{offset-1} of {total_lines}\n"
             numbered = ""
-            lines_metadata = []
+            lines_metadata = []  # Empty selection: no lines returned
         else:
             numbered = "".join(
                 f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
             )
             # Extract filename from resolved path
             filename = os.path.basename(resolved)
-            header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
+            header = f"[{filename}] lines {start+1}-{min(start+limit, total_lines)} of {total_lines}\n"
             
             # Create structured metadata with line numbers and content
             lines_metadata = [

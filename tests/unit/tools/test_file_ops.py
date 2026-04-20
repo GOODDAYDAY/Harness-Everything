@@ -3,6 +3,7 @@
 import asyncio
 import errno
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -462,7 +463,7 @@ def test_delete_file_atomic_validation_race_condition():
                 
                 # Verify _validate_atomic_path was called with correct parameters
                 mock_validate.assert_called_once_with(
-                    config, test_file_path_str, require_exists=True, check_scope=True
+                    config, test_file_path_str, require_exists=True, check_scope=True, resolve_symlinks=False
                 )
 
 
@@ -504,8 +505,8 @@ def test_validate_atomic_path_parameter_names():
 
 
 def test_symlink_resolution_consistent_across_tools():
-    """Test that MoveFileTool and CopyFileTool resolve symlinks like EditFileTool."""
-    # This test asserts the concrete improvement: all tools use resolve_symlinks=True
+    """Test that all file tools reject symlinks for security."""
+    # This test asserts the concrete improvement: all tools use resolve_symlinks=False
     # Read the source files directly to verify the parameter usage.
     import os
     
@@ -519,30 +520,194 @@ def test_symlink_resolution_consistent_across_tools():
     with open("harness/tools/file_read.py", "r") as f:
         read_source = f.read()
 
-    # Check that resolve_symlinks=True is present in all validation calls
+    # Check that resolve_symlinks=False is present in all validation calls for security
     # EditFileTool
-    assert "resolve_symlinks=True" in edit_source, "EditFileTool should use resolve_symlinks=True"
+    assert "resolve_symlinks=False" in edit_source, "EditFileTool should use resolve_symlinks=False to reject symlinks"
     
     # DeleteFileTool in file_ops.py
-    assert "await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "DeleteFileTool should use resolve_symlinks=True"
+    # Extract DeleteFileTool section
+    delete_start = ops_source.find("class DeleteFileTool(Tool):")
+    delete_end = ops_source.find("\n\n@enforce_atomic_validation\nclass MoveFileTool", delete_start)
+    if delete_end == -1:
+        delete_end = len(ops_source)
+    delete_section = ops_source[delete_start:delete_end]
+    assert "resolve_symlinks=False" in delete_section, "DeleteFileTool should use resolve_symlinks=False to reject symlinks"
     
     # MoveFileTool source validation
-    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "MoveFileTool source validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "MoveFileTool source validation should use resolve_symlinks=False to reject symlinks"
     
     # MoveFileTool destination validation
-    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)" in ops_source, "MoveFileTool destination validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)" in ops_source, "MoveFileTool destination validation should use resolve_symlinks=False to reject symlinks"
     
     # CopyFileTool source validation
-    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "CopyFileTool source validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "CopyFileTool source validation should use resolve_symlinks=False to reject symlinks"
     
     # CopyFileTool destination validation
-    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)" in ops_source, "CopyFileTool destination validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)" in ops_source, "CopyFileTool destination validation should use resolve_symlinks=False to reject symlinks"
     
     # WriteFileTool
-    assert "resolve_symlinks=True" in write_source, "WriteFileTool should use resolve_symlinks=True"
+    assert "resolve_symlinks=False" in write_source, "WriteFileTool should use resolve_symlinks=False to reject symlinks"
     
     # ReadFileTool
-    assert "resolve_symlinks=True" in read_source, "ReadFileTool should use resolve_symlinks=True"
+    assert "resolve_symlinks=False" in read_source, "ReadFileTool should use resolve_symlinks=False to reject symlinks"
+
+
+def test_copyfile_cross_device_fallback():
+    """Test that CopyFileTool handles cross-device copies with fallback."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        # Include workspace and its parent in allowed paths
+        config.allowed_paths = [str(workspace), tmpdir]
+        
+        # Mock the validation methods to succeed
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            # Mock source validation
+            mock_validate.side_effect = [
+                (True, str(source)),  # source validation
+                (True, str(destination)),  # destination validation
+                (True, str(workspace)),  # parent directory validation
+            ]
+            
+            # Mock asyncio.to_thread to raise EXDEV error for copy2, then succeed for copyfile and copystat
+            def side_effect(*args, **kwargs):
+                # First call is shutil.copy2 - raise EXDEV
+                if args and args[0] == shutil.copy2:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                # Subsequent calls (copyfile, copystat) should succeed
+                return args[0](*args[1:], **kwargs)
+            
+            with patch('asyncio.to_thread', side_effect=side_effect):
+                # Mock shutil.copyfile and shutil.copystat to verify they're called in fallback
+                with patch('shutil.copyfile') as mock_copyfile, patch('shutil.copystat') as mock_copystat:
+                    mock_copyfile.return_value = None
+                    mock_copystat.return_value = None
+                    
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert not result.is_error, f"Expected success but got error: {result.error}"
+                    assert "cross-device" in result.output
+                    mock_copyfile.assert_called_once_with(str(source), str(destination))
+                    mock_copystat.assert_called_once_with(str(source), str(destination))
+
+
+def test_copyfile_cross_device_fallback_failure():
+    """Test that CopyFileTool reports error when cross-device fallback fails."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        # Include workspace and its parent in allowed paths
+        config.allowed_paths = [str(workspace), tmpdir]
+        
+        # Mock the validation methods to succeed
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            # Mock source validation
+            mock_validate.side_effect = [
+                (True, str(source)),  # source validation
+                (True, str(destination)),  # destination validation
+                (True, str(workspace)),  # parent directory validation
+            ]
+            
+            # Mock asyncio.to_thread to raise EXDEV error for copy2, then succeed for copyfile
+            def side_effect(*args, **kwargs):
+                # First call is shutil.copy2 - raise EXDEV
+                if args and args[0] == shutil.copy2:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                # Subsequent call to copyfile should use the mock
+                return args[0](*args[1:], **kwargs)
+            
+            with patch('asyncio.to_thread', side_effect=side_effect):
+                # Mock shutil.copyfile to raise an error in fallback
+                with patch('shutil.copyfile', side_effect=OSError(errno.EACCES, "Permission denied")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "Cross-device copy failed" in result.error
+
+
+def test_copyfile_handles_os_errors_with_user_friendly_messages():
+    """Test that CopyFileTool provides specific user-friendly error messages for common OS errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Mock validation to succeed - need to mock file_security.validate_atomic_path
+        with patch.object(tool.file_security, 'validate_atomic_path') as mock_validate:
+            # Also need to mock validate_and_prepare_parent_directory
+            with patch.object(tool.file_security, 'validate_and_prepare_parent_directory') as mock_parent:
+                # Mock validate_atomic_path to return success for source, destination, and any parent directory calls
+                def validate_side_effect(*args, **kwargs):
+                    # Check what path is being validated
+                    path = args[1] if len(args) > 1 else kwargs.get('path', '')
+                    if path == str(source):
+                        return (True, str(source))
+                    elif path == str(destination):
+                        return (True, str(destination))
+                    else:
+                        # For parent directory or other calls, return success
+                        return (True, path)
+                
+                mock_validate.side_effect = validate_side_effect
+                mock_parent.return_value = (True, None)  # parent directory validation succeeds
+            
+                # Test ENOSPC (disk full) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.ENOSPC, "No space left on device")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "disk full (ENOSPC)" in result.error
+                    assert "Cannot copy" in result.error
+                
+                # Test EACCES (permission denied) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.EACCES, "Permission denied")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "permission denied (EACCES)" in result.error
+                    assert "Cannot copy" in result.error
+                
+                # Test ENOENT (file not found) error - though validation should catch this earlier
+                # Note: FileNotFoundError is caught before OSError handler, so we get a different message
+                with patch('asyncio.to_thread', side_effect=OSError(errno.ENOENT, "No such file or directory")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    # FileNotFoundError is caught by specific handler before OSError handler
+                    assert "Source file disappeared after validation" in result.error
+                
+                # Test EISDIR (is a directory) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.EISDIR, "Is a directory")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "source is a directory, not a file (EISDIR)" in result.error
+                    assert "Cannot copy" in result.error
+                
+                # Test ENOTDIR (not a directory) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.ENOTDIR, "Not a directory")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "a component in the path is not a directory (ENOTDIR)" in result.error
+                    assert "Cannot copy" in result.error
 
 
 if __name__ == "__main__":

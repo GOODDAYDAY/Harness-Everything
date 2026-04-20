@@ -3,7 +3,24 @@
 import math
 import pytest
 
-from harness.evaluation.metrics import calculate_critical_range_discrimination, _calculate_std_in_range
+from harness.evaluation.metrics import calculate_critical_range_discrimination
+
+
+def _calculate_expected_std(evaluations, lower=4.0, upper=7.0):
+    """Test helper to calculate expected standard deviation for scores in range."""
+    scores = []
+    for eval_item in evaluations:
+        try:
+            score = float(eval_item.get("score"))
+            if lower <= score <= upper:
+                scores.append(score)
+        except (TypeError, ValueError):
+            continue
+    if len(scores) < 2:
+        return 0.0
+    mean = sum(scores) / len(scores)
+    variance = sum((s - mean) ** 2 for s in scores) / (len(scores) - 1)
+    return math.sqrt(variance)
 
 
 def test_calculate_critical_range_discrimination_empty_list():
@@ -31,7 +48,7 @@ def test_calculate_critical_range_discrimination_two_scores_in_range():
         {"score": 7.0}
     ]
     result = calculate_critical_range_discrimination(evaluations)
-    expected = _calculate_std_in_range(evaluations)
+    expected = _calculate_expected_std(evaluations)
     assert math.isclose(result, expected, rel_tol=1e-9)
 
 
@@ -44,7 +61,7 @@ def test_calculate_critical_range_discrimination_mixed_scores():
         {"score": 8.0}   # outside
     ]
     result = calculate_critical_range_discrimination(evaluations)
-    expected = _calculate_std_in_range(evaluations)
+    expected = _calculate_expected_std(evaluations)
     assert math.isclose(result, expected, rel_tol=1e-9)
 
 
@@ -57,7 +74,7 @@ def test_calculate_critical_range_discrimination_invalid_scores():
         {"score": 6.0}              # valid
     ]
     result = calculate_critical_range_discrimination(evaluations)
-    expected = _calculate_std_in_range(evaluations)
+    expected = _calculate_expected_std(evaluations)
     assert math.isclose(result, expected, rel_tol=1e-9)
 
 
@@ -70,7 +87,7 @@ def test_calculate_critical_range_discrimination_edge_cases():
         {"score": 7.001}   # outside
     ]
     result = calculate_critical_range_discrimination(evaluations)
-    expected = _calculate_std_in_range(evaluations)
+    expected = _calculate_expected_std(evaluations)
     assert math.isclose(result, expected, rel_tol=1e-9)
 
 
@@ -83,7 +100,7 @@ def test_calculate_critical_range_discrimination_multiple_occurrences():
         {"score": 4.5}  # duplicate
     ]
     result = calculate_critical_range_discrimination(evaluations)
-    expected = _calculate_std_in_range(evaluations)
+    expected = _calculate_expected_std(evaluations)
     assert math.isclose(result, expected, rel_tol=1e-9)
 
 

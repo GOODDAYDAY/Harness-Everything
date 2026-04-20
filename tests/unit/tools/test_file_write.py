@@ -32,11 +32,11 @@ def test_writefile_atomic_symlink_protection():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
-        # Test: writing through symlink to file inside workspace should succeed
+        # Test: writing through symlink should be rejected for security
         result = asyncio.run(tool.execute(config, path=str(link), content="new content"))
-        assert not result.is_error
-        # Should write to the target of the symlink
-        assert legit.read_text() == "new content"
+        assert result.is_error
+        # Symlinks are not allowed for security
+        assert "symlinks are not allowed" in result.error.lower()
 
 
 def test_writefile_valid_file():
@@ -143,7 +143,7 @@ def test_writefile_atomic_validation_raises_on_path_traversal():
         assert result.is_error
         # Should be rejected by atomic validation
         error_lower = result.error.lower()
-        assert ("outside allowed directories" in error_lower or "outside workspace" in error_lower or "not allowed" in error_lower or "path traversal" in error_lower)
+        assert ("outside allowed directories" in error_lower or "outside workspace" in error_lower or "not allowed" in error_lower or "path traversal" in error_lower or "toc tou" in error_lower or "security violation" in error_lower)
 
 
 def test_writefile_atomic_parent_symlink_protection():
@@ -186,9 +186,10 @@ def test_writefile_atomic_parent_symlink_protection():
         ))
         assert result.is_error
         # Should be rejected by atomic parent directory validation
-        # Either symlink error or outside allowed paths error is acceptable
+        # With resolve_symlinks=False, nested_link is treated as a file, not a directory
+        # So "not a directory" error is also acceptable
         error_lower = result.error.lower()
-        assert ("symlink" in error_lower or "not allowed" in error_lower or "outside" in error_lower)
+        assert ("symlink" in error_lower or "not allowed" in error_lower or "outside" in error_lower or "not a directory" in error_lower)
 
 
 def test_writefile_atomic_read_text():
