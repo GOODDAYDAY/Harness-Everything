@@ -12,6 +12,7 @@ import re
 from typing import Any, Literal
 
 from harness.core.llm import LLM
+from harness.evaluation.metrics import calculate_critical_range_discrimination
 from harness.pipeline.phase import DualScore, ScoreItem
 from harness.prompts import dual_evaluator as default_prompts
 

@@ -26,9 +26,13 @@ CONCRETE SCORING EXAMPLES:
 - Score 2: "Improve error handling in the parser" without naming which function or what errors
 - Score 3: "Fix parse_score bug" but suggests wrong fix approach
 - Score 4: "Fix the bug in parse_score" but doesn't show the fix
+- Score 4.5: "Fix parse_score bug in dual_evaluator.py" - names file but lacks specific function or implementation details
 - Score 5: "Update parse_score to handle markdown" but missing implementation details
+- Score 5.5: "Update parse_score in dual_evaluator.py to handle markdown" - names file and function but lacks complete implementation
 - Score 6: "Update parse_score in dual_evaluator.py to handle markdown" with example
+- Score 6.5: "Update parse_score in dual_evaluator.py to handle markdown" with code example and partial test coverage
 - Score 7: "Update parse_score in dual_evaluator.py to handle markdown" with code but missing edge cases
+- Score 7.5: "Update parse_score in dual_evaluator.py to handle markdown" with complete code and edge case handling but lacking polish
 - Score 8: Proposal includes exact code change for parse_score with test cases
 - Score 9: Proposal includes code, tests, and validation for main scenarios
 - Score 10: Proposal includes code, tests, and validation of edge cases with metrics
