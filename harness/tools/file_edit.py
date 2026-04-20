@@ -60,16 +60,10 @@ class EditFileTool(Tool):
         if str(parent_dir) != ".":  # Skip if parent is current directory
             # Validate parent directory exists and is not a symlink
             is_valid_parent, parent_validated = await self._validate_atomic_path(
-                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+                config, str(parent_dir), require_exists=True, directory=True, check_scope=True
             )
             if not is_valid_parent:
                 return parent_validated  # This is a ToolResult error
-            
-            # Create parent directory atomically if it doesn't exist
-            try:
-                os.makedirs(parent_validated, exist_ok=True)
-            except OSError as exc:
-                return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
 
         # Use the shared atomic read helper
         text, read_error = await self._atomic_read_text(config, resolved)

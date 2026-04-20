@@ -206,37 +206,5 @@ def test_editfile_respects_allowed_edit_globs():
         assert not result.is_error, f"Empty allowed_edit_globs should allow all files, got error: {result.error}"
 
 
-def test_editfile_creates_parent_directories():
-    """Test that EditFileTool creates parent directories if needed."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
-        workspace.mkdir()
-
-        # Create a file path with non-existent parent directories
-        file_path = workspace / "deep" / "nested" / "file.txt"
-        
-        # First, create the file with its parent directories
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text("original content")
-        
-        tool = EditFileTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace = str(workspace)
-        config.allowed_paths = [str(workspace)]
-
-        # Simulate a race condition: another process creates the parent directory
-        # between our check and creation attempt
-        # The exist_ok=True should handle this gracefully
-        result = asyncio.run(tool.execute(
-            config,
-            path=str(file_path),
-            old_str="original",
-            new_str="modified"
-        ))
-        assert not result.is_error, f"Edit should succeed with exist_ok=True, got error: {result.error}"
-        assert file_path.exists()
-        assert file_path.read_text() == "modified content"
-
-
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
