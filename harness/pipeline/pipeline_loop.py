@@ -1107,8 +1107,19 @@ class PipelineLoop:
                 rounds_completed, best_score, tool_error_rate, total_elapsed,
                 payload["total_phases_run"],
             )
+            # Clear phase history after successful write to prevent memory accumulation
+            self._clear_phase_history()
         except Exception as exc:
             log.warning("_write_run_summary: failed to write summary.json: %s", exc)
+
+    def _clear_phase_history(self) -> None:
+        """Clear phase score history to prevent memory accumulation.
+        
+        Called after writing summary.json to ensure history is preserved
+        for the current run but doesn't accumulate across runs.
+        """
+        self.phase_score_history = []
+        log.debug("Cleared phase score history (%d entries)", len(self.phase_score_history))
 
     async def _maybe_auto_tag(
         self,

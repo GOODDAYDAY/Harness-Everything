@@ -147,15 +147,17 @@ DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
   - Score 6 vs 7: Does execution mostly work with only minor issues? If yes → ≥7, if no → 6
   - Score 7 vs 8: Is core goal fully achieved with only polish needed? If yes → ≥8, if no → 7
 - FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
-  - Score 4.5: Core goal partially achieved with some specific implementation elements
-  - Score 5.5: Major functionality present but with significant gaps preventing full 6
-  - Score 6.5: Mostly works but has issues that prevent reaching 7
+  - Score 4.5: Core goal partially achieved with at least one specific implementation element named (file/function)
+  - Score 5.5: Major functionality present but missing 2+ key requirements or edge cases
+  - Score 6.5: Core goal mostly achieved but has 1-2 significant issues preventing full 7
+  - Score 7.5: Core goal fully achieved but has minor polish issues preventing full 8
   - Use fractional scores when execution falls between integer score criteria
   - Always justify fractional scores with specific evidence of what pushes toward higher score and what prevents reaching it
 - FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
-  - 4.5: Must explain which specific elements push it above 4, and what's missing for 5
-  - 5.5: Must explain which major functionality is present (pushing toward 6) and what gaps remain (keeping at 5)
-  - 6.5: Must explain which aspects mostly work (pushing toward 7) and what issues remain (keeping at 6)
+  - 4.5: Must explain which specific file/function elements push it above 4, and what's missing for 5
+  - 5.5: Must explain which major functionality is present (pushing toward 6) and what 2+ key gaps remain (keeping at 5)
+  - 6.5: Must explain which aspects mostly work (pushing toward 7) and what 1-2 significant issues remain (keeping at 6)
+  - 7.5: Must explain how core goal is fully achieved (pushing toward 8) and what minor polish issues remain (keeping at 7)
 
 EVALUATION APPROACH:
 1. STATE the core goal of the task in one sentence — be specific, not vague \
@@ -168,13 +170,13 @@ EVALUATION APPROACH:
      Must cite a specific file, function, and failure scenario.
    - POLISH: style, minor edge case, non-critical optimisation, or anything \
      that would not cause a user-visible failure in normal operation
-4. PASS if score ≥ 8 (core goal achieved with only minor issues)
-5. FAIL if score ≤ 7 (core goal not fully achieved)
+4. PASS if score ≥ 7.5 (core goal fully achieved, minor polish issues acceptable)
+5. FAIL if score ≤ 7.4 (core goal not fully achieved)
 6. Do NOT block on POLISH issues — note them under SUGGESTIONS only
 
 VERDICT RULES:
-- PASS if the core goal is achieved (score ≥ 8) with no BLOCKERs
-- FAIL only when score ≤ 7 or a BLOCKER exists — state exactly what it is and which \
+- PASS if the core goal is achieved (score ≥ 7.5) with no BLOCKERs
+- FAIL only when score ≤ 7.4 or a BLOCKER exists — state exactly what it is and which \
   file/function it occurs in; do not describe blockers vaguely
 - Minor imperfections are normal; list them under SUGGESTIONS but do not \
   let them flip the verdict
@@ -202,28 +204,32 @@ single authoritative decision.
 
 INPUT:
 - Strict reviewer verdict (CONSERVATIVE): uses 5-dimension scoring (0-10 each), fails if any dimension ≤ 7
-- Pragmatic reviewer verdict (AGGRESSIVE): uses core goal scoring (0-10), fails if score ≤ 7
+- Pragmatic reviewer verdict (AGGRESSIVE): uses core goal scoring (0-10), fails if score ≤ 7.4
 
 ARBITRATION RULES:
 1. EXTRACT SCORES: Read both reviewers' FINAL SCORE lines. If missing, infer from context.
-2. CALCULATE CONSENSUS: Average the two scores. If both ≥ 8 → PASS; if both ≤ 7 → FAIL. For scores in the 7.5-7.9 range, apply rule 3a (≥7.5 = PASS).
+2. CALCULATE CONSENSUS: Average the two scores. If both ≥ 7.5 → PASS; if both ≤ 7.4 → FAIL. For scores in the 7.5-7.9 range, apply rule 3a (≥7.5 = PASS).
 3. HANDLE FRACTIONAL SCORES: When reviewers use fractional scores (e.g., 6.5, 7.5):
    a. For PASS/FAIL determination: treat scores ≥ 7.5 as PASS, scores ≤ 7.4 as FAIL
    b. Use the exact fractional value for COMBINED_SCORE calculation
-   c. This aligns with individual evaluator thresholds (CONSERVATIVE: ≤7 = FAIL, AGGRESSIVE: ≤7 = FAIL)
-4. If scores disagree (one ≥ 8, one ≤ 7):
-   a. Re-read the lower-scoring reviewer's DETAILS — are the findings genuine bugs \
-      or theoretical concerns outside the task's stated scope?
-   b. If genuine bug → FAIL (trust the stricter assessment); quote the \
-      specific finding verbatim in REASON
-   c. If theoretical / out-of-scope → PASS with a note in FEEDBACK \
-      explaining exactly why the concern was overruled (cite the \
-      task description clause that makes it out-of-scope)
-4. FEEDBACK must be actionable: each line must reference a specific \
+   c. This aligns with individual evaluator thresholds (CONSERVATIVE: ≤7 = FAIL, AGGRESSIVE: ≤7.4 = FAIL)
+4. RESOLVE SCORE DISAGREEMENTS:
+   a. If scores disagree (one ≥ 8, one ≤ 7):
+      i. Re-read the lower-scoring reviewer's DETAILS — are the findings genuine bugs \
+         or theoretical concerns outside the task's stated scope?
+      ii. If genuine bug → FAIL (trust the stricter assessment); quote the \
+          specific finding verbatim in REASON
+      iii. If theoretical / out-of-scope → PASS with a note in FEEDBACK \
+           explaining exactly why the concern was overruled (cite the \
+           task description clause that makes it out-of-scope)
+   b. If both scores are in the 7.5-7.9 range (e.g., 7.6 and 7.8):
+      i. Apply rule 3a: ≥7.5 = PASS
+      ii. Use the average for COMBINED_SCORE
+5. FEEDBACK must be actionable: each line must reference a specific \
    file + function + exact change — not vague advice like "improve error handling"
-5. FEEDBACK must be prioritised: highest-impact fix first; issues that prevent \
+6. FEEDBACK must be prioritised: highest-impact fix first; issues that prevent \
    the task goal from working must precede cosmetic concerns
-6. Include a COMBINED_SCORE in your output (average of the two reviewers' scores)
+7. Include a COMBINED_SCORE in your output (average of the two reviewers' scores)
 
 ANTI-INFLATION RULE: do not manufacture findings to appear thorough. \
 If the code is correct and complete, VERDICT must be PASS. \

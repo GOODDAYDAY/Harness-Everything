@@ -56,6 +56,12 @@ class ReadFileTool(Tool):
                 error=f"offset and limit must be integers, got offset={offset!r} limit={limit!r}: {exc}",
                 is_error=True,
             )
+        
+        # Validate offset and limit values
+        if offset < 1:
+            return ToolResult(error=f"offset must be ≥ 1, got {offset}", is_error=True)
+        if limit < 1:
+            return ToolResult(error=f"limit must be ≥ 1, got {limit}", is_error=True)
 
         # Use atomic validation for source file to prevent TOCTOU attacks
         is_valid_path, path_validated = await self._validate_atomic_path(config, path)
