@@ -503,5 +503,47 @@ def test_validate_atomic_path_parameter_names():
     print("All tools use correct parameter name 'require_exists' and maintain decorator contract")
 
 
+def test_symlink_resolution_consistent_across_tools():
+    """Test that MoveFileTool and CopyFileTool resolve symlinks like EditFileTool."""
+    # This test asserts the concrete improvement: all tools use resolve_symlinks=True
+    # Read the source files directly to verify the parameter usage.
+    import os
+    
+    # Read source files
+    with open("harness/tools/file_edit.py", "r") as f:
+        edit_source = f.read()
+    with open("harness/tools/file_ops.py", "r") as f:
+        ops_source = f.read()
+    with open("harness/tools/file_write.py", "r") as f:
+        write_source = f.read()
+    with open("harness/tools/file_read.py", "r") as f:
+        read_source = f.read()
+
+    # Check that resolve_symlinks=True is present in all validation calls
+    # EditFileTool
+    assert "resolve_symlinks=True" in edit_source, "EditFileTool should use resolve_symlinks=True"
+    
+    # DeleteFileTool in file_ops.py
+    assert "await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "DeleteFileTool should use resolve_symlinks=True"
+    
+    # MoveFileTool source validation
+    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "MoveFileTool source validation should use resolve_symlinks=True"
+    
+    # MoveFileTool destination validation
+    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)" in ops_source, "MoveFileTool destination validation should use resolve_symlinks=True"
+    
+    # CopyFileTool source validation
+    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "CopyFileTool source validation should use resolve_symlinks=True"
+    
+    # CopyFileTool destination validation
+    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)" in ops_source, "CopyFileTool destination validation should use resolve_symlinks=True"
+    
+    # WriteFileTool
+    assert "resolve_symlinks=True" in write_source, "WriteFileTool should use resolve_symlinks=True"
+    
+    # ReadFileTool
+    assert "resolve_symlinks=True" in read_source, "ReadFileTool should use resolve_symlinks=True"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

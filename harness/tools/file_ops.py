@@ -31,7 +31,7 @@ class DeleteFileTool(Tool):
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         resolved = src_validated
