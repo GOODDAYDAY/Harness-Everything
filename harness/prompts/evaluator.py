@@ -142,22 +142,23 @@ SCORING CALIBRATION (0-10 scale):
 
 DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
 - CRITICAL RANGE (4-7): Most proposals fall here — focus on clear differentiation
-  - Score 4 vs 5: Does execution achieve any part of core goal? If yes → ≥5, if no → 4
-  - Score 5 vs 6: Does execution achieve major functionality? If yes → ≥6, if no → 5
-  - Score 6 vs 7: Does execution mostly work with only minor issues? If yes → ≥7, if no → 6
-  - Score 7 vs 8: Is core goal fully achieved with only polish needed? If yes → ≥8, if no → 7
-- FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
-  - Score 4.5: Core goal partially achieved with at least one specific implementation element named (file/function)
-  - Score 5.5: Major functionality present but missing 2+ key requirements or edge cases
-  - Score 6.5: Core goal mostly achieved but has 1-2 significant issues preventing full 7
-  - Score 7.5: Core goal fully achieved but has minor polish issues preventing full 8
-  - Use fractional scores when execution falls between integer score criteria
-  - Always justify fractional scores with specific evidence of what pushes toward higher score and what prevents reaching it
-- FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
-  - 4.5: Must explain which specific file/function elements push it above 4, and what's missing for 5
-  - 5.5: Must explain which major functionality is present (pushing toward 6) and what 2+ key gaps remain (keeping at 5)
-  - 6.5: Must explain which aspects mostly work (pushing toward 7) and what 1-2 significant issues remain (keeping at 6)
-  - 7.5: Must explain how core goal is fully achieved (pushing toward 8) and what minor polish issues remain (keeping at 7)
+  - Score 4 vs 5: Does execution achieve ANY part of core goal? If yes → ≥5, if no → 4
+  - Score 5 vs 6: Does execution achieve MAJOR functionality? If yes → ≥6, if no → 5
+  - Score 6 vs 7: Does execution MOSTLY work with only minor issues? If yes → ≥7, if no → 6
+  - Score 7 vs 8: Is core goal FULLY achieved with only polish needed? If yes → ≥8, if no → 7
+- FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range (Spearman ρ optimization):
+  - Score 4.5: Core goal partially achieved with at least ONE specific implementation element named (file/function). MUST cite specific evidence.
+  - Score 5.5: Major functionality present but missing EXACTLY 2+ key requirements or edge cases. MUST list the missing requirements.
+  - Score 6.5: Core goal mostly achieved but has EXACTLY 1-2 significant issues preventing full 7. MUST specify the issues.
+  - Score 7.5: Core goal fully achieved but has MINOR polish issues preventing full 8. MUST describe the polish needed.
+  - Use fractional scores ONLY when execution clearly falls between integer score criteria
+  - ALWAYS justify fractional scores with SPECIFIC evidence of what pushes toward higher score AND what prevents reaching it
+- DISCRIMINATION CHECKLIST for Spearman ρ improvement:
+  - For score 4.0: Verify this isn't actually 5.0 - does execution achieve ANY part of core goal?
+  - For score 5.0: Verify clear distinction from 4.0 (generic) and 6.0 (specific) - cite specific file/function elements
+  - For score 6.0: Verify clear distinction from 5.0 (partial) and 7.0 (mostly complete) - show testability evidence
+  - For score 7.0: Verify this isn't actually 6.0 or 8.0 - is core goal fully achieved with only minor issues?
+  - For fractional scores: ALWAYS explain why it's not the integer above or below
 
 EVALUATION APPROACH:
 1. STATE the core goal of the task in one sentence — be specific, not vague \

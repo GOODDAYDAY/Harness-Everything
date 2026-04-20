@@ -30,12 +30,10 @@ class DeleteFileTool(Tool):
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, path)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, path, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         resolved = src_validated
-        if scope_err := self._check_phase_scope(config, resolved):
-            return scope_err
 
         # Atomic deletion without a separate existence check
         try:
@@ -71,25 +69,17 @@ class MoveFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
-        
-        # Scope check both source (we're removing it) and destination (we're
-        # creating it) — a move out of scope is effectively both a delete and
-        # a write.
-        if scope_err := self._check_phase_scope(config, src):
-            return scope_err
-        if scope_err := self._check_phase_scope(config, dst):
-            return scope_err
 
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -131,22 +121,17 @@ class CopyFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False)
+        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
-        
-        # Scope check on destination only — copying out of scope is still a
-        # write; reading the source does not create new state.
-        if scope_err := self._check_phase_scope(config, dst):
-            return scope_err
         
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         

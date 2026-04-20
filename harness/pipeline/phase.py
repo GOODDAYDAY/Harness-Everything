@@ -123,7 +123,23 @@ class DualScore:
 
     @property
     def combined(self) -> float:
-        return self.basic.score + self.diffusion.score
+        """Combined score (weighted average of basic and diffusion, 0-10).
+        
+        Uses 60% weight for basic score (detailed correctness evaluation) and
+        40% weight for diffusion score (system-level impact evaluation).
+        The result is clamped to the [0.0, 10.0] range.
+        """
+        # Validate that both scores are within the expected 0-10 range
+        if not (0.0 <= self.basic.score <= 10.0):
+            raise ValueError(f"Basic score {self.basic.score} is outside valid range [0.0, 10.0]")
+        if not (0.0 <= self.diffusion.score <= 10.0):
+            raise ValueError(f"Diffusion score {self.diffusion.score} is outside valid range [0.0, 10.0]")
+        
+        # Calculate weighted average: 60% basic, 40% diffusion
+        weighted_score = 0.6 * self.basic.score + 0.4 * self.diffusion.score
+        
+        # Clamp to [0.0, 10.0] range
+        return max(0.0, min(10.0, weighted_score))
 
 
 @dataclass

@@ -715,54 +715,58 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         elif mode == "implement" and score >= 5.0:
             warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
     
-    # NEW: Enhanced discrimination for critical 4-7 range (most important for Spearman ρ)
+    # FOCUSED DISCRIMINATION for critical 4-7 range (Spearman ρ optimization)
+    # Key insight: Clear discrimination between adjacent scores is more important than complex validation
     if 4.0 <= score <= 7.0:
-        # Check for proper discrimination between adjacent scores (including fractional)
-        if score == 4.0 and not has_critical_issues:
-            warnings.append(f"Score {score} at lower boundary - verify this isn't a 5 (partial success) or 3 (fundamental issues)")
-        elif score == 5.0 and not has_critical_issues:
-            warnings.append(f"Score {score} in partial success range - ensure clear distinction from 4 (generic) and 6 (specific)")
-        elif score == 6.0 and not has_critical_issues:
-            warnings.append(f"Score {score} in specific but incomplete range - ensure clear distinction from 5 (partial) and 7 (mostly complete)")
-        elif score == 7.0 and not has_critical_issues:
-            warnings.append(f"Score {score} at upper boundary - verify this isn't a 6 (missing edge cases) or 8 (testable)")
+        # SIMPLIFIED: Focus on the most critical discrimination points
+        # 1. Ensure scores are properly anchored to calibration criteria
+        if not has_calibration_anchors:
+            # Only warn if score is in middle of range where discrimination matters most
+            if 4.5 <= score <= 6.5:
+                warnings.append(f"Score {score} in critical discrimination range - must reference calibration anchors (4=generic, 5=specific, 6=testable, 7=complete)")
         
-        # NEW: Enhanced fractional score discrimination validation
-        # Fractional scores (4.5, 5.5, 6.5) should show nuanced discrimination
-        if score % 1.0 != 0:  # This is a fractional score
+        # 2. Enhanced fractional score validation with clearer guidance
+        if score % 1.0 != 0:  # Fractional score
             fractional_part = score - int(score)
-            if fractional_part == 0.5:
-                # Half-point scores require clear justification for why not full point
-                warnings.append(f"Fractional score {score} - ensure clear justification for why this isn't {int(score)} (too low) or {int(score)+1} (too high)")
-            elif fractional_part not in [0.0, 0.5]:
-                # Other fractional scores (e.g., 4.3, 5.7) need special justification
-                warnings.append(f"Non-standard fractional score {score} - requires explicit justification for precision beyond half-point increments")
+            base_score = int(score)
             
-            # Mode-specific fractional score validation
-            if mode == "debate":
-                warnings.append(f"Debate fractional score {score} - verify nuanced reasoning assessment with clear dimension breakdown")
-            elif mode == "implement":
-                warnings.append(f"Implement fractional score {score} - verify nuanced code quality assessment with specific defect references")
+            # Only allow standard fractional scores for better discrimination
+            if fractional_part not in [0.0, 0.5]:
+                warnings.append(f"Score {score} uses non-standard fraction - use .5 increments only for better discrimination")
+            
+            # Clear guidance for what each fractional score means
+            if fractional_part == 0.5:
+                if base_score == 4:
+                    warnings.append(f"Score 4.5: Must justify - has specific elements (toward 5) but missing core functionality (away from 5)")
+                elif base_score == 5:
+                    warnings.append(f"Score 5.5: Must justify - addresses edge cases (toward 6) but missing 2+ key requirements (away from 6)")
+                elif base_score == 6:
+                    warnings.append(f"Score 6.5: Must justify - mostly testable (toward 7) but has 1-2 significant issues (away from 7)")
+                elif base_score == 7:
+                    warnings.append(f"Score 7.5: Must justify - fully achieved (toward 8) but has minor polish issues (away from 8)")
         
-        # Check for proper calibration anchor usage in critical range
-        if not has_calibration_anchors and not has_critical_issues:
-            warnings.append(f"Score {score} in critical discrimination range without calibration anchors - scores 4-7 require explicit reference to calibration criteria")
+        # 3. Critical discrimination check: Ensure scores are not clustered
+        # This is the most important factor for Spearman ρ
+        if score in [4.0, 5.0, 6.0, 7.0]:  # Integer scores in critical range
+            # Check if score is properly justified relative to adjacent scores
+            if score == 4.0 and not has_critical_issues:
+                warnings.append(f"Score 4.0: Verify this isn't actually 5.0 - does execution achieve ANY part of core goal?")
+            elif score == 5.0:
+                warnings.append(f"Score 5.0: Verify clear distinction from 4.0 (generic) and 6.0 (specific) - cite specific file/function elements")
+            elif score == 6.0:
+                warnings.append(f"Score 6.0: Verify clear distinction from 5.0 (partial) and 7.0 (mostly complete) - show testability evidence")
+            elif score == 7.0 and not has_critical_issues:
+                warnings.append(f"Score 7.0: Verify this isn't actually 6.0 or 8.0 - is core goal fully achieved with only minor issues?")
         
-        # Check for dimension-based discrimination
-        if mode == "debate" and not has_dimension_scores:
-            warnings.append(f"Score {score} in debate mode without dimension scores - critical range scores should show multi-dimensional assessment")
-        elif mode == "implement" and not has_dimension_scores:
-            warnings.append(f"Score {score} in implement mode without dimension scores - critical range scores should show code quality dimensions")
-        
-        # NEW: Dimension score correlation validation
-        if has_dimension_scores:
-            # Calculate average of dimension scores
-            dimension_avg = sum(dimension_scores.values()) / len(dimension_scores)
-            score_diff = abs(score - dimension_avg)
-            if score_diff > 1.0:
-                warnings.append(f"Score {score} differs significantly from dimension average {dimension_avg:.1f} (Δ={score_diff:.1f}) - verify overall score aligns with dimension assessments")
-            elif score_diff > 0.5:
-                warnings.append(f"Score {score} differs moderately from dimension average {dimension_avg:.1f} (Δ={score_diff:.1f}) - ensure overall score justification references dimension breakdown")
+        # 4. Mode-specific discrimination enhancement
+        if mode == "debate":
+            # Debate mode: Focus on reasoning quality discrimination
+            if 5.0 <= score <= 7.0 and not has_dimension_scores:
+                warnings.append(f"Score {score} in debate mode - critical range scores should show reasoning dimension breakdown")
+        elif mode == "implement":
+            # Implement mode: Focus on code quality discrimination
+            if 5.0 <= score <= 7.0 and file_count == 0:
+                warnings.append(f"Score {score} in implement mode - critical range scores require concrete file references")
 
     # Mode-specific score distribution validation
     if mode == "debate" and score > 8.0:
@@ -1452,11 +1456,18 @@ class DualEvaluator:
         basic_feedback = extract_structured_feedback(basic_resp.text, "basic")
         diffusion_feedback = extract_structured_feedback(diffusion_resp.text, "diffusion")
         
+        # Calculate proper combined score using DualScore.combined property
+        temp_dual_score = DualScore(
+            basic=ScoreItem(basic_score, ""),
+            diffusion=ScoreItem(diffusion_score, "")
+        )
+        combined_score = temp_dual_score.combined
+        
         log.info(
             "DualEvaluator[%s]: basic=%.1f (valid=%s, feedback=%d items) diffusion=%.1f (valid=%s, feedback=%d items) combined=%.1f",
             mode, basic_score, basic_valid, len(basic_feedback.get("feedback_items", [])),
             diffusion_score, diffusion_valid, len(diffusion_feedback.get("feedback_items", [])),
-            basic_score + diffusion_score,
+            combined_score,
         )
         
         # Log key findings for debugging

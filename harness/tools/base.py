@@ -179,7 +179,8 @@ class Tool(ABC):
             )
 
     def _validate_atomic_path_sync(
-        self, config: HarnessConfig, path_str: str, require_exists: bool = True, directory: bool = False
+        self, config: HarnessConfig, path_str: str, require_exists: bool = True, 
+        directory: bool = False, check_scope: bool = False
     ) -> tuple[bool, str | ToolResult]:
         """
         Synchronous atomic path validation with inode verification.
@@ -227,6 +228,13 @@ class Tool(ABC):
             # Get file stats to verify inode
             stat_info = os.fstat(fd)
             
+            # Perform scope check while file descriptor is still open (TOCTOU fix)
+            if check_scope:
+                scope_error = self._check_phase_scope(config, resolved)
+                if scope_error is not None:
+                    os.close(fd)
+                    return False, scope_error
+            
             # Verify the file we have open is the same as what _check_path validated
             # by checking it's within allowed paths
             for allowed_path in config.allowed_paths:
@@ -256,7 +264,8 @@ class Tool(ABC):
             return False, ToolResult(error=f"TOCTOU security violation: file validation failed - {exc}", is_error=True)
 
     async def _validate_atomic_path(
-        self, config: HarnessConfig, path_str: str, require_exists: bool = True, directory: bool = False
+        self, config: HarnessConfig, path_str: str, require_exists: bool = True, 
+        directory: bool = False, check_scope: bool = False
     ) -> tuple[bool, str | ToolResult]:
         """
         Atomically validate a path is accessible and is a regular file or directory.
@@ -265,7 +274,7 @@ class Tool(ABC):
         This async wrapper delegates to the synchronous implementation.
         """
         return await asyncio.to_thread(
-            self._validate_atomic_path_sync, config, path_str, require_exists, directory
+            self._validate_atomic_path_sync, config, path_str, require_exists, directory, check_scope
         )
 
     async def _validate_directory_atomic(

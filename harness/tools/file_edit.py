@@ -49,12 +49,10 @@ class EditFileTool(Tool):
         replace_all: bool = False,
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path)
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, check_scope=True)
         if not is_valid_path:
             return path_validated  # This is the ToolResult error
         resolved = path_validated
-        if scope_err := self._check_phase_scope(config, resolved):
-            return scope_err
 
         # Use the shared atomic read helper
         text, read_error = await self._atomic_read_text(config, resolved)

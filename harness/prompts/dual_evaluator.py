@@ -40,36 +40,43 @@ SCORING GUIDELINES:
 - Score 8-9: Minor issues — works well with small improvements needed
 - Score 10: Perfect — no issues found, all requirements fully met
 
-DISCRIMINATION ENHANCEMENT: To improve evaluator discrimination (Spearman ρ), focus on:
-1. Clear differentiation between scores 4-7 range where most proposals fall
-2. Use calibration anchors consistently for scores ≥ 4
-3. For scores 6-7, emphasize moderate issues with specific examples
-4. For scores 8-9, emphasize minor issues while acknowledging quality
-5. Reserve score 10 for truly perfect implementations
+DISCRIMINATION ENHANCEMENT for Spearman ρ improvement:
+1. CRITICAL RANGE (4-7): Most proposals fall here — focus on CLEAR differentiation
+2. Use calibration anchors CONSISTENTLY for scores ≥ 4
+3. For scores 6-7, emphasize MODERATE issues with SPECIFIC examples
+4. For scores 8-9, emphasize MINOR issues while acknowledging quality
+5. Reserve score 10 for TRULY perfect implementations
 
-CRITICAL RANGE DISCRIMINATION (scores 4-7 — most important for Spearman ρ):
-- Score 4 (Correct but generic): Proposal identifies correct area but lacks specific implementation details
-- Score 5 (Correct and specific but incomplete): Proposal names concrete files/functions but has major gaps
-- Score 6 (Correct + specific but missing edge cases): Proposal has specific implementation but lacks important edge cases
-- Score 7 (Correct + specific + mostly complete): Proposal is mostly complete with only minor edge cases missing
+CRITICAL RANGE DISCRIMINATION (scores 4-7 — Spearman ρ optimization):
+- Score 4 (Correct but generic): Proposal identifies correct area but lacks ANY specific implementation details
+- Score 5 (Correct and specific but incomplete): Proposal names concrete files/functions but has MAJOR gaps
+- Score 6 (Correct + specific but missing edge cases): Proposal has specific implementation but lacks IMPORTANT edge cases
+- Score 7 (Correct + specific + mostly complete): Proposal is MOSTLY complete with only MINOR edge cases missing
 
-FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range:
-- Score 4.5: Generic approach with some specific elements, but not enough for full 5
-- Score 5.5: Specific but incomplete with some edge cases addressed, but not enough for 6
-- Score 6.5: Mostly complete with some testability elements, but not enough for 7
-- Use fractional scores when proposal falls between integer score criteria
-- Always justify fractional scores with specific reasons why not higher/lower integer
+FRACTIONAL SCORE DISCRIMINATION in critical 4-7 range (Spearman ρ optimization):
+- Score 4.5: Generic approach with SOME specific elements, but not enough for full 5. MUST cite specific evidence.
+- Score 5.5: Specific but incomplete with SOME edge cases addressed, but not enough for 6. MUST list missing requirements.
+- Score 6.5: Mostly complete with SOME testability elements, but not enough for 7. MUST specify the issues.
+- Use fractional scores ONLY when proposal clearly falls between integer score criteria
+- ALWAYS justify fractional scores with SPECIFIC reasons why not higher/lower integer
 
-DISCRIMINATION CHECKLIST for scores 4-7:
-1. Score 4 vs 5: Does proposal name specific files/functions? If yes → ≥5, if no → 4
-2. Score 5 vs 6: Does proposal address main requirement completely? If yes → ≥6, if no → 5  
-3. Score 6 vs 7: Does proposal handle edge cases? If yes → ≥7, if no → 6
-4. Score 7 vs 8: Is proposal testable and ready for code review? If yes → ≥8, if no → 7
+DISCRIMINATION CHECKLIST for Spearman ρ improvement (scores 4-7):
+1. Score 4 vs 5: Does proposal name SPECIFIC files/functions? If yes → ≥5, if no → 4
+2. Score 5 vs 6: Does proposal address MAIN requirement COMPLETELY? If yes → ≥6, if no → 5  
+3. Score 6 vs 7: Does proposal handle EDGE CASES? If yes → ≥7, if no → 6
+4. Score 7 vs 8: Is proposal TESTABLE and ready for code review? If yes → ≥8, if no → 7
 
-FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS:
-- 4.5: Must explain which specific elements push it above 4, and what's missing for 5
-- 5.5: Must explain which edge cases are addressed (pushing toward 6) and what major gaps remain (keeping at 5)
-- 6.5: Must explain which testability elements are present (pushing toward 7) and what edge cases are missing (keeping at 6)
+FRACTIONAL SCORE JUSTIFICATION REQUIREMENTS for Spearman ρ:
+- 4.5: MUST explain which specific elements push it above 4, AND what's missing for 5
+- 5.5: MUST explain which edge cases are addressed (pushing toward 6) AND what major gaps remain (keeping at 5)
+- 6.5: MUST explain which testability elements are present (pushing toward 7) AND what edge cases are missing (keeping at 6)
+
+DISCRIMINATION VERIFICATION for Spearman ρ:
+- For score 4.0: Verify this isn't actually 5.0 - does proposal name ANY specific files/functions?
+- For score 5.0: Verify clear distinction from 4.0 (generic) and 6.0 (complete) - cite specific elements
+- For score 6.0: Verify clear distinction from 5.0 (incomplete) and 7.0 (mostly complete) - show edge case handling
+- For score 7.0: Verify this isn't actually 6.0 or 8.0 - is proposal mostly complete with only minor issues?
+- For fractional scores: ALWAYS explain why it's not the integer above or below
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \

@@ -29,12 +29,10 @@ class WriteFileTool(Tool):
     ) -> ToolResult:
         # Use atomic validation for the file path to prevent TOCTOU attacks
         # For write operations, we don't require the file to exist
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False)
+        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True)
         if not is_valid_path:
             return path_validated  # This is a ToolResult error
         resolved = path_validated
-        if scope_err := self._check_phase_scope(config, resolved):
-            return scope_err
 
         # Write back using the async atomic helper
         write_error = await self._atomic_write_text(resolved, content)
