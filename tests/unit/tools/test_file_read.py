@@ -973,11 +973,11 @@ def test_readfile_atomic_validation_and_read_combined():
         assert not result.is_error, f"Expected success but got error: {result.error}"
         assert "original content" in result.output
         
-        # Now test TOCTOU protection by mocking _validate_atomic_path to simulate
+        # Now test TOCTOU protection by mocking _validate_and_read_atomic to simulate
         # a race condition where symlink target changes after validation
-        with patch.object(tool, '_validate_atomic_path', new_callable=AsyncMock) as mock_validate:
-            # First call returns success with the validated path
-            mock_validate.return_value = (True, str(legit_file))
+        with patch.object(tool, '_validate_and_read_atomic', new_callable=AsyncMock) as mock_validate_read:
+            # First call returns success with the content and resolved path
+            mock_validate_read.return_value = ("original content", str(legit_file))
             
             # Create a malicious file that would be the new symlink target
             malicious_file = workspace / "malicious.txt"
@@ -993,7 +993,7 @@ def test_readfile_atomic_validation_and_read_combined():
             # The tool should read from the originally validated file (legit_file)
             # not the new symlink target (malicious_file)
             assert not result.is_error
-            # Since we mocked _validate_atomic_path to return legit_file directly,
+            # Since we mocked _validate_and_read_atomic to return legit_file content,
             # the tool should read from legit_file, not malicious_file
             assert "original content" in result.output
             assert "malicious content" not in result.output
