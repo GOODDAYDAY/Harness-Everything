@@ -1101,6 +1101,38 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             if not has_concrete_reference:
                 issues.append(f"{feedback_section} should contain at least one concrete file/function reference (e.g., 'file.py: function_name' or 'file::function')")
     
+    # Enhanced validation: Check for concrete references in critique/improvement content
+    # Look for critique or improvement_suggestions patterns in the text
+    critique_patterns = [
+        r'critique[:\s]+(.+?)(?=\n\n|\n[A-Z]|$)',
+        r'improvement[_ ]suggestions[:\s]+(.+?)(?=\n\n|\n[A-Z]|$)',
+        r'key findings[:\s]+(.+?)(?=\n\n|\n[A-Z]|$)',
+        r'analysis[:\s]+(.+?)(?=\n\n|\n[A-Z]|$)'
+    ]
+    
+    has_concrete_critique_reference = False
+    critique_sections_found = []
+    
+    for pattern in critique_patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        for match in matches:
+            if isinstance(match, tuple):
+                match_text = match[0]
+            else:
+                match_text = match
+            
+            critique_sections_found.append(match_text.strip())
+            
+            # Check for concrete file/function references in critique text
+            if re.search(r'\b\w+\.py\s*[: ]+\s*\w+\b', match_text) or '::' in match_text:
+                has_concrete_critique_reference = True
+                break
+    
+    # If critique sections were found but no concrete references, add a warning
+    if critique_sections_found and not has_concrete_critique_reference:
+        # Only add as warning, not error, to avoid breaking existing validations
+        issues.append("WARNING: Critique/analysis sections should contain concrete file/function references for better traceability")
+    
     # Check WHAT WOULD MAKE THIS 10/10 section if present
     if "WHAT WOULD MAKE THIS 10/10:" in text:
         ten_text = text.split("WHAT WOULD MAKE THIS 10/10:")[1].split("\n")[0].strip()
