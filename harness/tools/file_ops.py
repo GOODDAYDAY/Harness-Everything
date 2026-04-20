@@ -69,7 +69,7 @@ class MoveFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source, check_scope=True)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source, require_exists=True, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
@@ -121,7 +121,7 @@ class CopyFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source, check_scope=True)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, source, require_exists=True, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
