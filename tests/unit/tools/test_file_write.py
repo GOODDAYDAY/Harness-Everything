@@ -184,5 +184,26 @@ def test_writefile_atomic_parent_symlink_protection():
         assert "symlink" in result.error.lower() or "not allowed" in result.error.lower()
 
 
+def test_writefile_atomic_read_text():
+    """Test that WriteFileTool's _atomic_read_text method works correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+
+        file_path = workspace / "test.txt"
+        content = "test content\nwith multiple lines"
+        file_path.write_text(content)
+
+        tool = WriteFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+
+        # Test: _atomic_read_text should return the file content
+        text, error = asyncio.run(tool._atomic_read_text(config, str(file_path)))
+        assert error is None
+        assert text == content
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

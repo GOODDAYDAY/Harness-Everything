@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-16: Added _atomic_read_text method to WriteFileTool
+- Added missing `_atomic_read_text` method to `WriteFileTool` class for consistency with other file operation tools
+- Method provides atomic file reading with TOCTOU protection by calling parent class implementation
+- Added test `test_writefile_atomic_read_text` to verify the method works correctly
+
 ## 2026-04-16: O_NOFOLLOW preservation in ReadFileTool
 - Fixed critical TOCTOU vulnerability in `ReadFileTool.execute()` by using binary mode `os.fdopen(fd, 'rb')` to preserve O_NOFOLLOW symlink protection
 - Maintains same Unicode error handling with `decode('utf-8', errors='replace')` for backward compatibility

@@ -59,3 +59,11 @@ class WriteFileTool(Tool):
             return write_error
         
         return ToolResult(output=f"Wrote {len(content)} bytes to {resolved}")
+
+    async def _atomic_read_text(self, config, path):
+        """Read file content atomically with TOCTOU protection.
+        
+        This is a wrapper around the base class implementation for consistency
+        with other file operation tools.
+        """
+        return await super()._atomic_read_text(config, path)
