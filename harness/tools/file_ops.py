@@ -30,7 +30,7 @@ class DeleteFileTool(Tool):
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
         # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, path, check_scope=True)
+        is_valid_src, src_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         resolved = src_validated
@@ -138,6 +138,19 @@ class CopyFileTool(Tool):
         # Proceed with the copy using async thread
         try:
             await asyncio.to_thread(shutil.copy2, src, dst)
+        except OSError as exc:
+            # Handle specific OS errors with user-friendly messages
+            if exc.errno == errno.EXDEV:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': cross-device copy not supported. Use separate copy operations.",
+                    is_error=True
+                )
+            if exc.errno == errno.ENOSPC:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': disk full (ENOSPC).",
+                    is_error=True
+                )
+            return ToolResult(error=f"Copy failed: {exc}", is_error=True)
         except Exception as exc:
             return ToolResult(error=f"Copy failed: {exc}", is_error=True)
         
