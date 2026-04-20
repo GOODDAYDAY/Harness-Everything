@@ -188,13 +188,17 @@ def format_trajectory(
     injecting into prompts or memory entries.
 
     Schema: {"trajectory": [ρ, ρ, ρ, ...], "current": ρ, "delta": Δ,
-             "target": 0.85, "regressions_in_last_5": int}
+             "target": 0.85, "regressions_in_last_5": int,
+             "valid_points": int, "corrupt_lines": int,
+             "hash_verification_failed": bool}
     """
     path = Path(latest_results_path)
     if not path.exists():
         return {"trajectory": [], "current": None, "delta": None, "target": 0.85,
-                "regressions_in_last_5": 0}
+                "regressions_in_last_5": 0, "valid_points": 0, "corrupt_lines": 0,
+                "hash_verification_failed": False}
     rows: list[dict] = []
+    corrupt_lines = 0
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -202,10 +206,18 @@ def format_trajectory(
                 try:
                     rows.append(json.loads(line))
                 except json.JSONDecodeError:
+                    corrupt_lines += 1
                     continue
     if not rows:
         return {"trajectory": [], "current": None, "delta": None, "target": 0.85,
-                "regressions_in_last_5": 0}
+                "regressions_in_last_5": 0, "valid_points": 0, "corrupt_lines": corrupt_lines,
+                "hash_verification_failed": False}
+    
+    # Check for hash verification failures in the results
+    hash_verification_failed = any(
+        r.get("hash_verification_failed", False) for r in rows[-max_points:]
+    )
+    
     trajectory = [r.get("rho", 0.0) for r in rows[-max_points:]]
     current = trajectory[-1] if trajectory else None
     delta = (
@@ -224,4 +236,7 @@ def format_trajectory(
         "delta": delta,
         "target": 0.85,
         "regressions_in_last_5": regressions,
+        "valid_points": len(rows),
+        "corrupt_lines": corrupt_lines,
+        "hash_verification_failed": hash_verification_failed,
     }
