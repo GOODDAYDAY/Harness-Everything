@@ -48,6 +48,25 @@ def test_evaluator_mode_headers():
     # Check debate mode mentions text proposals
     assert "text proposal" in _MODE_HEADERS["debate"].lower()
     assert "plan / recommendation" in _MODE_HEADERS["debate"].lower()
+
+
+def test_fractional_score_discrimination():
+    """Test that fractional scores in critical range (4-7) are properly handled."""
+    from harness.evaluation.dual_evaluator import validate_score_calibration
+    
+    # Test fractional score validation
+    warnings = validate_score_calibration(4.5, "basic", {"evaluator_output": "Score 4.5: Generic with some specifics"})
+    assert any("fractional score" in w.lower() for w in warnings) or len(warnings) == 0
+    
+    warnings = validate_score_calibration(5.5, "basic", {"evaluator_output": "Score 5.5: Specific but incomplete"})
+    assert any("fractional score" in w.lower() for w in warnings) or len(warnings) == 0
+    
+    warnings = validate_score_calibration(6.5, "basic", {"evaluator_output": "Score 6.5: Mostly complete with gaps"})
+    assert any("fractional score" in w.lower() for w in warnings) or len(warnings) == 0
+    
+    # Test that non-standard fractional increments generate warnings
+    warnings = validate_score_calibration(4.3, "basic", {"evaluator_output": "Score 4.3"})
+    assert any("should use .25, .5, or .75 increments" in w for w in warnings)
     
     # Check implement mode mentions executed code
     assert "executed code change" in _MODE_HEADERS["implement"].lower()

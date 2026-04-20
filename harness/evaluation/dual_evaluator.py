@@ -474,6 +474,24 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
     # Score calibration anchors based on phase mode and context
     if evaluator_type == "basic":
         # Basic evaluator calibration rules with phase-mode adaptation
+        
+        # Enhanced fractional score validation for critical range
+        if 4.0 <= score <= 7.0 and score % 1 != 0:  # Fractional score in critical range
+            # Check if fractional score is properly justified
+            fractional_part = score % 1
+            if fractional_part not in [0.5, 0.25, 0.75]:
+                warnings.append(f"Fractional score {score} in critical range 4-7 should use .25, .5, or .75 increments for better discrimination")
+            
+            # Log fractional score discrimination guidance
+            if 4.0 <= score < 5.0:
+                if fractional_part == 0.5:
+                    warnings.append(f"Score {score}: Should justify why not 5 (missing specific elements) and why not 4 (has some specific elements)")
+            elif 5.0 <= score < 6.0:
+                if fractional_part == 0.5:
+                    warnings.append(f"Score {score}: Should justify why not 6 (major gaps remain) and why not 5 (some edge cases addressed)")
+            elif 6.0 <= score < 7.0:
+                if fractional_part == 0.5:
+                    warnings.append(f"Score {score}: Should justify why not 7 (missing testability elements) and why not 6 (some testability present)")
         if mode == "debate":
             # Debate mode: evaluating text proposals with enhanced discrimination
             # Score calibration anchors for debate mode with strict mode discrimination
@@ -1315,21 +1333,31 @@ def parse_score(
             raw, _SCORE_MIN, _SCORE_MAX, clamped,
         )
     
-    # NEW: Enhanced discrimination logging for critical 4-7 range
+    # ENHANCED: Fractional score discrimination guidance for critical 4-7 range
     if 4.0 <= clamped <= 7.0:
         log.debug(
             "parse_score: critical range score %.2f - ensure proper discrimination between adjacent scores",
             clamped
         )
-        # Log discrimination guidance for critical range
-        if 4.0 <= clamped < 5.0:
-            log.debug("  Score ~4: Should show generic approach without specific implementation")
-        elif 5.0 <= clamped < 6.0:
-            log.debug("  Score ~5: Should show partial success with specific elements")
-        elif 6.0 <= clamped < 7.0:
-            log.debug("  Score ~6: Should show specific implementation with gaps")
+        # Enhanced discrimination guidance with fractional score ranges
+        if 4.0 <= clamped < 4.5:
+            log.debug("  Score ~4.0-4.4: Generic approach without specific implementation")
+        elif 4.5 <= clamped < 5.0:
+            log.debug("  Score ~4.5-4.9: Generic approach with some specific elements, but not enough for full 5")
+        elif 5.0 <= clamped < 5.5:
+            log.debug("  Score ~5.0-5.4: Partial success with specific elements")
+        elif 5.5 <= clamped < 6.0:
+            log.debug("  Score ~5.5-5.9: Specific but incomplete with some edge cases addressed")
+        elif 6.0 <= clamped < 6.5:
+            log.debug("  Score ~6.0-6.4: Specific implementation with gaps")
+        elif 6.5 <= clamped < 7.0:
+            log.debug("  Score ~6.5-6.9: Mostly complete with some testability elements, but not enough for 7")
         elif 7.0 <= clamped < 8.0:
-            log.debug("  Score ~7: Should show mostly complete implementation with minor edge cases missing")
+            log.debug("  Score ~7.0-7.9: Mostly complete implementation with minor edge cases missing")
+        
+        # Log fractional score validation
+        if clamped % 1 != 0:  # Is fractional
+            log.debug("  Fractional score detected: %.2f - ensure justification in evaluator output", clamped)
     
     return clamped
 
