@@ -40,6 +40,13 @@ SCORING GUIDELINES:
 - Score 8-9: Minor issues — works well with small improvements needed
 - Score 10: Perfect — no issues found, all requirements fully met
 
+DISCRIMINATION ENHANCEMENT: To improve evaluator discrimination (Spearman ρ), focus on:
+1. Clear differentiation between scores 4-7 range where most proposals fall
+2. Use calibration anchors consistently for scores ≥ 4
+3. For scores 6-7, emphasize moderate issues with specific examples
+4. For scores 8-9, emphasize minor issues while acknowledging quality
+5. Reserve score 10 for truly perfect implementations
+
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \
 concrete reason, the score is at most 8. \
@@ -150,6 +157,13 @@ SCORING GUIDELINES:
 - Score 6-7: Moderate impact — bounded effects with clear mitigation
 - Score 8-9: Minor ripple — minimal impact on system
 - Score 10: No discernible second-order effects
+
+DISCRIMINATION ENHANCEMENT: To improve evaluator discrimination (Spearman ρ), focus on:
+1. Clear differentiation between scores 4-7 range where most proposals fall
+2. Use calibration anchors consistently for scores ≥ 4
+3. For scores 6-7, emphasize bounded effects with clear mitigation
+4. For scores 8-9, emphasize minimal impact while acknowledging real costs
+5. Reserve score 10 for truly negligible second-order effects
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification. \
 A change that modifies a public API or shared data structure almost never \

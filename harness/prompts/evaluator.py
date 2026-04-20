@@ -32,12 +32,25 @@ CONCRETE SCORING EXAMPLES:
 - Score 9: Proposal includes code, tests, and validation for main scenarios
 - Score 10: Proposal includes code, tests, and validation of edge cases with metrics
 
-SCORING GUIDELINES (0-10 scale):
-- 0-3: Critical failure — task fundamentally incomplete or broken
-- 4-5: Major issues — core functionality missing or incorrect
-- 6-7: Moderate issues — works but with significant problems
-- 8-9: Minor issues — works well with small improvements needed
-- 10: Perfect — no issues found, all requirements fully met
+DISCRIMINATION GUIDELINES (critical for consistent scoring):
+- Scores 1-3: Proposal is fundamentally wrong or broken
+- Score 4: Proposal identifies correct area but lacks any concrete implementation
+- Score 5: Proposal has correct direction but missing key details (what/where/how)
+- Score 6: Proposal is specific (names files/functions) but incomplete
+- Score 7: Proposal is specific and mostly complete but missing edge cases
+- Score 8: Proposal is complete, specific, and testable
+- Score 9: Proposal includes tests/validation for main scenarios
+- Score 10: Proposal includes comprehensive validation with metrics
+
+SCORING GUIDELINES (0-10 scale — enforce strict discrimination):
+- 0-3: Critical failure — proposal is fundamentally wrong, dangerous, or broken
+- 4: Identifies correct area but lacks any concrete implementation details
+- 5: Correct direction but missing key details (what/where/how) for implementation
+- 6: Specific (names files/functions) but implementation is incomplete
+- 7: Specific and mostly complete but missing important edge cases
+- 8: Complete, specific, and testable — would pass basic code review
+- 9: Includes tests/validation for main scenarios — near production quality
+- 10: Comprehensive with edge case validation and metrics — production ready
 
 ANTI-INFLATION RULE: scores of 9 or 10 require explicit justification — \
 state what specifically makes this near-perfect. If you cannot name a \

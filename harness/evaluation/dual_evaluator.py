@@ -619,49 +619,49 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
 
     else:  # diffusion evaluator
         # Diffusion evaluator focuses on risk assessment with enhanced discrimination
-        # Stricter discrimination for diffusion evaluator to improve ρ
-        if score < 2.0 and not has_critical_issues:
+        # Adjusted calibration to improve discrimination (Spearman ρ) - align with basic evaluator while maintaining risk focus
+        if score < 3.0 and not has_critical_issues:
             warnings.append(f"Score {score} seems too low for diffusion evaluator without critical issues - minimal risk changes typically score ≥4")
-        elif score > 9.0:
+        elif score > 9.5:
             warnings.append(f"Score {score} seems too high for diffusion evaluator - risk assessment may be too optimistic, verify mitigation analysis")
 
         # Enhanced discrimination: Check for calibration anchor usage with mode-specific anchors
-        # Stricter requirement for diffusion evaluator to use risk anchors
+        # Aligned calibration anchor requirements with basic evaluator for consistency
+        if score >= 8.0 and not has_calibration_anchors:
+            warnings.append(f"High risk score {score} without calibration anchor references - diffusion scores ≥8 should explicitly reference risk assessment criteria")
+        # Diffusion evaluator should use risk anchors for high scores (aligned with basic evaluator threshold)
         if score >= 7.0 and not has_calibration_anchors:
-            warnings.append(f"High risk score {score} without calibration anchor references - diffusion scores ≥7 should explicitly reference risk assessment criteria")
-        # Diffusion evaluator should always use risk anchors for moderate+ scores
-        if score >= 5.0 and not has_calibration_anchors:
-            warnings.append(f"Score {score} in diffusion evaluator without calibration anchors - moderate+ risk assessments must reference risk criteria")
-        # Low scores should also reference anchors if they exist
+            warnings.append(f"Score {score} in diffusion evaluator without calibration anchors - high risk assessments should reference risk criteria")
+        # Low scores with critical issues should reference anchors
         if score <= 3.0 and not has_calibration_anchors and has_critical_issues:
             warnings.append(f"Low risk score {score} without calibration anchors - critical risk findings should reference risk criteria")
 
         # Enhanced discrimination: Check critique structure quality with mode-specific expectations
-        # Stricter structure requirements for diffusion evaluator
-        if score >= 6.0 and critique_structure_score < 0.7:
+        # Aligned structure requirements with basic evaluator for better discrimination
+        if score >= 7.0 and critique_structure_score < 0.7:
             warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - risk assessments require detailed impact analysis")
-        # Diffusion evaluator needs strong risk analysis structure
-        if score >= 4.0 and critique_structure_score < 0.5:
+        # Diffusion evaluator needs strong risk analysis structure (aligned with basic implement mode)
+        if score >= 6.0 and critique_structure_score < 0.5:
             warnings.append(f"Score {score} for diffusion evaluator has insufficient structure - risk assessments require clear impact analysis")
-        # Very high scores need excellent structure
+        # Very high scores need excellent structure (aligned with basic evaluator)
         if score >= 8.0 and critique_structure_score < 0.8:
             warnings.append(f"Score {score} has insufficient structure for high risk assessment (score={critique_structure_score:.1f}) - detailed risk analysis required")
 
         # Diffusion evaluator should penalize risky changes with enhanced discrimination
-        # Stricter discrimination based on change complexity
-        if score > 7.0 and file_count > 3 and line_count > 100:
+        # Adjusted thresholds to improve discrimination while maintaining risk focus
+        if score > 8.0 and file_count > 3 and line_count > 100:
             warnings.append(f"Score {score} seems high for large, complex change in diffusion evaluation - complex changes typically have higher risk scores (≥8 requires exceptional justification)")
         # Large changes in diffusion evaluation need careful assessment
-        if score > 6.0 and file_count > 2 and line_count > 50:
-            warnings.append(f"Score {score} for moderate change in diffusion evaluation - verify risk assessment accounts for complexity (consider lowering to 5-6 range)")
-        # Small changes should have lower risk scores
-        if score > 8.0 and file_count <= 1 and line_count <= 20:
+        if score > 7.0 and file_count > 2 and line_count > 50:
+            warnings.append(f"Score {score} for moderate change in diffusion evaluation - verify risk assessment accounts for complexity (consider lowering to 6-7 range)")
+        # Small changes should have appropriate risk scores (not necessarily lower)
+        if score > 9.0 and file_count <= 1 and line_count <= 20:
             warnings.append(f"Score {score} seems high for trivial change in diffusion evaluation - trivial changes rarely have significant second-order effects")
 
         # Perfect diffusion scores are extremely rare with enhanced discrimination
         if score == 10.0:
             warnings.append(f"Perfect diffusion score {score} is extremely rare - verify no second-order effects and trivial rollback (requires explicit justification)")
-        # High diffusion scores need justification
+        # High diffusion scores need justification (aligned with basic evaluator threshold)
         if score >= 9.0:
             warnings.append(f"Very high diffusion score {score} - verify comprehensive risk mitigation analysis (should include specific mitigation steps)")
         # Moderate scores should show balanced risk assessment
