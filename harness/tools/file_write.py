@@ -33,6 +33,7 @@ class WriteFileTool(Tool):
     ) -> ToolResult:
         # Use atomic validation for target file to prevent TOCTOU attacks
         # require_exists=False because the file may not exist yet
+        # Atomic validation with resolve_symlinks=True prevents TOCTOU symlink attacks
         is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True, resolve_symlinks=True)
         if not is_valid_path:
             return path_validated  # This is the ToolResult error

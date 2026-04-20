@@ -3,12 +3,13 @@
 import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 
 import pytest
 
 from harness.core.config import HarnessConfig
 from harness.tools.file_edit import EditFileTool
+from harness.tools.base import ToolResult
 
 
 def test_editfile_atomic_symlink_protection():
@@ -204,6 +205,41 @@ def test_editfile_respects_allowed_edit_globs():
             new_str="Modified text file"
         ))
         assert not result.is_error, f"Empty allowed_edit_globs should allow all files, got error: {result.error}"
+
+
+def test_editfile_toctou_symlink_attack_detection():
+    """Test that EditFileTool detects TOCTOU symlink attacks with mocked validation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file
+        file_path = workspace / "test.txt"
+        file_path.write_text("hello world\nthis is a test\ngoodbye again")
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Mock the atomic validation to simulate TOCTOU attack detection
+        tool._validate_atomic_path = AsyncMock(return_value=(
+            False, 
+            ToolResult(error="Path validation failed: symlink attack detected")
+        ))
+        
+        # Attempt to edit the file
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="hello",
+            new_str="greetings"
+        ))
+        
+        # Should fail with the mocked validation error
+        assert result.is_error
+        assert "symlink attack" in result.error.lower()
+        assert "path validation failed" in result.error.lower()
 
 
 if __name__ == "__main__":

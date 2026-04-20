@@ -258,6 +258,9 @@ def test_writefile_parent_dir_symlink_resolution():
         assert any(keyword in error_lower for keyword in [
             "outside", "not allowed", "scope", "symlink", "path", "validation"
         ]), f"Expected path validation error, got: {result.error}"
+        # The actual error message says "outside allowed directories", not "symlink"
+        # This is correct behavior - validation resolves symlinks and reports the actual issue
+        assert "outside" in error_lower, f"Error should mention 'outside', got: {result.error}"
         
         # Verify the outside file was not modified
         assert secret_file.read_text() == "classified information", \
