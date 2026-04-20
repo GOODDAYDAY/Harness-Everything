@@ -757,6 +757,43 @@ def validate_score_calibration(score: float, evaluator_type: str = "basic", cont
         elif mode == "implement" and score >= 5.0:
             warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
     
+    # Validate dimension score consistency with overall score (NEW: improves discrimination)
+    if context and "analysis" in context:
+        analysis = context.get("analysis", {})
+        if analysis and isinstance(analysis, dict):
+            # Calculate average dimension score
+            dimension_scores = [v for v in analysis.values() if isinstance(v, (int, float))]
+            if dimension_scores:
+                avg_dimension_score = sum(dimension_scores) / len(dimension_scores)
+                # Check for significant inconsistencies
+                score_diff = abs(score - avg_dimension_score)
+                
+                # Critical range (4-7) requires tighter consistency
+                if 4.0 <= score <= 7.0:
+                    if score_diff > 1.5:
+                        warnings.append(f"Score inconsistency: overall score {score} differs significantly from average dimension score {avg_dimension_score:.1f} (Δ={score_diff:.1f}) - verify calibration")
+                    elif score_diff > 1.0:
+                        warnings.append(f"Score inconsistency: overall score {score} differs from average dimension score {avg_dimension_score:.1f} (Δ={score_diff:.1f}) - check dimension weighting")
+                else:
+                    # Outside critical range, allow slightly more variance
+                    if score_diff > 2.0:
+                        warnings.append(f"Score inconsistency: overall score {score} differs significantly from average dimension score {avg_dimension_score:.1f} (Δ={score_diff:.1f}) - verify calibration")
+                
+                # Check for dimension scores that contradict overall score direction
+                # If overall score is high (>7) but any dimension score is low (<4), flag it
+                if score > 7.0:
+                    low_dimensions = [dim for dim, dim_score in analysis.items() 
+                                    if isinstance(dim_score, (int, float)) and dim_score < 4.0]
+                    if low_dimensions:
+                        warnings.append(f"High overall score {score} but low dimension scores for {', '.join(low_dimensions)} - verify consistency")
+                
+                # If overall score is low (<4) but any dimension score is high (>7), flag it
+                if score < 4.0:
+                    high_dimensions = [dim for dim, dim_score in analysis.items() 
+                                     if isinstance(dim_score, (int, float)) and dim_score > 7.0]
+                    if high_dimensions:
+                        warnings.append(f"Low overall score {score} but high dimension scores for {', '.join(high_dimensions)} - verify consistency")
+    
     # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
     # Simplified, consistent criteria that guide discrimination effectively
     if 4.0 <= score <= 7.0:
