@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
 
 
 class DeleteFileTool(Tool):
@@ -81,6 +81,7 @@ class MoveFileTool(Tool):
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
 
+        # Create parent directories after validation to prevent TOCTOU
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         try:
             os.rename(src, dst)  # Atomic operation on validated path strings
