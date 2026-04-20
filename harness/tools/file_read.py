@@ -77,18 +77,27 @@ class ReadFileTool(Tool):
 
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
-        numbered = "".join(
-            f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
-        )
         total = len(lines)
-        # Extract filename from resolved path
-        filename = os.path.basename(resolved)
-        header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
         
-        # Create structured metadata with line numbers and content
-        lines_metadata = [
-            (start + i + 1, line) for i, line in enumerate(selected)
-        ]
+        # Handle empty selection (when start >= total)
+        if not selected:
+            # Extract filename from resolved path
+            filename = os.path.basename(resolved)
+            header = f"[{filename}] lines 0-0 of {total}\n"
+            numbered = ""
+            lines_metadata = []
+        else:
+            numbered = "".join(
+                f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
+            )
+            # Extract filename from resolved path
+            filename = os.path.basename(resolved)
+            header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
+            
+            # Create structured metadata with line numbers and content
+            lines_metadata = [
+                (start + i + 1, line) for i, line in enumerate(selected)
+            ]
         
         return ToolResult(
             output=header + numbered,
