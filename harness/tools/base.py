@@ -287,6 +287,36 @@ class Tool(ABC):
         # Use the consolidated atomic path validation with directory flag
         return await self._validate_atomic_path(config, path_str, require_exists=True, directory=True)
 
+    async def _validate_and_prepare_parent_directory(
+        self, config: HarnessConfig, parent_path: str, require_exists: bool = True, check_scope: bool = False
+    ) -> tuple[bool, str | ToolResult]:
+        """
+        Atomically validate and optionally create a parent directory.
+        
+        Returns (is_valid, validated_path_str | ToolResult_error).
+        If require_exists=False and directory doesn't exist, it will be created.
+        """
+        # Skip if parent is current directory
+        if parent_path == ".":
+            return True, parent_path
+            
+        # Validate parent directory exists and is not a symlink
+        is_valid_parent, parent_validated = await self._validate_atomic_path(
+            config, parent_path, require_exists=require_exists, directory=True, check_scope=check_scope
+        )
+        if not is_valid_parent:
+            return is_valid_parent, parent_validated
+            
+        # Create parent directory if it doesn't exist and require_exists=False
+        if not require_exists:
+            try:
+                import os
+                os.makedirs(parent_validated, exist_ok=True)
+            except OSError as exc:
+                return False, ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+                
+        return True, parent_validated
+
     async def _validate_path_atomic(
         self, config: HarnessConfig, path: str
     ) -> tuple[bool, str | ToolResult]:

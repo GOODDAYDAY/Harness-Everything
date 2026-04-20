@@ -86,18 +86,11 @@ class MoveFileTool(Tool):
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
-            # Validate parent directory exists and is not a symlink
-            is_valid_parent, parent_validated = await self._validate_atomic_path(
-                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
+                config, str(parent_dir), require_exists=False, check_scope=True
             )
             if not is_valid_parent:
-                return parent_validated  # This is a ToolResult error
-            
-            # Create parent directory atomically if it doesn't exist
-            try:
-                os.makedirs(parent_validated, exist_ok=True)
-            except OSError as exc:
-                return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+                return parent_result  # This is a ToolResult error
 
         try:
             os.rename(src, dst)  # Atomic operation on validated path strings
@@ -165,18 +158,11 @@ class CopyFileTool(Tool):
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
-            # Validate parent directory exists and is not a symlink
-            is_valid_parent, parent_validated = await self._validate_atomic_path(
-                config, str(parent_dir), require_exists=False, directory=True, check_scope=True
+            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
+                config, str(parent_dir), require_exists=False, check_scope=True
             )
             if not is_valid_parent:
-                return parent_validated  # This is a ToolResult error
-            
-            # Create parent directory atomically if it doesn't exist
-            try:
-                os.makedirs(parent_validated, exist_ok=True)
-            except OSError as exc:
-                return ToolResult(error=f"Failed to create parent directory: {exc}", is_error=True)
+                return parent_result  # This is a ToolResult error
         
         # Proceed with the copy using async thread
         try:
