@@ -122,13 +122,6 @@ class EditFileTool(Tool):
             text, old_str, new_str, replace_all
         )
         
-        # Explicit validation for empty-string-to-empty-string replacement
-        if old_str == "" and new_str == "" and not replace_all:
-            return ToolResult(
-                error="Replacing empty string with empty string is a no-op and requires replace_all=True to confirm intent",
-                is_error=True
-            )
-        
         # Special handling for empty string replacement validation
         if old_str == "" and text != "" and not replace_all:
             return ToolResult(
@@ -137,9 +130,9 @@ class EditFileTool(Tool):
             )
 
         if count == 0:
-            # Special case: empty-to-empty replacement with replace_all=True is a no-op
-            if old_str == "" and new_str == "" and replace_all:
-                # This is a valid no-op operation
+            # Special case: empty-to-empty replacement is always a no-op
+            if old_str == "" and new_str == "":
+                # This is a valid no-op operation regardless of replace_all
                 pass
             else:
                 return ToolResult(error="old_str not found in file", is_error=True)

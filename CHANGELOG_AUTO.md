@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Fixed EditFileTool empty string replacement validation
+- Fixed validation logic in `EditFileTool.execute()` to allow empty-to-empty replacement as a no-op
+- Removed overly restrictive validation that rejected empty-to-empty replacement when `replace_all=False`
+- Updated `count == 0` handling to recognize empty-to-empty replacement as a valid no-op regardless of `replace_all`
+- Added test `test_editfile_empty_to_empty_replace_all` to verify the fix
+- Updated existing test `test_editfile_empty_string_to_empty_string_requires_replace_all` to expect correct behavior
+
 ## 2026-04-23: Fixed CopyFileTool cross-device fallback bug
 - Fixed unreachable code bug in `CopyFileTool.execute()` EXDEV error handler
 - Changed fallback from duplicate `shutil.copy2()` call to proper `shutil.copyfile()` + `shutil.copystat()` sequence

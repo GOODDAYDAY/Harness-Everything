@@ -376,7 +376,7 @@ def test_editfile_empty_string_to_empty_string_requires_replace_all():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test: Empty string to empty string replacement without replace_all should fail
+        # Test: Empty string to empty string replacement without replace_all should fail for non-empty files
         result = asyncio.run(tool.execute(
             config,
             path=str(file_path),
@@ -384,9 +384,8 @@ def test_editfile_empty_string_to_empty_string_requires_replace_all():
             new_str="",
             replace_all=False
         ))
-        assert result.is_error, "Empty-to-empty string replacement without replace_all should fail"
-        assert "no-op" in result.error.lower()
-        assert "replace_all=true" in result.error.lower()
+        assert result.is_error, "Empty-to-empty string replacement without replace_all should fail for non-empty files"
+        assert "requires replace_all=true" in result.error.lower()
         
         # Test: Empty string to empty string replacement with replace_all=True should work
         result = asyncio.run(tool.execute(
@@ -499,6 +498,36 @@ def test_editfile_dry_run():
         assert not result4.is_error
         assert "Replaced 2 occurrence(s)" in result4.output
         assert file_path.read_text() == "hello universe\nthis is a test\ngoodbye universe\nanother line"
+
+
+def test_editfile_empty_to_empty_replace_all():
+    """Test that EditFileTool correctly handles empty-to-empty replacement with replace_all=True."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file with content
+        file_path = workspace / "test.txt"
+        file_path.write_text("hello world\nanother line")
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test empty-to-empty replacement with replace_all=True should succeed
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="",
+            replace_all=True
+        ))
+        assert not result.is_error, f"Empty-to-empty replacement with replace_all=True should succeed: {result.error}"
+        assert "Replaced 0 occurrence(s)" in result.output
+        
+        # Verify file content unchanged
+        assert file_path.read_text() == "hello world\nanother line"
 
 
 if __name__ == "__main__":
