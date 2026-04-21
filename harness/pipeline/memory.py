@@ -236,7 +236,17 @@ class MemoryStore:
             top_defect = _extract_top_defect(best_inner.dual_score.basic.critique)
             key_risk = _extract_key_risk(best_inner.dual_score.diffusion.critique)
 
-        insight = phase_result.synthesis[:400].replace("\n", " ").strip()
+        # Insight-length policy: design/orchestrate-class phases produce richer
+        # plan documents where truncating at 400 chars often loses the
+        # load-bearing decisions. Let those phases keep up to 2000 chars;
+        # everything else (implement, review, security, etc.) stays at 800.
+        # The prompt-time renderer in format_context() still caps per-entry
+        # display, so this only affects what's persisted to disk.
+        if any(kw in label for kw in ("design", "orchestrate", "plan")):
+            insight_limit = 2000
+        else:
+            insight_limit = 800
+        insight = phase_result.synthesis[:insight_limit].replace("\n", " ").strip()
 
         entry = MemoryEntry(
             ts=datetime.now().isoformat(timespec="seconds"),
@@ -321,7 +331,15 @@ class MemoryStore:
                 f"[score={e.score:.1f}, \u0394={delta_str}]"
             )
             if e.insight:
-                lines.append(f"**Synthesis excerpt:** {e.insight}")
+                # Render-time cap: design/orchestrate phases may persist up
+                # to 2000 chars, but the prompt budget can't afford six such
+                # entries verbatim. Display-clip to 600 chars with a marker
+                # so the LLM knows more exists on disk if it needs the full
+                # record (though in practice that's never been needed).
+                shown = e.insight
+                if len(shown) > 600:
+                    shown = shown[:600] + "… [trimmed for prompt; full text on disk]"
+                lines.append(f"**Synthesis excerpt:** {shown}")
             if e.evaluator_top_defect and e.evaluator_top_defect.lower() != "none":
                 lines.append(f"**Top defect to fix:** {e.evaluator_top_defect}")
             if e.evaluator_key_risk and e.evaluator_key_risk.lower() != "none":

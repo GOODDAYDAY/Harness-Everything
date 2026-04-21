@@ -68,8 +68,12 @@ _TURN_STALL_WARN_SECS: float = 90.0
 # Heuristic: 4 chars ≈ 1 token.  The threshold is set at 600 K chars (~150 K
 # tokens) — comfortably inside the 200 K-token context window while leaving
 # headroom for the system prompt, the final answer, and the tools schema.
-_CONV_PRUNE_THRESHOLD_CHARS: int = 150_000   # trigger pruning above this total
-_CONV_PRUNE_TARGET_CHARS: int = 100_000      # prune down to this target
+_CONV_PRUNE_THRESHOLD_CHARS: int = 300_000   # trigger pruning above this total
+_CONV_PRUNE_TARGET_CHARS: int = 200_000      # prune down to this target
+# Raised from 150K/100K on 2026-04-21 to give long Agent-mode cycles
+# (hundreds of tool turns) more working memory before older tool results
+# get truncated. 300K chars ≈ 75K tokens, well inside a 200K-token context
+# window once you subtract system prompt + tools schema + safety margin.
 # Number of *trailing* message pairs (assistant + user) kept verbatim.
 # Keeping the most recent turns intact ensures the model still sees the fresh
 # tool output it just received; only older outputs are compressed.
