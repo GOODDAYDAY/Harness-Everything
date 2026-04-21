@@ -37,7 +37,7 @@ async def test_readfile_atomic_open_prevents_symlink_swap():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test 1: Reading through a symlink should fail with explicit symlink rejection
+        # Test 1: Reading through a symlink should fail with atomic validation error
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
         assert "symlinks are not allowed" in result.error.lower()
@@ -49,7 +49,7 @@ async def test_readfile_atomic_open_prevents_symlink_swap():
         symlink_path.unlink()
         symlink_path.symlink_to(secret_file)
         
-        # Attempt read - should fail because symlinks are rejected
+        # Attempt read - should fail because atomic validation rejects symlinks
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
         assert "symlinks are not allowed" in result.error.lower()
@@ -73,7 +73,7 @@ async def test_readfile_atomic_open_handles_broken_symlink():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Attempt read - should fail because symlinks are rejected for security
+        # Attempt read - should fail because atomic validation rejects symlinks for security
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
         # Should reject symlink with explicit error message
