@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool offset validation with clearer error messages for empty files
+- Fixed offset validation bug in `ReadFileTool.execute()` by separating empty vs non-empty file validation
+- Improved error messages: "exceeds file length (file is empty)" for empty files vs "(N lines)" for non-empty files
+- Updated test assertions to match new error message format
+
 ## 2026-04-23: Simplified ReadFileTool offset validation and standardized error messages
 - Simplified offset validation logic in `ReadFileTool.execute()` using `max(1, total)` condition
 - Standardized error messages for both empty and non-empty files to use consistent "(N lines)" format
