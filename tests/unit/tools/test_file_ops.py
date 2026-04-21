@@ -524,7 +524,13 @@ def test_symlink_resolution_consistent_across_tools():
     assert "resolve_symlinks=False" in edit_source, "EditFileTool should use resolve_symlinks=False to reject symlinks"
     
     # DeleteFileTool in file_ops.py
-    assert "await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "DeleteFileTool should use resolve_symlinks=False to reject symlinks"
+    # Extract DeleteFileTool section
+    delete_start = ops_source.find("class DeleteFileTool(Tool):")
+    delete_end = ops_source.find("\n\n@enforce_atomic_validation\nclass MoveFileTool", delete_start)
+    if delete_end == -1:
+        delete_end = len(ops_source)
+    delete_section = ops_source[delete_start:delete_end]
+    assert "resolve_symlinks=False" in delete_section, "DeleteFileTool should use resolve_symlinks=False to reject symlinks"
     
     # MoveFileTool source validation
     assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "MoveFileTool source validation should use resolve_symlinks=False to reject symlinks"

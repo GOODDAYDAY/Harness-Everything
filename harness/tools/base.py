@@ -691,6 +691,52 @@ class Tool(ABC):
         
         return ToolResult(output=f"Wrote {len(content)} bytes to {resolved}")
 
+    async def _atomic_validate_and_delete(
+        self,
+        config: HarnessConfig,
+        path: str,
+        check_scope: bool = True,
+        resolve_symlinks: bool = True
+    ) -> ToolResult:
+        """Consolidated atomic validation and delete operation.
+        
+        This method combines path validation and file deletion into a single atomic
+        operation to prevent TOCTOU vulnerabilities.
+        
+        Args:
+            config: HarnessConfig instance
+            path: Path to the file to delete
+            check_scope: Whether to check if path is within allowed workspace
+            resolve_symlinks: Whether to resolve symlinks
+            
+        Returns:
+            ToolResult success or error
+        """
+        # Use atomic validation for source file
+        is_valid_path, path_validated = await self._validate_atomic_path(
+            config, path, 
+            require_exists=True,  # File must exist to delete it
+            check_scope=check_scope, 
+            resolve_symlinks=resolve_symlinks
+        )
+        if not is_valid_path:
+            return path_validated  # This is the ToolResult error
+        resolved = path_validated
+
+        # Atomic deletion without a separate existence check
+        try:
+            await asyncio.to_thread(os.unlink, resolved)  # Atomic operation on the validated path string
+        except FileNotFoundError:
+            # File was deleted by another process after validation
+            return ToolResult(
+                error=f"File disappeared after validation: {resolved}",
+                is_error=True
+            )
+        except OSError as exc:
+            return ToolResult(error=f"Delete failed: {exc}", is_error=True)
+        
+        return ToolResult(output=f"Deleted {resolved}")
+
     async def _atomic_validate_parent(
         self,
         config: HarnessConfig,

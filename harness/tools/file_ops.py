@@ -30,24 +30,10 @@ class DeleteFileTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=False)
-        if not is_valid_src:
-            return src_validated  # This is the ToolResult error
-        resolved = src_validated
-
-        # Atomic deletion without a separate existence check
-        try:
-            os.unlink(resolved)  # Atomic operation on the validated path string
-        except FileNotFoundError:
-            # File was deleted by another process after validation
-            return ToolResult(
-                error=f"File disappeared after validation: {resolved}",
-                is_error=True
-            )
-        except OSError as exc:
-            return ToolResult(error=f"Delete failed: {exc}", is_error=True)
-        return ToolResult(output=f"Deleted {resolved}")
+        # Use consolidated atomic validation and delete operation
+        return await self._atomic_validate_and_delete(
+            config, path, check_scope=True, resolve_symlinks=False
+        )
 
 
 @enforce_atomic_validation
