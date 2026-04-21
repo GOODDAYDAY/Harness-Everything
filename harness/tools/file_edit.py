@@ -56,7 +56,20 @@ class EditFileTool(Tool):
             return read_result  # Error from validation or read
         text, resolved = read_result
         
-        count = text.count(old_str)
+        # Special handling for empty string replacement
+        if old_str == "":
+            # Empty string replacement is a special case
+            # For empty files, we allow replacement (treat as count = 1)
+            # For non-empty files, we require replace_all=True due to ambiguity
+            if text == "":
+                # Empty file: allow replacement
+                count = 1
+            else:
+                # Non-empty file: count is ambiguous with str.count("")
+                # It returns len(text) + 1, which doesn't match user intuition
+                count = len(text) + 1
+        else:
+            count = text.count(old_str)
 
         if count == 0:
             return ToolResult(error="old_str not found in file", is_error=True)

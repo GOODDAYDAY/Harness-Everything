@@ -242,5 +242,54 @@ def test_editfile_toctou_symlink_attack_detection():
         assert "path validation failed" in result.error.lower()
 
 
+def test_editfile_empty_string_in_empty_file():
+    """Test that EditFileTool handles empty string replacement in empty files correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create an empty file
+        file_path = workspace / "empty.txt"
+        file_path.write_text("")  # Explicitly empty
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test 1: Replace empty string with content in empty file (should work)
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="new content"
+        ))
+        assert not result.is_error, f"Should allow empty string replacement in empty file: {result.error}"
+        assert file_path.read_text() == "new content"
+        
+        # Test 2: Replace empty string with content in non-empty file without replace_all (should fail)
+        file_path.write_text("existing content")
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="prefix "
+        ))
+        assert result.is_error, "Should require replace_all=True for empty string in non-empty file"
+        assert "appears" in result.error.lower() and "times" in result.error.lower()
+        
+        # Test 3: Replace empty string with content in non-empty file with replace_all=True (should work)
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="prefix ",
+            replace_all=True
+        ))
+        assert not result.is_error, f"Should allow empty string replacement with replace_all=True: {result.error}"
+        # With replace_all=True, empty string gets replaced before each character
+        assert file_path.read_text().startswith("prefix ")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

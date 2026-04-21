@@ -100,3 +100,9 @@
 - Improved code comments in `CopyFileTool.execute()` to better explain why `asyncio.to_thread` can fail with EXDEV for cross-device operations
 - Clarified that thread pool resource constraints or file descriptor handling issues can cause cross-device copy failures in threaded context
 - All existing tests continue to pass with the improved documentation
+
+## 2026-04-17: Fixed empty string replacement in EditFileTool
+- Added special handling for empty string replacement in `EditFileTool.execute()` to properly handle edge cases
+- Empty string replacement in empty files now works correctly (treats empty file as having one empty string)
+- Empty string replacement in non-empty files requires `replace_all=True` due to ambiguity of multiple positions
+- Added comprehensive test `test_editfile_empty_string_in_empty_file` to verify all edge cases
