@@ -118,15 +118,13 @@ class EditFileTool(Tool):
         )
         
         # Special handling for empty string replacement validation
-        if old_str == "" and text != "" and not replace_all:
+        if old_str == "" and not replace_all and new_str != "":
             return ToolResult(
-                error="Empty string replacement in non-empty files requires replace_all=True due to ambiguity (empty string matches everywhere)",
+                error="Empty string replacement requires replace_all=True when new_str is non-empty due to ambiguity (empty string matches everywhere)",
                 is_error=True
             )
 
-        # Special handling for empty-to-non-empty replacement in empty files
-        if old_str == "" and text == "" and new_str != "":
-            count = 1
+
 
         if count == 0:
             # Special case: empty-to-empty replacement is always a no-op

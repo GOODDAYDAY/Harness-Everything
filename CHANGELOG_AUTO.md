@@ -12,6 +12,13 @@
 - Ensures consistent behavior across edge cases while preserving existing API
 - All existing tests continue to pass, including empty string replacement tests
 
+## 2026-04-23: Fixed empty string replacement validation in EditFileTool
+- Updated validation logic to require `replace_all=True` for empty string replacement when `new_str` is non-empty
+- Removed special handling for empty-to-non-empty replacement in empty files to ensure consistent validation
+- Updated CopyFileTool to use consolidated `atomic_validate_and_copy` method for consistency
+- Fixed test expectations to match new validation behavior
+- Empty-to-empty replacement remains a valid no-op operation regardless of `replace_all`
+
 ## 2026-04-23: Fixed empty string replacement bug in EditFileTool
 - Fixed `EditFileTool._calculate_changes()` method to correctly count replacements when old_str is empty
 - Improved error message for empty string replacement validation to clarify why replace_all=True is required

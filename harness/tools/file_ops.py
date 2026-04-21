@@ -143,18 +143,13 @@ class CopyFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
-        # Use atomic validation for both source and destination files to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self.file_security.validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)
-        if not is_valid_src:
-            return src_validated  # This is the ToolResult error
-        src = src_validated
-        
-        # Use atomic validation for destination to prevent TOCTOU attacks
-        # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self.file_security.validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)
-        if not is_valid_dst:
-            return dst_validated  # This is a ToolResult error
-        dst = dst_validated  # This is the validated path string
+        # Use consolidated atomic validation for copy operation
+        validation_result = await self.file_security.atomic_validate_and_copy(
+            config, source, destination, require_exists=True, check_scope=True, resolve_symlinks=False
+        )
+        if isinstance(validation_result, ToolResult):
+            return validation_result  # Error from validation
+        src, dst = validation_result
         
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent

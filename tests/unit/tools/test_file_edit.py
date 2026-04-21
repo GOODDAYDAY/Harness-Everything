@@ -257,14 +257,25 @@ def test_editfile_empty_string_in_empty_file():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test 1: Replace empty string with content in empty file (should work)
+        # Test 1: Replace empty string with content in empty file (should require replace_all=True)
         result = asyncio.run(tool.execute(
             config,
             path=str(file_path),
             old_str="",
             new_str="new content"
         ))
-        assert not result.is_error, f"Should allow empty string replacement in empty file: {result.error}"
+        assert result.is_error, "Should require replace_all=True for empty string replacement when new_str is non-empty"
+        assert "requires replace_all=true" in result.error.lower() and "ambiguity" in result.error.lower()
+        
+        # Test 1b: Replace empty string with content in empty file with replace_all=True (should work)
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="new content",
+            replace_all=True
+        ))
+        assert not result.is_error, f"Should allow empty string replacement in empty file with replace_all=True: {result.error}"
         assert file_path.read_text() == "new content"
         
         # Test 2: Replace empty string with content in non-empty file without replace_all (should fail)
@@ -376,7 +387,7 @@ def test_editfile_empty_string_to_empty_string_requires_replace_all():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test: Empty string to empty string replacement without replace_all should fail for non-empty files
+        # Test: Empty string to empty string replacement without replace_all should be a no-op (allowed)
         result = asyncio.run(tool.execute(
             config,
             path=str(file_path),
@@ -384,8 +395,8 @@ def test_editfile_empty_string_to_empty_string_requires_replace_all():
             new_str="",
             replace_all=False
         ))
-        assert result.is_error, "Empty-to-empty string replacement without replace_all should fail for non-empty files"
-        assert "requires replace_all=true" in result.error.lower()
+        assert not result.is_error, "Empty-to-empty string replacement should be a no-op and allowed"
+        assert "Replaced 0 occurrence(s)" in result.output
         
         # Test: Empty string to empty string replacement with replace_all=True should work
         result = asyncio.run(tool.execute(
