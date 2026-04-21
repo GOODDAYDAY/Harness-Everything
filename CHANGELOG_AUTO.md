@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool empty file offset handling
+- Fixed bug where `ReadFileTool` incorrectly returned error for `offset=1` on empty files
+- Updated validation logic in `ReadFileTool.execute()` to allow `offset=1` when file has 0 lines
+- Added `test_readfile_empty_file_offset_handling` test to verify proper handling of empty files
+- Improves user experience by allowing legitimate offset=1 reads on empty files
+
 ## 2026-04-23: Fixed ReadFileTool confusing offset behavior
 - Fixed confusing output like "lines 10-9 of 5" when offset exceeds file length
 - `ReadFileTool.execute()` now returns clear error message when offset > total_lines

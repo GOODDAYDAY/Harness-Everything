@@ -186,5 +186,40 @@ async def test_readfile_offset_beyond_file_length():
         assert "lines 2-3 of 5" in result3.output
 
 
+@pytest.mark.asyncio
+async def test_readfile_empty_file_offset_handling():
+    """Test that ReadFileTool correctly handles offset=1 on empty files."""
+    tool = ReadFileTool()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create an empty file
+        file_path = workspace / "empty.txt"
+        file_path.write_text("")  # Empty file
+        
+        # Create mock config
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test with offset=1 on empty file - should NOT return an error
+        result = await tool.execute(config, path=str(file_path), offset=1, limit=10)
+        assert not result.is_error
+        # Should contain filename in output
+        assert "empty.txt" in result.output
+        # Should indicate 0 lines
+        assert "0 lines" in result.output or "lines 1-0 of 0" in result.output
+        # Metadata should indicate 0 lines
+        assert len(result.metadata["lines"]) == 0
+        
+        # Also test with offset=1 explicitly (default)
+        result2 = await tool.execute(config, path=str(file_path), limit=10)
+        assert not result2.is_error
+        assert "empty.txt" in result2.output
+        assert len(result2.metadata["lines"]) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
