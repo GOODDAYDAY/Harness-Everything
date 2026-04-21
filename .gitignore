@@ -10,9 +10,11 @@ build/
 tmp*.json
 tmp*.py
 
-# Pipeline configs contain sensitive paths, API URLs, and project-specific prompts
+# Pipeline / agent configs contain sensitive paths, API keys, and project-specific prompts
 pipeline_*.json
 !config/pipeline_example_*.json
+agent_*.json
+!config/agent_example*.json
 
 # Harness run output and metrics
 harness_output*/

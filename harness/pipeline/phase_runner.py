@@ -942,45 +942,6 @@ class PhaseRunner:
                 "## PRIORITY FIX — Syntax errors must be fixed before new features\n\n"
                 f"```\n{syntax_errors}\n```\n\n"
             )
-        # Intelligence-metric block (Phase 1: evaluator discrimination ρ).
-        # Injected only into framework_improvement to avoid flooding every
-        # phase with the same signal. Empty block when the probe has not yet
-        # run or produced no data.
-        intel_block = ""
-        if phase.name == "framework_improvement":
-            try:
-                from harness.pipeline import intel_metrics as _im
-                traj_path = (
-                    self.harness.workspace
-                    + "/benchmarks/evaluator_calibration/probe_results.jsonl"
-                )
-                traj = _im.format_trajectory(traj_path)
-                if traj.get("current") is not None:
-                    traj_str = ", ".join(f"{x:.3f}" for x in traj["trajectory"])
-                    delta = traj.get("delta")
-                    delta_str = (
-                        f"{delta:+.3f}" if isinstance(delta, (int, float)) else "n/a"
-                    )
-                    intel_block = (
-                        "## INTELLIGENCE METRIC — evaluator discrimination "
-                        "(Spearman ρ on 20-proposal benchmark)\n\n"
-                        f"Round trajectory: [{traj_str}]  (higher is better; "
-                        "target ≥ 0.85)\n"
-                        f"Current: {traj['current']:.3f}    Δ vs prev: {delta_str}    "
-                        f"Regressions in last 5: {traj['regressions_in_last_5']}\n\n"
-                        "Your framework_improvement proposal SHOULD target "
-                        "evaluator quality — modifying one of:\n"
-                        "  • harness/evaluation/dual_evaluator.py\n"
-                        "  • harness/prompts/dual_evaluator.py\n"
-                        "  • harness/prompts/evaluator.py\n"
-                        "If your proposal does NOT touch these files AND "
-                        f"ρ (currently {traj['current']:.3f}) is below 0.85, "
-                        "you lose 3 points on Architecture Fit. The probe "
-                        "runs automatically at round end — you will see the "
-                        "new ρ next round.\n\n"
-                    )
-            except Exception as _exc:
-                log.debug("intel_block: skipped (%s)", _exc)
 
         template = phase.system_prompt
         if phase.glob_patterns and "$file_context" not in template:
@@ -998,7 +959,6 @@ class PhaseRunner:
             prior_best=prior_section,
             syntax_errors=syntax_section,
             falsifiable_criterion=phase.falsifiable_criterion,
-            intel_metric_block=intel_block,
         )
 
         workspace_reminder = (

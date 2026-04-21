@@ -57,7 +57,7 @@ async def run_simple(task: str, config: HarnessConfig) -> None:
 # ===========================================================================
 
 
-async def run_pipeline(config: PipelineConfig, config_path: str | None = None) -> int:
+async def run_pipeline(config: PipelineConfig) -> int:
     """Run the pipeline. Returns the process exit code.
 
     Exit codes:
@@ -70,10 +70,6 @@ async def run_pipeline(config: PipelineConfig, config_path: str | None = None) -
           where a missing function silently tanked 6 rounds × ~4 phases.
     """
     loop = PipelineLoop(config)
-    # Pipeline config path threads through to the intelligence probe so the
-    # probe subprocess uses the same base_url/api_key/model as the pipeline.
-    if config_path:
-        loop._intel_probe_pipeline_cfg_path = config_path
     result = await loop.run()
 
     print("\n" + "=" * 60)
@@ -150,9 +146,9 @@ def main() -> None:
             print("Usage: python main.py --pipeline <config.json>")
             sys.exit(1)
         config_path = Path(args[idx + 1])
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config = PipelineConfig.from_dict(json.load(f))
-        exit_code = asyncio.run(run_pipeline(config, config_path=str(config_path)))
+        exit_code = asyncio.run(run_pipeline(config))
         sys.exit(exit_code)
 
     # Agent mode
@@ -162,7 +158,7 @@ def main() -> None:
             print("Usage: python main.py --agent <config.json>")
             sys.exit(1)
         config_path = Path(args[idx + 1])
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             agent_cfg = AgentConfig.from_dict(json.load(f))
         exit_code = asyncio.run(run_agent(agent_cfg))
         sys.exit(exit_code)
@@ -178,7 +174,7 @@ def main() -> None:
     task = args[0]
     if len(args) >= 2 and not args[1].startswith("--"):
         config_path = Path(args[1])
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config = HarnessConfig.from_dict(json.load(f))
     else:
         config = HarnessConfig()
