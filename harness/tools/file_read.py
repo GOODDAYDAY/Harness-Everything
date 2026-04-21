@@ -88,8 +88,9 @@ class ReadFileTool(Tool):
         # For empty files (total == 0), only offset=1 is allowed
         # For non-empty files, offset must be ≤ total lines
         if total == 0 and offset != 1:
+            filename = os.path.basename(resolved)
             return ToolResult(
-                error=f"Offset {offset} exceeds file length (file is empty)",
+                error=f"Offset {offset} exceeds file length (0 lines) in {filename}",
                 is_error=True
             )
         if total > 0 and offset > total:

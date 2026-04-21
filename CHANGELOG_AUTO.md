@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-21: Standardized ReadFileTool error messages for empty files
+- Standardized error message format for empty files to match non-empty files
+- Changed from "Offset {offset} exceeds file length (file is empty)" to "Offset {offset} exceeds file length (0 lines) in {filename}"
+- Now both empty and non-empty files use consistent "(N lines) in {filename}" format
+- Updated test in `test_file_read_security.py` to expect new standardized format
+
 ## 2026-04-23: Fixed ReadFileTool offset validation bug for empty files
 - Fixed offset validation bug in `ReadFileTool.execute()` to allow offset=1 on empty files
 - Changed validation condition from `if total == 0 and offset > 1:` to `if total == 0 and offset != 1:`
