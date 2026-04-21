@@ -118,20 +118,20 @@ class EditFileTool(Tool):
             # For empty string replacement, we need to calculate based on the result
             if text == "":
                 # Empty file: replacement logic
-                if new_str == "":
-                    # Replacing nothing with nothing results in zero replacements
-                    replaced = 0
-                else:
+                if new_str != "":
                     # Insert new_str at the only position (empty file)
                     replaced = 1
-            else:
-                # For non-empty files with empty old_str:
-                if new_str == "":
+                else:
                     # Replacing nothing with nothing results in zero replacements
                     replaced = 0
-                else:
+            else:
+                # For non-empty files with empty old_str:
+                if new_str != "":
                     # Insert new_str at every possible position (before each char and at end)
                     replaced = len(text) + 1
+                else:
+                    # Replacing nothing with nothing results in zero replacements
+                    replaced = 0
         else:
             replaced = count if replace_all else 1
         

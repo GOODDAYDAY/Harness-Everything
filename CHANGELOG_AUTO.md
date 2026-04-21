@@ -11,6 +11,12 @@
 - Test also verifies that empty-to-empty string replacement with `replace_all=True` correctly reports 0 replacements
 - All existing tests continue to pass with the new test coverage
 
+## 2026-04-21: Fixed replacement count calculation for empty string edits in EditFileTool
+- Corrected the 'replaced' count calculation for empty string replacements to properly handle edge cases
+- Empty-to-empty string replacement with `replace_all=True` now correctly reports 0 replacements
+- Non-empty-to-empty insertion with `replace_all=True` correctly reports `len(text) + 1` replacements
+- All existing tests continue to pass with the corrected logic
+
 ## 2026-04-22: Enhanced empty string replacement validation in EditFileTool
 - Added explicit validation rejecting `old_str=""` and `new_str=""` unless `replace_all=True`, preventing ambiguous no-op edits
 - Fixed replacement count calculation for empty files when both old and new strings are empty (now correctly reports 0 replacements)
