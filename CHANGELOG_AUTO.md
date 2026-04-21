@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed CopyFileTool cross-device fallback bug
+- Fixed unreachable code bug in `CopyFileTool.execute()` EXDEV error handler
+- Changed fallback from duplicate `shutil.copy2()` call to proper `shutil.copyfile()` + `shutil.copystat()` sequence
+- Updated tests to verify new implementation correctly handles cross-device copy scenarios
+- Maintains same async behavior with `asyncio.to_thread` for both copyfile and copystat operations
+
 ## 2026-04-23: Fixed cross-device copy async consistency in CopyFileTool
 - Fixed inconsistent async behavior in `CopyFileTool.execute()` for cross-device copies
 - Changed EXDEV error handler from direct `shutil.copy2(src, dst)` to `await asyncio.to_thread(shutil.copy2, src, dst)`

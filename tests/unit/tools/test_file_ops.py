@@ -3,6 +3,7 @@
 import asyncio
 import errno
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -576,16 +577,25 @@ def test_copyfile_cross_device_fallback():
                 (True, str(workspace)),  # parent directory validation
             ]
             
-            # Mock asyncio.to_thread to raise EXDEV error to trigger fallback
-            with patch('asyncio.to_thread', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
-                # Mock shutil.copy2 to verify it's called in fallback
-                with patch('shutil.copy2') as mock_copy2:
-                    mock_copy2.return_value = None
+            # Mock asyncio.to_thread to raise EXDEV error for copy2, then succeed for copyfile and copystat
+            def side_effect(*args, **kwargs):
+                # First call is shutil.copy2 - raise EXDEV
+                if args and args[0] == shutil.copy2:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                # Subsequent calls (copyfile, copystat) should succeed
+                return args[0](*args[1:], **kwargs)
+            
+            with patch('asyncio.to_thread', side_effect=side_effect):
+                # Mock shutil.copyfile and shutil.copystat to verify they're called in fallback
+                with patch('shutil.copyfile') as mock_copyfile, patch('shutil.copystat') as mock_copystat:
+                    mock_copyfile.return_value = None
+                    mock_copystat.return_value = None
                     
                     result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
                     assert not result.is_error, f"Expected success but got error: {result.error}"
                     assert "cross-device" in result.output
-                    mock_copy2.assert_called_once_with(str(source), str(destination))
+                    mock_copyfile.assert_called_once_with(str(source), str(destination))
+                    mock_copystat.assert_called_once_with(str(source), str(destination))
 
 
 def test_copyfile_cross_device_fallback_failure():
@@ -613,10 +623,17 @@ def test_copyfile_cross_device_fallback_failure():
                 (True, str(workspace)),  # parent directory validation
             ]
             
-            # Mock asyncio.to_thread to raise EXDEV error to trigger fallback
-            with patch('asyncio.to_thread', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
-                # Mock shutil.copy2 to raise an error in fallback
-                with patch('shutil.copy2', side_effect=OSError(errno.EACCES, "Permission denied")):
+            # Mock asyncio.to_thread to raise EXDEV error for copy2, then succeed for copyfile
+            def side_effect(*args, **kwargs):
+                # First call is shutil.copy2 - raise EXDEV
+                if args and args[0] == shutil.copy2:
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                # Subsequent call to copyfile should use the mock
+                return args[0](*args[1:], **kwargs)
+            
+            with patch('asyncio.to_thread', side_effect=side_effect):
+                # Mock shutil.copyfile to raise an error in fallback
+                with patch('shutil.copyfile', side_effect=OSError(errno.EACCES, "Permission denied")):
                     result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
                     assert result.is_error
                     assert "Cross-device copy failed" in result.error
