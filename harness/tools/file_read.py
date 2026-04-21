@@ -84,17 +84,6 @@ class ReadFileTool(Tool):
         lines = text.splitlines(keepends=True)
         total = len(lines)
         
-        # Special handling for empty files with offset=1
-        if total == 0 and offset == 1:
-            filename = os.path.basename(resolved)
-            header = f"[{filename}] lines 1-0 of 0\n"
-            numbered = ""
-            lines_metadata = []
-            return ToolResult(
-                output=header + numbered,
-                metadata={"lines": lines_metadata}
-            )
-        
         # Validate that offset is within file bounds
         # Offset must be ≤ total lines (1-based indexing)
         if offset > total:

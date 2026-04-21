@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool offset validation inconsistency for empty files
+- Fixed offset validation inconsistency in `ReadFileTool.execute()` where offset=1 was specially allowed for empty files
+- Removed special handling for empty files with offset=1, letting standard validation handle all cases consistently
+- Now offset=1 on empty files returns error "Offset 1 exceeds file length (0 lines)" instead of succeeding with empty output
+- This makes validation consistent: offset must be ≤ total lines for all files (empty or not)
+- Updated test `test_readfile_empty_file_offset_handling` to reflect new behavior
+
 ## 2026-04-23: Cleaned up WriteFileTool by removing unused _atomic_read_text method
 - Removed unused `_atomic_read_text` method from `WriteFileTool` class in `harness/tools/file_write.py`
 - Simplified class implementation by eliminating dead code that could be misused as a bypass pattern
