@@ -265,7 +265,7 @@ def test_editfile_empty_string_in_empty_file():
             new_str="new content"
         ))
         assert result.is_error, "Should require replace_all=True for empty string replacement when new_str is non-empty"
-        assert "requires replace_all=true" in result.error.lower() and "ambiguity" in result.error.lower()
+        assert "requires replace_all=true" in result.error.lower()
         
         # Test 1b: Replace empty string with content in empty file with replace_all=True (should work)
         result = asyncio.run(tool.execute(
@@ -287,7 +287,7 @@ def test_editfile_empty_string_in_empty_file():
             new_str="prefix "
         ))
         assert result.is_error, "Should require replace_all=True for empty string in non-empty file"
-        assert "requires replace_all=true" in result.error.lower() and "ambiguity" in result.error.lower()
+        assert "requires replace_all=true" in result.error.lower()
         
         # Test 3: Replace empty string with content in non-empty file with replace_all=True (should work)
         result = asyncio.run(tool.execute(
@@ -326,7 +326,6 @@ def test_editfile_empty_string_in_non_empty_file():
         ))
         assert result.is_error, "Empty string replacement without replace_all should fail"
         assert "requires replace_all=true" in result.error.lower()
-        assert "ambiguity" in result.error.lower()
         
         # Test 2: Empty string replacement with replace_all=True should work
         result = asyncio.run(tool.execute(

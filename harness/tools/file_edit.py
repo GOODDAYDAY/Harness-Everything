@@ -58,9 +58,18 @@ class EditFileTool(Tool):
                 # Empty-to-non-empty: count = 1 (insert at position 0)
                 count = 1 if new_str != "" else 0
             else:
-                # Non-empty text with empty old_str: count = len(text) + 1 positions
-                # where empty string can be inserted (before each char + after last)
-                count = len(text) + 1 if new_str != "" else 0
+                # Non-empty text with empty old_str
+                if new_str == "":
+                    # Empty-to-empty: count = 0 (no replacement needed)
+                    count = 0
+                else:
+                    # Empty-to-non-empty
+                    if replace_all:
+                        # Replace at all positions: before each character and at the end
+                        count = len(text) + 1
+                    else:
+                        # Replace only at first position (beginning of text)
+                        count = 1
         else:
             count = text.count(old_str)
         

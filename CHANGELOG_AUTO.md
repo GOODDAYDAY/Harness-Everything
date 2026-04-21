@@ -6,6 +6,13 @@
 ---
 
 ## [Unreleased]
+### Fixed
+- **FOCUS/TARGET/WHY NOW**: Fix empty string replacement logic in EditFileTool to correctly calculate replacement counts and generate proper previews
+- **TARGET**: harness/tools/file_edit.py::EditFileTool._calculate_changes method and validation logic
+- **CHANGE**: Updated _calculate_changes method to correctly handle all edge cases for empty string replacement (empty-to-empty, empty-to-non-empty, non-empty-to-empty) with proper replacement count calculation and preview generation
+- **RATIONALE**: The previous implementation had incomplete logic for empty string replacement, particularly when old_str == "" and new_str != "". The fix ensures correct behavior for all combinations of parameters.
+- **BEHAVIOR**: EditFileTool now correctly calculates replacement counts and generates accurate previews for empty string replacements, maintaining consistency with validation logic.
+
 ### Improved
 - **FOCUS/TARGET/WHY NOW**: Improve error message clarity for offset validation in ReadFileTool to explain why offset can be one past end of file
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method and tests/tools/test_file_read_empty.py
