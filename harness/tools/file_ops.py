@@ -162,10 +162,21 @@ class CopyFileTool(Tool):
         except OSError as exc:
             # Handle specific OS errors with user-friendly messages
             if exc.errno == errno.EXDEV:
-                return ToolResult(
-                    error=f"Cannot copy '{src}' to '{dst}': cross-device copy not supported. Use separate copy operations.",
-                    is_error=True
-                )
+                try:
+                    # Fallback for cross-device copy: use shutil.copy2 directly
+                    # (asyncio.to_thread might have issues with cross-device operations)
+                    shutil.copy2(src, dst)
+                    return ToolResult(output=f"Copied {src} -> {dst} (cross-device)")
+                except OSError as copy_exc:
+                    return ToolResult(
+                        error=f"Cross-device copy failed: {copy_exc}",
+                        is_error=True
+                    )
+                except Exception as copy_exc:
+                    return ToolResult(
+                        error=f"Unexpected error during cross-device copy: {copy_exc}",
+                        is_error=True
+                    )
             if exc.errno == errno.ENOSPC:
                 return ToolResult(
                     error=f"Cannot copy '{src}' to '{dst}': disk full (ENOSPC).",

@@ -77,3 +77,9 @@
 - Updated error message in `_validate_atomic_path_sync` to "Symlinks are not allowed" for clarity
 - Updated security tests to expect the new explicit error message
 - Maintains TOCTOU protection while providing clearer error messages
+
+## 2026-04-16: Cross-device copy fallback in CopyFileTool
+- Added cross-device copy fallback to `CopyFileTool.execute()` to handle EXDEV errors gracefully
+- When `asyncio.to_thread(shutil.copy2, ...)` raises EXDEV, falls back to direct `shutil.copy2` call
+- Added tests `test_copyfile_cross_device_fallback` and `test_copyfile_cross_device_fallback_failure` to verify behavior
+- Aligns CopyFileTool behavior with MoveFileTool which already has cross-device fallback

@@ -551,5 +551,76 @@ def test_symlink_resolution_consistent_across_tools():
     assert "resolve_symlinks=False" in read_source, "ReadFileTool should use resolve_symlinks=False to reject symlinks"
 
 
+def test_copyfile_cross_device_fallback():
+    """Test that CopyFileTool handles cross-device copies with fallback."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        # Include workspace and its parent in allowed paths
+        config.allowed_paths = [str(workspace), tmpdir]
+        
+        # Mock the validation methods to succeed
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            # Mock source validation
+            mock_validate.side_effect = [
+                (True, str(source)),  # source validation
+                (True, str(destination)),  # destination validation
+                (True, str(workspace)),  # parent directory validation
+            ]
+            
+            # Mock asyncio.to_thread to raise EXDEV error to trigger fallback
+            with patch('asyncio.to_thread', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
+                # Mock shutil.copy2 to verify it's called in fallback
+                with patch('shutil.copy2') as mock_copy2:
+                    mock_copy2.return_value = None
+                    
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert not result.is_error, f"Expected success but got error: {result.error}"
+                    assert "cross-device" in result.output
+                    mock_copy2.assert_called_once_with(str(source), str(destination))
+
+
+def test_copyfile_cross_device_fallback_failure():
+    """Test that CopyFileTool reports error when cross-device fallback fails."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        # Include workspace and its parent in allowed paths
+        config.allowed_paths = [str(workspace), tmpdir]
+        
+        # Mock the validation methods to succeed
+        with patch.object(tool, '_validate_atomic_path') as mock_validate:
+            # Mock source validation
+            mock_validate.side_effect = [
+                (True, str(source)),  # source validation
+                (True, str(destination)),  # destination validation
+                (True, str(workspace)),  # parent directory validation
+            ]
+            
+            # Mock asyncio.to_thread to raise EXDEV error to trigger fallback
+            with patch('asyncio.to_thread', side_effect=OSError(errno.EXDEV, "Invalid cross-device link")):
+                # Mock shutil.copy2 to raise an error in fallback
+                with patch('shutil.copy2', side_effect=OSError(errno.EACCES, "Permission denied")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "Cross-device copy failed" in result.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
