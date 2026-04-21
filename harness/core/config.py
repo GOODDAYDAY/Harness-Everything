@@ -82,6 +82,14 @@ class HarnessConfig:
     # loop.  Lower values reduce runaway token spend on simple tasks; higher
     # values allow more complex multi-step executions.  Valid range: 1–200.
 
+    # --- API concurrency ---
+    max_concurrent_llm_calls: int = 4
+    # Upper bound on in-flight LLM API requests across the whole process.
+    # Pipeline debate parallel inner rounds + dual evaluators + planner three-way
+    # can easily stack 5+ concurrent calls against the provider; without a cap,
+    # bedrock / DeepSeek proxies will start returning 429s. Clamped to [1, 20]
+    # in LLM.__init__.
+
     # --- observability ---
     log_level: str = "INFO"
     # Python logging level name for the harness logger hierarchy.
