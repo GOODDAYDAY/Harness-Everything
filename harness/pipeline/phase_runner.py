@@ -464,15 +464,36 @@ class PhaseRunner:
             tool_summary = ""
             if best_result:
                 if best_result.tool_call_log:
-                    file_tools = {"write_file", "edit_file", "file_patch", "find_replace"}
-                    # Extract unique file paths that were written/edited
+                    # Single-path writers + batch variants. See also
+                    # executor.py for the same enumeration — kept in sync.
+                    single_path_tools = {
+                        "write_file", "edit_file", "file_patch", "find_replace",
+                    }
                     seen: set[str] = set()
                     for e in best_result.tool_call_log:
-                        if e["tool"] in file_tools and e.get("success", True):
-                            path = e.get("input", {}).get("path", "")
-                            if path and path not in seen:
-                                seen.add(path)
-                                files_changed.append(path)
+                        if not e.get("success", True):
+                            continue
+                        tool = e["tool"]
+                        inp = e.get("input") or {}
+                        if tool in single_path_tools:
+                            p = inp.get("path", "")
+                            if p and p not in seen:
+                                seen.add(p)
+                                files_changed.append(p)
+                        elif tool == "batch_edit":
+                            for edit in inp.get("edits") or []:
+                                if isinstance(edit, dict):
+                                    p = edit.get("path", "")
+                                    if p and p not in seen:
+                                        seen.add(p)
+                                        files_changed.append(p)
+                        elif tool == "batch_write":
+                            for f in inp.get("files") or []:
+                                if isinstance(f, dict):
+                                    p = f.get("path", "")
+                                    if p and p not in seen:
+                                        seen.add(p)
+                                        files_changed.append(p)
                     if files_changed:
                         changes_summary = f"{len(files_changed)} file(s) modified"
                     # Tool usage stats

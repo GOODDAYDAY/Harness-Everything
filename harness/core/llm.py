@@ -268,20 +268,57 @@ def _prune_conversation_tool_outputs(
 # within a single tool loop avoids injecting duplicate multi-KB tool results
 # into the conversation, which directly reduces input-token growth per turn.
 
-_WRITE_TOOLS = frozenset({"write_file", "edit_file", "file_patch", "find_replace"})
+_WRITE_TOOLS = frozenset({
+    "write_file", "edit_file", "file_patch", "find_replace",
+    # Batch variants — each carries a list of paths rather than a single
+    # `path`; their mutated paths are extracted below.
+    "batch_edit", "batch_write",
+})
+
+
+def _paths_written_by(name: str, params: dict[str, Any]) -> list[str]:
+    """Extract the set of paths a write-class tool will mutate.
+
+    Single-path tools carry a ``path`` key; batch variants carry lists.
+    Returns an empty list for tools that don't match either shape so
+    callers can uniformly iterate without special-casing.
+    """
+    if name in {"write_file", "edit_file", "file_patch", "find_replace"}:
+        p = params.get("path")
+        return [str(p)] if p else []
+    if name == "batch_edit":
+        return [
+            str(e["path"]) for e in (params.get("edits") or [])
+            if isinstance(e, dict) and e.get("path")
+        ]
+    if name == "batch_write":
+        return [
+            str(f["path"]) for f in (params.get("files") or [])
+            if isinstance(f, dict) and f.get("path")
+        ]
+    return []
 
 
 class _CachedToolRegistry:
-    """Thin wrapper around ToolRegistry that caches read_file results.
+    """Thin wrapper around ToolRegistry that caches file-read results.
 
-    Cache lifetime = one call_with_tools() invocation.  Writes to the same
-    path invalidate the cache entry so the next read sees fresh content.
+    Cache lifetime = one ``call_with_tools()`` invocation.  Writes to the
+    same path invalidate the cache entry so the next read sees fresh content.
+    Both ``read_file`` (single path) and ``batch_read`` (multi-path) are
+    de-duplicated; in the batch case we filter out paths the agent has
+    already seen this turn and only fetch the remainder, so a 10-path
+    batch_read after a 5-path batch_read only does 5 disk reads.
     """
 
     def __init__(self, inner: ToolRegistry) -> None:
         self._inner = inner
+        # Full cache: (path, offset, limit) → ToolResult for single reads.
         self._cache: dict[tuple[str, int, int], ToolResult] = {}
+        # Paths invalidated by a write; next read from disk re-hydrates.
         self._dirty_paths: set[str] = set()
+        # Per-turn "already seen" path set used by batch_read to skip
+        # re-fetching paths the agent has already pulled into context.
+        self._read_seen: set[str] = set()
 
     @property
     def _tools(self) -> dict:          # forward for to_api_schema()
@@ -297,10 +334,12 @@ class _CachedToolRegistry:
         params: dict[str, Any],
     ) -> ToolResult:
         # Invalidate cache on writes *before* execution so that a failed
-        # write still clears the stale entry.
+        # write still clears the stale entry. Both single- and batch-write
+        # tools go through here; _paths_written_by normalises the shape.
         if name in _WRITE_TOOLS:
-            path_str = str(params.get("path", ""))
-            self._dirty_paths.add(path_str)
+            for path_str in _paths_written_by(name, params):
+                self._dirty_paths.add(path_str)
+                self._read_seen.discard(path_str)
 
         if name == "read_file":
             path_str = str(params.get("path", ""))
@@ -313,9 +352,63 @@ class _CachedToolRegistry:
             result = await self._inner.execute(name, config, params)
             if not result.is_error:
                 self._cache[key] = result
+                self._read_seen.add(path_str)
                 # If the path was dirty, a fresh read clears the dirty flag
                 self._dirty_paths.discard(path_str)
             return result
+
+        if name == "batch_read":
+            raw_paths = params.get("paths") or []
+            if isinstance(raw_paths, list) and raw_paths:
+                already = [
+                    p for p in raw_paths
+                    if isinstance(p, str)
+                    and p in self._read_seen
+                    and p not in self._dirty_paths
+                ]
+                to_fetch = [
+                    p for p in raw_paths
+                    if isinstance(p, str) and p not in self._read_seen
+                ]
+                # All paths already seen — short-circuit with a hint so
+                # the LLM's context isn't re-filled with content it already
+                # has in the conversation (or should have saved via scratchpad).
+                if already and not to_fetch:
+                    hint = (
+                        f"[batch_read cache] All {len(already)} path(s) were "
+                        "already read earlier in this turn. Review your "
+                        "earlier tool results or scratchpad notes — do NOT "
+                        "re-read files to recall content.\n"
+                        f"Paths: {', '.join(already)}"
+                    )
+                    return ToolResult(output=hint, metadata={"cache_hit_all": True})
+                # Partial overlap — fetch only the uncached subset; prepend
+                # a note that explains which paths were skipped.
+                if already and to_fetch:
+                    fetch_params = {**params, "paths": to_fetch}
+                    result = await self._inner.execute(name, config, fetch_params)
+                    if not result.is_error:
+                        for p in to_fetch:
+                            self._read_seen.add(p)
+                            self._dirty_paths.discard(p)
+                        note = (
+                            f"[Note] {len(already)} path(s) omitted (already "
+                            f"read earlier this turn): {', '.join(already)}\n\n"
+                        )
+                        return ToolResult(
+                            output=note + result.output,
+                            metadata={**(result.metadata or {}), "cache_skipped": already},
+                        )
+                    return result
+                # Nothing cached — full fetch as usual.
+                result = await self._inner.execute(name, config, params)
+                if not result.is_error:
+                    for p in to_fetch:
+                        self._read_seen.add(p)
+                        self._dirty_paths.discard(p)
+                return result
+            # Malformed paths — let the tool report the error.
+            return await self._inner.execute(name, config, params)
 
         return await self._inner.execute(name, config, params)
 
