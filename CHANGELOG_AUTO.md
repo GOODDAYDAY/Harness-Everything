@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-24: Fixed read_file offset validation bug for empty files
+- **Bug fix**: Corrected offset validation logic to properly allow offset=1 for empty files
+- **Validation improvement**: Changed condition from `offset > 1` to `offset != 1` to explicitly reject all invalid offsets
+- **Consistency**: Maintains documented behavior that offset=1 is allowed for empty files
+
 ## 2026-04-24: Improved EditFileTool empty string replacement error message
 - **Enhanced error clarity**: Updated error message for empty string replacement to be more explicit about why replace_all=True is required
 - **Better user guidance**: Error message now explains that empty string matches at every position and suggests alternatives
