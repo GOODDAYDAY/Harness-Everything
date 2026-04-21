@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 ### Fixed
+- **FOCUS/TARGET/WHY NOW**: Simplify empty file handling in ReadFileTool by removing special-case logic
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method
+- **CHANGE**: Removed special-case handling for empty files (total == 0 and offset == 1) and let the normal empty selection logic handle it. Empty files now return the same formatted header "[filename] lines 1-0 of 0\n" as empty selections from non-empty files.
+- **RATIONALE**: Eliminates maintenance complexity and potential edge cases by unifying empty file handling with the existing empty selection logic. The behavior remains identical but the implementation is simpler and more consistent.
+
+### Fixed
 - **FOCUS/TARGET/WHY NOW**: Fix empty file offset validation bug in ReadFileTool to allow offset=1 for empty files
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()
 - **CHANGE**: Added explicit validation condition `(total == 0 and offset > 1)` alongside existing `offset > total + 1` check to ensure empty files only accept offset=1

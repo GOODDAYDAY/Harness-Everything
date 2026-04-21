@@ -136,18 +136,8 @@ class ReadFileTool(Tool):
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
         
-        # Handle empty file case (total == 0)
-        if total == 0 and offset == 1:
-            # For empty files, only offset=1 is valid (already validated above)
-            # Return consistent header format matching empty selection case
-            filename = os.path.basename(resolved)
-            header = f"[{filename}] lines 1-0 of 0\n"
-            return ToolResult(
-                output=header,
-                metadata={"lines": []}
-            )
-        # Handle empty selection (when start >= total for non-empty files)
-        elif not selected:
+        # Handle empty selection (when start >= total for non-empty files, or empty file)
+        if not selected:
             # Extract filename from resolved path
             filename = os.path.basename(resolved)
             header = f"[{filename}] lines {offset}-{offset-1} of {total}\n"
