@@ -110,7 +110,7 @@ class EditFileTool(Tool):
         # Validate empty string replacement before reading file
         if old_str == "" and not replace_all and new_str != "":
             return ToolResult(
-                error="Empty string replacement requires replace_all=True when new_str is non-empty due to ambiguity (empty string matches everywhere)",
+                error="Empty string replacement with new_str != '' requires replace_all=True because empty string matches at every position (before each character and at the end). Use replace_all=True to replace all matches, or provide a non-empty old_str.",
                 is_error=True
             )
         

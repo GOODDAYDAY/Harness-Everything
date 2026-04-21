@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-24: Improved EditFileTool empty string replacement error message
+- **Enhanced error clarity**: Updated error message for empty string replacement to be more explicit about why replace_all=True is required
+- **Better user guidance**: Error message now explains that empty string matches at every position and suggests alternatives
+- **Maintained functionality**: Empty-to-empty replacement continues to work as a valid no-op without errors
+
 ## 2026-04-24: Enhanced ReadFileTool type coercion validation
 - **Improved type validation**: Enhanced `ReadFileTool.execute()` to handle all edge cases of invalid offset/limit values
 - **Comprehensive error messages**: Added specific error messages for None values, empty strings, non-numeric strings, and float strings
