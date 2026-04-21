@@ -70,10 +70,6 @@ _TURN_STALL_WARN_SECS: float = 90.0
 # headroom for the system prompt, the final answer, and the tools schema.
 _CONV_PRUNE_THRESHOLD_CHARS: int = 300_000   # trigger pruning above this total
 _CONV_PRUNE_TARGET_CHARS: int = 200_000      # prune down to this target
-# Raised from 150K/100K on 2026-04-21 to give long Agent-mode cycles
-# (hundreds of tool turns) more working memory before older tool results
-# get truncated. 300K chars ≈ 75K tokens, well inside a 200K-token context
-# window once you subtract system prompt + tools schema + safety margin.
 # Number of *trailing* message pairs (assistant + user) kept verbatim.
 # Keeping the most recent turns intact ensures the model still sees the fresh
 # tool output it just received; only older outputs are compressed.
@@ -298,27 +294,10 @@ _READ_ONLY_TOOL_NAMES = frozenset({
 })
 
 
-def _paths_written_by(name: str, params: dict[str, Any]) -> list[str]:
-    """Extract the set of paths a write-class tool will mutate.
-
-    Single-path tools carry a ``path`` key; batch variants carry lists.
-    Returns an empty list for tools that don't match either shape so
-    callers can uniformly iterate without special-casing.
-    """
-    if name in {"write_file", "edit_file", "file_patch", "find_replace"}:
-        p = params.get("path")
-        return [str(p)] if p else []
-    if name == "batch_edit":
-        return [
-            str(e["path"]) for e in (params.get("edits") or [])
-            if isinstance(e, dict) and e.get("path")
-        ]
-    if name == "batch_write":
-        return [
-            str(f["path"]) for f in (params.get("files") or [])
-            if isinstance(f, dict) and f.get("path")
-        ]
-    return []
+# extract_written_paths lives in harness/tools/path_utils for reuse across
+# the executor, phase_runner, and agent loop. Imported here for cache
+# invalidation in _CachedToolRegistry.
+from harness.tools.path_utils import extract_written_paths
 
 
 class _CachedToolRegistry:
@@ -357,9 +336,9 @@ class _CachedToolRegistry:
     ) -> ToolResult:
         # Invalidate cache on writes *before* execution so that a failed
         # write still clears the stale entry. Both single- and batch-write
-        # tools go through here; _paths_written_by normalises the shape.
+        # tools go through here; extract_written_paths normalises the shape.
         if name in _WRITE_TOOLS:
-            for path_str in _paths_written_by(name, params):
+            for path_str in extract_written_paths(name, params):
                 self._dirty_paths.add(path_str)
                 self._read_seen.discard(path_str)
 

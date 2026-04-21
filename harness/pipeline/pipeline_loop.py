@@ -7,7 +7,6 @@ import datetime
 import json
 import logging
 import re
-import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -144,23 +143,13 @@ class PipelineLoop:
 
     def _install_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM to trigger graceful shutdown."""
-        try:
-            loop = _asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, self._request_shutdown)
-            log.debug("Signal handlers installed (SIGINT, SIGTERM)")
-        except NotImplementedError:
-            # Windows: add_signal_handler is not supported.
-            log.debug("Signal handlers not available on this platform")
+        from harness.core.signal_util import install_shutdown_handlers
+        install_shutdown_handlers(self._request_shutdown)
 
     def _uninstall_signal_handlers(self) -> None:
         """Restore default signal handlers."""
-        try:
-            loop = _asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.remove_signal_handler(sig)
-        except (NotImplementedError, RuntimeError):
-            pass
+        from harness.core.signal_util import uninstall_shutdown_handlers
+        uninstall_shutdown_handlers()
 
     def _write_shutdown_state(
         self,
