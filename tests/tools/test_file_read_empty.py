@@ -42,7 +42,7 @@ async def test_read_file_empty_file_offset_validation():
         # Test 2: offset=2 should fail with appropriate error
         result2 = await tool.execute(config, path=os.path.basename(temp_path), offset=2, limit=10)
         assert result2.is_error, f"Expected error for offset=2"
-        assert "only offset=1 allowed" in result2.error, f"Expected 'only offset=1 allowed' in error, got: {result2.error}"
+        assert "Offset 2 exceeds file length (0 lines)" in result2.error, f"Expected 'Offset 2 exceeds file length (0 lines)' in error, got: {result2.error}"
         
         # Test 3: offset=0 should fail with offset validation error
         result3 = await tool.execute(config, path=os.path.basename(temp_path), offset=0, limit=10)

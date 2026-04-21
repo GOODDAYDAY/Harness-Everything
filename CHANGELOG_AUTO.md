@@ -443,3 +443,9 @@
 - Changed validation logic from separate checks for empty/non-empty files to unified `if offset > total:` check
 - This ensures offset validation is consistent: offset must be ≤ total lines (1-based indexing)
 - Updated test in `test_file_read_security.py` to expect error for offset=1 on empty files
+
+## 2026-04-24: Fixed ReadFileTool empty file handling to accept offset=1
+- Fixed `ReadFileTool.execute()` to properly accept offset=1 for empty files
+- Simplified validation logic by removing special case for empty files and using unified `if offset > total + 1:` check
+- This allows offset=1 for empty files (returns empty output) while rejecting offset>1
+- Updated tests in `test_file_read_empty.py` and `test_file_read_security.py` to match new behavior

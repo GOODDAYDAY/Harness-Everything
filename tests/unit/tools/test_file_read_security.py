@@ -207,18 +207,18 @@ async def test_readfile_empty_file_offset_handling():
         # Test with offset=1 on empty file - should succeed with empty result
         result = await tool.execute(config, path=str(file_path), offset=1, limit=10)
         assert not result.is_error
-        assert "lines 1-0 of 0" in result.output
+        # Empty files return empty output
+        assert result.output == ""
         
         # Also test with offset=1 explicitly (default)
         result2 = await tool.execute(config, path=str(file_path), limit=10)
         assert not result2.is_error
-        assert "lines 1-0 of 0" in result2.output
+        assert result2.output == ""
         
         # Test offset=2 on empty file should fail
         result3 = await tool.execute(config, path=str(file_path), offset=2, limit=10)
         assert result3.is_error
-        assert "Offset 2 invalid for empty file" in result3.error
-        assert "only offset=1 allowed" in result3.error
+        assert "Offset 2 exceeds file length (0 lines)" in result3.error
 
 
 @pytest.mark.asyncio
