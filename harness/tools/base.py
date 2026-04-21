@@ -119,7 +119,7 @@ class Tool(ABC):
                 resolved_path = Path(path_to_check).resolve(strict=False)
                 resolved_str = str(resolved_path)
                 
-                # Check if all parent directory components exist and are within allowed paths
+                # Check if all parent directory components exist
                 # Only do this check when require_exists=True
                 if require_exists:
                     current = Path(resolved_str)
@@ -129,21 +129,6 @@ class Tool(ABC):
                                 error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
                                 is_error=True,
                             )
-                        # Check if parent directory is within allowed paths
-                        parent_allowed = False
-                        for allowed_path in config.allowed_paths:
-                            allowed_resolved = str(Path(allowed_path).resolve(strict=False))
-                            parent_str = str(current.parent)
-                            if parent_str == allowed_resolved or parent_str.startswith(allowed_resolved + os.sep):
-                                parent_allowed = True
-                                break
-                        
-                        if not parent_allowed:
-                            return ToolResult(
-                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} is outside allowed paths",
-                                is_error=True,
-                            )
-                        
                         current = current.parent
             except Exception as exc2:
                 return ToolResult(
