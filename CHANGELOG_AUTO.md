@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-24: Fixed ReadFileTool offset validation logic consistency
+- Updated offset validation logic in `ReadFileTool.execute()` for consistency between empty and non-empty files
+- Changed condition from `if offset > total and not (total == 0 and offset == 1):` to `if offset > total + 1 or (total == 0 and offset > 1):`
+- Updated comment to clarify "Offset must be ≤ total+1 lines (1-based indexing, allowing offset=1 for empty files)"
+- Allows offset=total+1 on non-empty files (returns empty result) for consistency with offset=1 on empty files
+- Updated test expectations to match new behavior
+
 ## 2026-04-21: Fixed ReadFileTool offset validation for empty files
 - Simplified offset validation logic in `ReadFileTool.execute()` to allow offset=1 on empty files
 - Replaced complex conditional logic with single condition: `if offset > total and not (total == 0 and offset == 1):`
