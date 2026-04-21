@@ -49,7 +49,7 @@ class EditFileTool(Tool):
         replace_all: bool = False,
     ) -> ToolResult:
         # Use consolidated atomic validation and read
-        read_result = await self._atomic_validate_and_read(
+        read_result = await self.file_security.atomic_validate_and_read(
             config, path, require_exists=True, check_scope=True, resolve_symlinks=False
         )
         if isinstance(read_result, ToolResult):
@@ -120,7 +120,7 @@ class EditFileTool(Tool):
         new_text = text.replace(old_str, new_str, -1 if replace_all else 1)
         
         # Use consolidated atomic validation and write
-        write_result = await self._atomic_validate_and_write(
+        write_result = await self.file_security.atomic_validate_and_write(
             config, path, new_text, require_exists=True, check_scope=True, resolve_symlinks=False
         )
         if write_result.is_error:

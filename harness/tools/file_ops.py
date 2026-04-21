@@ -31,7 +31,7 @@ class DeleteFileTool(Tool):
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
         # Use consolidated atomic validation and delete operation
-        return await self._atomic_validate_and_delete(
+        return await self.file_security.atomic_validate_and_delete(
             config, path, check_scope=True, resolve_symlinks=False
         )
 

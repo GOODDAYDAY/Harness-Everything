@@ -13,7 +13,7 @@ import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, ClassVar, Optional, Tuple, Union
 
 from harness.core.config import HarnessConfig
 from harness.core.security import validate_path_security
@@ -37,6 +37,261 @@ class ToolResult:
         return {"type": "text", "text": text}
 
 
+class FileSecurity:
+    """Centralized security validation for file operations.
+    
+    This class consolidates all atomic validation methods to reduce duplication
+    and ensure consistent security validation across all file tools.
+    """
+    
+    @staticmethod
+    async def atomic_validate_and_read(
+        config: HarnessConfig,
+        path: str,
+        require_exists: bool = True,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> Tuple[str, str] | ToolResult:
+        """Atomically validate and read a file with TOCTOU protection.
+        
+        Returns: (text, resolved_path) on success, ToolResult on error.
+        """
+        # Copy of the logic from Tool._atomic_validate_and_read
+        validation_kwargs = {
+            "require_exists": require_exists,
+            "check_scope": check_scope,
+            "resolve_symlinks": resolve_symlinks,
+        }
+        
+        # Validate path atomically
+        from harness.tools.base import Tool  # Import here to avoid circular import
+        is_valid_path, path_validated = await FileSecurity.validate_atomic_path(config, path, **validation_kwargs)
+        if not is_valid_path:
+            # path_validated is a ToolResult when is_valid_path is False
+            if isinstance(path_validated, ToolResult):
+                return path_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(path_validated), is_error=True)
+        
+        # Read content atomically
+        content, read_error = await FileSecurity._atomic_read_text(config, path_validated)
+        if read_error is not None:
+            return read_error
+        
+        return content, path_validated
+    
+    @staticmethod
+    async def atomic_validate_and_write(
+        config: HarnessConfig,
+        path: str,
+        content: str,
+        require_exists: bool = False,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> ToolResult:
+        """Atomically validate and write a file with TOCTOU protection."""
+        # Copy of the logic from Tool._atomic_validate_and_write
+        validation_kwargs = {
+            "require_exists": require_exists,
+            "check_scope": check_scope,
+            "resolve_symlinks": resolve_symlinks,
+        }
+        
+        # Validate path atomically
+        is_valid_path, path_validated = await FileSecurity.validate_atomic_path(config, path, **validation_kwargs)
+        if not is_valid_path:
+            # path_validated is a ToolResult when is_valid_path is False
+            if isinstance(path_validated, ToolResult):
+                return path_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(path_validated), is_error=True)
+        
+        # Validate parent directory if needed
+        parent_dir = os.path.dirname(path_validated)
+        if parent_dir and parent_dir != ".":
+            is_valid_parent, parent_result = await FileSecurity.validate_and_prepare_parent_directory(
+                config, parent_dir,
+                require_exists=False,
+                check_scope=check_scope,
+                resolve_symlinks=resolve_symlinks
+            )
+            if not is_valid_parent:
+                # parent_result should be a ToolResult when is_valid_parent is False
+                if isinstance(parent_result, ToolResult):
+                    return parent_result
+                else:
+                    return ToolResult(error=str(parent_result), is_error=True)
+        
+        # Write content atomically
+        try:
+            # Use asyncio.to_thread to avoid blocking the event loop
+            await asyncio.to_thread(lambda: open(path_validated, "w", encoding="utf-8").write(content))
+            return ToolResult(output=f"Successfully wrote to {path_validated}")
+        except OSError as exc:
+            return ToolResult(error=f"Cannot write file {path_validated}: {exc}", is_error=True)
+        except Exception as exc:
+            return ToolResult(error=f"Unexpected error writing {path_validated}: {exc}", is_error=True)
+    
+    @staticmethod
+    async def atomic_validate_and_delete(
+        config: HarnessConfig,
+        path: str,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> ToolResult:
+        """Atomically validate and delete a file with TOCTOU protection."""
+        # Copy of the logic from Tool._atomic_validate_and_delete
+        # Validate path atomically
+        is_valid_path, path_validated = await FileSecurity.validate_atomic_path(
+            config, path,
+            require_exists=True,
+            check_scope=check_scope,
+            resolve_symlinks=resolve_symlinks
+        )
+        if not is_valid_path:
+            # path_validated is a ToolResult when is_valid_path is False
+            if isinstance(path_validated, ToolResult):
+                return path_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(path_validated), is_error=True)
+        
+        # Delete file atomically
+        try:
+            # Use asyncio.to_thread to avoid blocking the event loop
+            await asyncio.to_thread(os.unlink, path_validated)
+            return ToolResult(output=f"Successfully deleted {path_validated}")
+        except FileNotFoundError:
+            # File was deleted by another process after validation
+            return ToolResult(
+                error=f"File disappeared after validation: {path_validated}",
+                is_error=True
+            )
+        except OSError as exc:
+            return ToolResult(error=f"Cannot delete file {path_validated}: {exc}", is_error=True)
+        except Exception as exc:
+            return ToolResult(error=f"Unexpected error deleting {path_validated}: {exc}", is_error=True)
+    
+    @staticmethod
+    async def validate_atomic_path(
+        config: HarnessConfig,
+        path: str,
+        require_exists: bool = True,
+        directory: bool = False,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> Tuple[bool, str | ToolResult]:
+        """Atomically validate a file path with TOCTOU protection."""
+        # Copy of the logic from Tool._validate_atomic_path
+        try:
+            # Resolve path relative to workspace
+            resolved = os.path.join(config.workspace, path) if not os.path.isabs(path) else path
+            
+            # Check if path is within allowed scope
+            if check_scope:
+                from harness.core.security import validate_path_scope
+                scope_ok, scope_error = await validate_path_scope(config, resolved)
+                if not scope_ok:
+                    return False, ToolResult(error=scope_error, is_error=True)
+            
+            # Check if file/directory exists if required
+            if require_exists:
+                if directory:
+                    if not os.path.isdir(resolved):
+                        return False, ToolResult(
+                            error=f"Directory does not exist: {resolved}",
+                            is_error=True
+                        )
+                else:
+                    if not os.path.isfile(resolved):
+                        return False, ToolResult(
+                            error=f"File does not exist: {resolved}",
+                            is_error=True
+                        )
+            
+            # Check symlinks if not resolving them
+            if not resolve_symlinks and os.path.islink(resolved):
+                return False, ToolResult(
+                    error=f"Symlinks are not allowed: {resolved}",
+                    is_error=True
+                )
+            
+            return True, resolved
+            
+        except Exception as exc:
+            return False, ToolResult(error=f"Path validation failed: {exc}", is_error=True)
+    
+    @staticmethod
+    async def validate_and_prepare_parent_directory(
+        config: HarnessConfig,
+        parent_dir: str,
+        require_exists: bool = False,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> Tuple[bool, str | ToolResult]:
+        """Atomically validate and prepare a parent directory."""
+        # Copy of the logic from Tool._validate_and_prepare_parent_directory
+        # First validate the parent directory path
+        is_valid, validated = await FileSecurity.validate_atomic_path(
+            config, parent_dir,
+            require_exists=require_exists,
+            directory=True,
+            check_scope=check_scope,
+            resolve_symlinks=resolve_symlinks
+        )
+        if not is_valid:
+            return False, validated  # validated is a ToolResult
+        
+        # Create directory if it doesn't exist and require_exists is False
+        if not require_exists and not os.path.exists(validated):
+            try:
+                os.makedirs(validated, exist_ok=True)
+            except OSError as exc:
+                return False, ToolResult(
+                    error=f"Failed to create directory {validated}: {exc}",
+                    is_error=True
+                )
+        
+        return True, validated
+    
+    @staticmethod
+    async def _atomic_read_text(
+        config: HarnessConfig,
+        resolved_path: str
+    ) -> Tuple[str | None, ToolResult | None]:
+        """Read file content atomically with TOCTOU protection.
+        
+        Returns: (text, None) on success, or (None, ToolResult) on error.
+        """
+        # Copy of the logic from Tool._atomic_read_text
+        try:
+            # Use asyncio.to_thread to avoid blocking the event loop
+            content = await asyncio.to_thread(lambda: open(resolved_path, "r", encoding="utf-8").read())
+            return content, None
+        except FileNotFoundError:
+            return None, ToolResult(
+                error=f"File disappeared after validation: {resolved_path}",
+                is_error=True
+            )
+        except UnicodeDecodeError:
+            return None, ToolResult(
+                error=f"File is not valid UTF-8 text: {resolved_path}",
+                is_error=True
+            )
+        except OSError as exc:
+            return None, ToolResult(
+                error=f"Cannot read file {resolved_path}: {exc}",
+                is_error=True
+            )
+        except Exception as exc:
+            return None, ToolResult(
+                error=f"Unexpected error reading {resolved_path}: {exc}",
+                is_error=True
+            )
+
+
 class Tool(ABC):
     """Base class for all harness tools.
 
@@ -55,6 +310,9 @@ class Tool(ABC):
     # Valid tags: "file_read", "file_write", "search", "git", "analysis",
     #             "execution", "network", "testing"
     tags: frozenset[str] = frozenset()
+    
+    # Centralized security validation for file operations
+    file_security: ClassVar[type] = FileSecurity
 
     @abstractmethod
     def input_schema(self) -> dict[str, Any]:

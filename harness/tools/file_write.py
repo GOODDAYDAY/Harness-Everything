@@ -32,7 +32,7 @@ class WriteFileTool(Tool):
         self, config: HarnessConfig, *, path: str, content: str
     ) -> ToolResult:
         # Use consolidated atomic validation and write
-        result = await self._atomic_validate_and_write(
+        result = await self.file_security.atomic_validate_and_write(
             config, path, content, require_exists=False, check_scope=True, resolve_symlinks=False
         )
         return result
