@@ -512,3 +512,10 @@
 - Added clarifying comment explaining offset can be 1 to total_lines (to read lines) or total_lines+1 (to create empty selection)
 - Added new test `test_read_file_offset_beyond_bounds_clear_error()` to verify clear error messages
 - Test verifies error message mentions valid range and filename, and that offset=total_lines+1 succeeds for empty selection
+
+## 2026-04-24: Fixed offset validation bug for empty files in ReadFileTool
+- Fixed `ReadFileTool.execute()` to correctly reject offset=2 for empty files
+- Updated validation condition from `if offset > total_lines + 1:` to `if offset > total_lines + 1 or (total_lines == 0 and offset > 1):`
+- Added special case handling for empty files where offset can only be 1
+- Tests in `test_file_read_empty.py` already verify this behavior and continue to pass
+- This ensures consistent behavior where empty files only accept offset=1 (not offset=2)
