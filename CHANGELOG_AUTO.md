@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Fixed empty string replacement bug in EditFileTool
+- Fixed `EditFileTool._calculate_changes()` method to correctly count replacements when old_str is empty
+- Improved error message for empty string replacement validation to clarify why replace_all=True is required
+- Empty string replacement in non-empty files now requires replace_all=True due to ambiguity (empty string matches everywhere)
+- Maintains backward compatibility while fixing edge case handling
+- All existing tests continue to pass, including empty string replacement tests
+
 ## 2026-04-23: Improved CopyFileTool error handling with user-friendly messages
 - Enhanced `CopyFileTool.execute()` to provide specific user-friendly error messages for common OS errors
 - Added handling for EACCES (permission denied), ENOENT (file not found), EISDIR (is a directory), and ENOTDIR (not a directory) errors
