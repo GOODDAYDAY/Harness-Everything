@@ -37,24 +37,22 @@ async def test_readfile_atomic_open_prevents_symlink_swap():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test 1: Reading through a symlink should work (following symlinks)
+        # Test 1: Reading through a symlink should fail with O_NOFOLLOW
         result = await tool.execute(config, path=str(symlink_path))
-        assert not result.is_error
-        assert "public content" in result.output
+        assert result.is_error
+        assert "symlink" in result.error.lower() or "ELOOP" in str(result.error)
         
         # Test 2: Replace symlink target after validation would occur
         # In a real attack, an attacker would swap the symlink target
         # between validation and reading. Our atomic open with O_NOFOLLOW
-        # should prevent this.
+        # should prevent this by rejecting symlinks entirely.
         symlink_path.unlink()
         symlink_path.symlink_to(secret_file)
         
-        # Attempt read - should still work because we follow symlinks
-        # The atomic protection is against symlink swapping during the
-        # open operation, not against reading symlinks in general
+        # Attempt read - should fail because symlinks are rejected
         result = await tool.execute(config, path=str(symlink_path))
-        assert not result.is_error
-        assert "secret content" in result.output
+        assert result.is_error
+        assert "symlink" in result.error.lower() or "ELOOP" in str(result.error)
 
 
 @pytest.mark.asyncio
