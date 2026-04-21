@@ -35,6 +35,7 @@ class WriteFileTool(Tool):
         result = await self.file_security.atomic_validate_and_write(
             config, path, content, require_exists=False, check_scope=True, resolve_symlinks=False
         )
+        # atomic_validate_and_write returns ToolResult (error or success)
         return result
 
 

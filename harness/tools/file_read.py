@@ -76,6 +76,7 @@ class ReadFileTool(Tool):
         atomic_result = await self.file_security.atomic_validate_and_read(
             config, path, require_exists=True, check_scope=True, resolve_symlinks=False
         )
+        # atomic_validate_and_read returns either ToolResult (error) or tuple(text, resolved_path) - see file_security module.
         if isinstance(atomic_result, ToolResult):
             return atomic_result  # Error from validation or read
         text, resolved = atomic_result

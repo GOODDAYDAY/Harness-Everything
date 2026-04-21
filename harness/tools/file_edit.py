@@ -113,6 +113,7 @@ class EditFileTool(Tool):
         read_result = await self.file_security.atomic_validate_and_read(
             config, path, require_exists=True, check_scope=True, resolve_symlinks=False
         )
+        # atomic_validate_and_read returns either ToolResult (error) or tuple(text, resolved_path) - consistent with ReadFileTool
         if isinstance(read_result, ToolResult):
             return read_result  # Error from validation or read
         text, resolved = read_result

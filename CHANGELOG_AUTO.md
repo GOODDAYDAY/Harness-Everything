@@ -12,6 +12,13 @@
 - Users now get actionable error messages like "Cannot copy 'source' to 'dest': permission denied (EACCES)" instead of generic "Copy failed: ..."
 - Added comprehensive test `test_copyfile_handles_os_errors_with_user_friendly_messages` to verify all error cases
 
+## 2026-04-23: Added documentation for atomic validation return types across file tools
+- Added clarifying comments to `ReadFileTool`, `WriteFileTool`, and `EditFileTool` documenting return types of atomic validation methods
+- `atomic_validate_and_read` returns either `ToolResult` (error) or `tuple(text, resolved_path)` (success)
+- `atomic_validate_and_write` returns `ToolResult` (error or success)
+- Improves code clarity and maintainability by documenting the interface between tools and security layer
+- No functional changes - purely documentation improvements
+
 ## 2026-04-23: Fixed ReadFileTool offset validation to allow offset=1 on empty files
 - Fixed offset validation bug in `ReadFileTool.execute()` where offset=1 incorrectly failed on empty files
 - Modified validation logic to allow offset=1 on empty files while rejecting offset>1
