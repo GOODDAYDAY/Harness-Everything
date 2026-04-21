@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-04-24: Fixed empty file output handling in ReadFileTool
+- **FOCUS**: Fix empty file offset validation bug in ReadFileTool.execute() to correctly handle offset=1 for empty files
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()
+- **CHANGE**: Modified empty file handling to return empty string output instead of header when offset=1
+- **RATIONALE**: When reading empty files with offset=1, the tool now returns an empty string (consistent with reading zero lines) rather than a header string
+- **BEHAVIOR**: 
+  - offset=1 on empty files: returns empty string (no error)
+  - offset≥2 on empty files: returns error "Offset {offset} invalid for empty file {filename} (only offset=1 allowed)"
+  - Non-empty file behavior remains unchanged
+
 ## 2026-04-24: Verified read_file offset validation fix for empty files
 - **Verification**: Confirmed that offset=1 is correctly allowed for empty files while other offsets are rejected
 - **Test validation**: Verified through comprehensive testing that:
