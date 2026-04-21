@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-24: Verified and enhanced ReadFileTool offset validation
+- **Verified offset validation correctness**: Confirmed that offset=total+1 is correctly allowed for non-empty files (returns empty selection)
+- **Added comprehensive test**: Added `test_read_file_offset_at_total_plus_one_returns_empty()` to explicitly test offset=total+1 behavior
+- **Enhanced test coverage**: Test now verifies that offset=total+1 returns proper empty range indication ("lines X-X-1 of Y")
+- **Maintained existing behavior**: All existing offset validation logic remains correct and unchanged
+- **Documentation**: Updated changelog to reflect verification of correct offset validation implementation
+
 ## 2026-04-24: Fixed ReadFileTool offset validation logic consistency
 - Updated offset validation logic in `ReadFileTool.execute()` for consistency between empty and non-empty files
 - Changed condition from `if offset > total and not (total == 0 and offset == 1):` to `if offset > total + 1 or (total == 0 and offset > 1):`

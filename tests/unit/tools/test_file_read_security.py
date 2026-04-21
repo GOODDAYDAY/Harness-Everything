@@ -221,5 +221,35 @@ async def test_readfile_empty_file_offset_handling():
         assert "only offset=1 allowed" in result3.error
 
 
+@pytest.mark.asyncio
+async def test_read_file_offset_at_total_plus_one_returns_empty():
+    """Test that offset=total+1 returns empty selection for non-empty files."""
+    import tempfile
+    import os
+    from pathlib import Path
+    from unittest.mock import Mock
+    
+    tool = ReadFileTool()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a file with 3 lines
+        file_path = workspace / "test.txt"
+        file_path.write_text("line1\nline2\nline3")
+        
+        # Create mock config
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test offset=4 (total+1 for 3-line file)
+        result = await tool.execute(config, path=str(file_path), offset=4, limit=10)
+        assert not result.is_error
+        assert "lines 4-3 of 3" in result.output  # Empty range indication
+        assert result.output.strip().endswith("lines 4-3 of 3")  # No numbered lines after header
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
