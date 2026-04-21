@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 ### Fixed
+- **FOCUS/TARGET/WHY NOW**: Fix ReadFileTool offset validation bug for empty files
+  - **WHAT**: Updated offset validation logic in `harness/tools/file_read.py` to explicitly handle empty file case with `(total_lines == 0 and offset > 1)` condition alongside existing `offset > total_lines + 1` check
+  - **WHY**: Ensures consistent validation behavior and clearer error messages for empty files
+  - **TESTS**: All existing tests in `tests/tools/test_file_read_empty.py` continue to pass
+
 - **FOCUS/TARGET/WHY NOW**: Fix empty string replacement logic in EditFileTool to correctly calculate replacement counts and generate proper previews
 - **TARGET**: harness/tools/file_edit.py::EditFileTool._calculate_changes method and validation logic
 - **CHANGE**: Updated _calculate_changes method to correctly handle all edge cases for empty string replacement (empty-to-empty, empty-to-non-empty, non-empty-to-empty) with proper replacement count calculation and preview generation

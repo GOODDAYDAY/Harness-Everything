@@ -127,7 +127,7 @@ class ReadFileTool(Tool):
         # Validate that offset is within file bounds
         # Offset can be 1 to total_lines (to read lines) or total_lines+1 (to create empty selection)
         # This follows 1-based indexing where offset=1 means start at first line
-        if offset > total_lines + 1:
+        if offset > total_lines + 1 or (total_lines == 0 and offset > 1):
             filename = os.path.basename(resolved)
             if total_lines == 0:
                 return ToolResult(
