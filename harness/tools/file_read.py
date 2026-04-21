@@ -85,7 +85,7 @@ class ReadFileTool(Tool):
         total = len(lines)
         
         # Validate that offset is within file bounds
-        if offset > total and total > 0:
+        if offset > max(total, 1):
             filename = os.path.basename(resolved)
             return ToolResult(
                 error=f"Offset {offset} exceeds file length ({total} lines) in {filename}",
