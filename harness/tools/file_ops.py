@@ -76,7 +76,11 @@ class MoveFileTool(Tool):
                 config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=False
             )
             if not is_valid_parent:
-                return parent_result  # This is a ToolResult error
+                # parent_result could be a string or ToolResult - ensure we return a ToolResult
+                if isinstance(parent_result, ToolResult):
+                    return parent_result
+                else:
+                    return ToolResult(error=str(parent_result), is_error=True)
 
         try:
             os.rename(src, dst)  # Atomic operation on validated path strings
@@ -148,7 +152,11 @@ class CopyFileTool(Tool):
                 config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=False
             )
             if not is_valid_parent:
-                return parent_result  # This is a ToolResult error
+                # parent_result could be a string or ToolResult - ensure we return a ToolResult
+                if isinstance(parent_result, ToolResult):
+                    return parent_result
+                else:
+                    return ToolResult(error=str(parent_result), is_error=True)
         
         # Proceed with the copy using async thread
         try:
