@@ -204,15 +204,15 @@ async def test_readfile_empty_file_offset_handling():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test with offset=1 on empty file - should return an error
+        # Test with offset=1 on empty file - should now succeed with empty output
         result = await tool.execute(config, path=str(file_path), offset=1, limit=10)
-        assert result.is_error
-        assert "Offset 1 exceeds file length (0 lines)" in result.error
+        assert not result.is_error
+        assert "[empty.txt] lines 1-0 of 0" in result.output
         
         # Also test with offset=1 explicitly (default)
         result2 = await tool.execute(config, path=str(file_path), limit=10)
-        assert result2.is_error
-        assert "Offset 1 exceeds file length (0 lines)" in result2.error
+        assert not result2.is_error
+        assert "[empty.txt] lines 1-0 of 0" in result2.output
         
         # Test offset=2 on empty file should fail
         result3 = await tool.execute(config, path=str(file_path), offset=2, limit=10)

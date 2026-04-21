@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool offset validation logic for empty files
+- Fixed logical inconsistency in `ReadFileTool.execute()` offset validation
+- Changed condition from `if offset > total:` to `if offset > total and not (offset == 1 and total == 0):`
+- This allows offset=1 (the default) to succeed on empty files while still rejecting offset>1
+- Updated `test_file_read_security.py` test expectations to match new behavior
+
 ## 2026-04-21: Standardized ReadFileTool error messages for empty files
 - Standardized error message format for empty files to match non-empty files
 - Changed from "Offset {offset} exceeds file length (file is empty)" to "Offset {offset} exceeds file length (0 lines) in {filename}"
