@@ -89,7 +89,7 @@ class ReadFileTool(Tool):
         if not selected:
             # Extract filename from resolved path
             filename = os.path.basename(resolved)
-            header = f"[{filename}] lines 0-0 of {total}\n"
+            header = f"[{filename}] lines {offset}-{offset-1} of {total}\n"
             numbered = ""
             lines_metadata = []
         else:

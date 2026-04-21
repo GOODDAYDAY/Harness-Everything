@@ -169,15 +169,15 @@ async def test_readfile_offset_beyond_file_length():
         # Test with offset beyond file length
         result = await tool.execute(config, path=str(file_path), offset=10, limit=5)
         assert not result.is_error
-        # Should return empty metadata and "lines 0-0" in output
+        # Should return empty metadata and "lines 10-9 of 5" in output (empty range)
         assert result.metadata["lines"] == []
-        assert "lines 0-0 of 5" in result.output
+        assert "lines 10-9 of 5" in result.output
         
         # Test with offset exactly at end (line 6, file has 5 lines)
         result2 = await tool.execute(config, path=str(file_path), offset=6, limit=5)
         assert not result2.is_error
         assert result2.metadata["lines"] == []
-        assert "lines 0-0 of 5" in result2.output
+        assert "lines 6-5 of 5" in result2.output
         
         # Test with offset within file for comparison
         result3 = await tool.execute(config, path=str(file_path), offset=2, limit=2)
