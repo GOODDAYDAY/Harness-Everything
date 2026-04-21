@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed cross-device copy async consistency in CopyFileTool
+- Fixed inconsistent async behavior in `CopyFileTool.execute()` for cross-device copies
+- Changed EXDEV error handler from direct `shutil.copy2(src, dst)` to `await asyncio.to_thread(shutil.copy2, src, dst)`
+- Ensures cross-device copy operations don't block the event loop, maintaining consistent async behavior
+- All existing functionality preserved while fixing the async inconsistency
+
 ## 2026-04-23: Added dry-run mode to EditFileTool
 - Added `dry_run` parameter to `EditFileTool` for safe previewing of changes
 - When `dry_run=True`, tool returns preview of changes without modifying file

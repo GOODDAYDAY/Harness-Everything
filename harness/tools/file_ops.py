@@ -188,10 +188,9 @@ class CopyFileTool(Tool):
             # Handle specific OS errors with user-friendly messages
             if exc.errno == errno.EXDEV:
                 try:
-                    # Fallback for cross-device copy: use shutil.copy2 directly
-                    # asyncio.to_thread can fail with EXDEV for cross-device operations
-                    # due to thread pool resource constraints or file descriptor handling
-                    shutil.copy2(src, dst)
+                    # Fallback for cross-device copy: use asyncio.to_thread for consistency
+                    # with normal copy operations to avoid blocking the event loop
+                    await asyncio.to_thread(shutil.copy2, src, dst)
                     return ToolResult(output=f"Copied {src} -> {dst} (cross-device)")
                 except OSError as copy_exc:
                     return ToolResult(
