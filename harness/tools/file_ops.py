@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, handle_atomic_result
 
 
 @enforce_atomic_validation
@@ -60,9 +60,13 @@ class MoveFileTool(Tool):
         validation_result = await self.file_security.atomic_validate_and_move(
             config, source, destination, require_exists=True, check_scope=True, resolve_symlinks=False
         )
-        if isinstance(validation_result, ToolResult):
-            return validation_result  # Error from validation
-        src, dst = validation_result  # validated source and destination paths
+        # Use centralized handler for atomic validation results
+        result = handle_atomic_result(validation_result, metadata_keys=("src", "dst"))
+        if result.is_error:
+            return result
+        # Extract data from successful result
+        src = result.metadata["src"]
+        dst = result.metadata["dst"]
 
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent
@@ -147,9 +151,11 @@ class CopyFileTool(Tool):
         validation_result = await self.file_security.atomic_validate_and_copy(
             config, source, destination, require_exists=True, check_scope=True, resolve_symlinks=False
         )
-        if isinstance(validation_result, ToolResult):
-            return validation_result  # Error from validation
-        src, dst = validation_result
+        # Use centralized handler for atomic validation results
+        result = handle_atomic_result(validation_result, metadata_keys=("src", "dst"))
+        if result.is_error:
+            return result
+        src, dst = result.metadata["src"], result.metadata["dst"]
         
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent

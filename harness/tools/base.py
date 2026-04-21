@@ -13,12 +13,48 @@ import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Optional, Tuple, Union
+from typing import Any, Callable, ClassVar, Optional, Tuple, Union, TypeVar
 
 from harness.core.config import HarnessConfig
 from harness.core.security import validate_path_security
 
 log = logging.getLogger(__name__)
+
+# Type alias for atomic validation results
+AtomicResult = Union[Tuple[str, str], "ToolResult"]
+T = TypeVar("T")
+
+
+def handle_atomic_result(result: AtomicResult, metadata_keys: Tuple[str, ...] = ("text", "resolved_path")) -> "ToolResult":
+    """Handle the result from file_security.atomic_validate_and_* methods.
+    
+    This utility centralizes the duplicated type checking logic found across
+    multiple file tools (file_read.py, file_edit.py, file_write.py, etc.).
+    
+    Args:
+        result: Either a ToolResult (error) or a tuple of values
+        metadata_keys: Names for the tuple elements when storing in metadata
+        
+    Returns:
+        ToolResult: If input is a ToolResult, returns it unchanged.
+                   If input is a tuple, returns a success ToolResult with the
+                   tuple's data stored in metadata for later extraction.
+    """
+    if isinstance(result, ToolResult):
+        return result  # Error case
+    
+    # Success case: tuple of values
+    if len(result) != len(metadata_keys):
+        return ToolResult(
+            error=f"Tuple length {len(result)} doesn't match metadata_keys length {len(metadata_keys)}",
+            is_error=True
+        )
+    
+    metadata = dict(zip(metadata_keys, result))
+    return ToolResult(
+        output="",  # Empty output for success - actual content handled by caller
+        metadata=metadata
+    )
 
 
 @dataclass

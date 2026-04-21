@@ -6,6 +6,13 @@
 ---
 
 ## [Unreleased]
+### Added
+- **FOCUS/TARGET/WHY NOW**: Add centralized error handling utility for atomic file operations to eliminate duplicated type checking logic
+- **TARGET**: harness/tools/base.py::handle_atomic_result
+- **CHANGE**: Added handle_atomic_result function and updated file tools (file_read.py, file_edit.py, file_write.py, file_ops.py) to use it
+- **RATIONALE**: Centralizes duplicated type checking logic found across multiple file tools, improving maintainability and consistency
+- **BEHAVIOR**: All file tools now use a common utility to handle results from atomic validation methods, reducing code duplication
+
 ### Fixed
 - **FOCUS/TARGET/WHY NOW**: Fix inconsistent metadata for empty files in ReadFileTool
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()

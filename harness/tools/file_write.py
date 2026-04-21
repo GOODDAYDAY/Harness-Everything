@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, handle_atomic_result
 
 
 @enforce_atomic_validation
@@ -35,7 +35,7 @@ class WriteFileTool(Tool):
         result = await self.file_security.atomic_validate_and_write(
             config, path, content, require_exists=False, check_scope=True, resolve_symlinks=False
         )
-        # atomic_validate_and_write returns ToolResult (error or success)
-        return result
+        # Use centralized handler for atomic validation results
+        return handle_atomic_result(result, metadata_keys=())
 
 

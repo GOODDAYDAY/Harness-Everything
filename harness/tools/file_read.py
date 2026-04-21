@@ -8,7 +8,7 @@ import os
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools.base import Tool, ToolResult, enforce_atomic_validation
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, handle_atomic_result
 
 
 @enforce_atomic_validation
@@ -112,10 +112,13 @@ class ReadFileTool(Tool):
         atomic_result = await self.file_security.atomic_validate_and_read(
             config, path, require_exists=True, check_scope=True, resolve_symlinks=False
         )
-        # atomic_validate_and_read returns either ToolResult (error) or tuple(text, resolved_path) - see file_security module.
-        if isinstance(atomic_result, ToolResult):
-            return atomic_result  # Error from validation or read
-        text, resolved = atomic_result
+        # Use centralized handler for atomic validation results
+        result = handle_atomic_result(atomic_result, metadata_keys=("text", "resolved_path"))
+        if result.is_error:
+            return result
+        # Extract data from successful result
+        text = result.metadata["text"]
+        resolved = result.metadata["resolved_path"]
         
 
         lines = text.splitlines(keepends=True)
