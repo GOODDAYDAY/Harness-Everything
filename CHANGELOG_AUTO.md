@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-24: Enhanced ReadFileTool type coercion validation
+- **Improved type validation**: Enhanced `ReadFileTool.execute()` to handle all edge cases of invalid offset/limit values
+- **Comprehensive error messages**: Added specific error messages for None values, empty strings, non-numeric strings, and float strings
+- **Added test coverage**: Created `test_readfile_invalid_offset_limit_types()` to verify proper rejection of invalid types with clear error messages
+- **Maintained backward compatibility**: String representations of integers ("1", "2") still work correctly
+- **Security enhancement**: Prevents confusing internal errors by catching type conversion failures early with user-friendly messages
+
 ## 2026-04-24: Verified and enhanced ReadFileTool offset validation
 - **Verified offset validation correctness**: Confirmed that offset=total+1 is correctly allowed for non-empty files (returns empty selection)
 - **Added comprehensive test**: Added `test_read_file_offset_at_total_plus_one_returns_empty()` to explicitly test offset=total+1 behavior

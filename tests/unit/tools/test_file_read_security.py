@@ -251,5 +251,64 @@ async def test_read_file_offset_at_total_plus_one_returns_empty():
         assert result.output.strip().endswith("lines 4-3 of 3")  # No numbered lines after header
 
 
+@pytest.mark.asyncio
+async def test_readfile_invalid_offset_limit_types():
+    """Test that ReadFileTool properly rejects non-integer offset/limit values with clear error messages."""
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import Mock
+    
+    tool = ReadFileTool()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file
+        file_path = workspace / "test.txt"
+        file_path.write_text("line1\nline2\nline3")
+        
+        # Create mock config
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test 1: None values
+        result = await tool.execute(config, path=str(file_path), offset=None, limit=10)
+        assert result.is_error
+        assert "offset and limit cannot be None" in result.error
+        
+        # Test 2: Empty strings
+        result = await tool.execute(config, path=str(file_path), offset="", limit="")
+        assert result.is_error
+        assert "empty string" in result.error.lower()
+        
+        # Test 3: Non-numeric strings
+        result = await tool.execute(config, path=str(file_path), offset="abc", limit="xyz")
+        assert result.is_error
+        assert "string 'abc'" in result.error
+        assert "string 'xyz'" in result.error
+        
+        # Test 4: Float strings (should fail conversion to int)
+        result = await tool.execute(config, path=str(file_path), offset="1.5", limit="2.7")
+        assert result.is_error
+        assert "must be integers" in result.error
+        
+        # Test 5: Mixed valid and invalid
+        result = await tool.execute(config, path=str(file_path), offset=1, limit="invalid")
+        assert result.is_error
+        assert "string 'invalid'" in result.error
+        
+        # Test 6: Valid values should work
+        result = await tool.execute(config, path=str(file_path), offset=1, limit=2)
+        assert not result.is_error
+        assert "lines 1-2 of 3" in result.output
+        
+        # Test 7: String representations of integers should work
+        result = await tool.execute(config, path=str(file_path), offset="2", limit="1")
+        assert not result.is_error
+        assert "lines 2-2 of 3" in result.output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

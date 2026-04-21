@@ -53,11 +53,38 @@ class ReadFileTool(Tool):
         # callers get a clear error instead of a confusing TypeError deep inside
         # arithmetic on line 57.
         try:
+            # First check if values are None (can happen with malformed JSON)
+            if offset is None or limit is None:
+                return ToolResult(
+                    error=f"offset and limit cannot be None, got offset={offset!r} limit={limit!r}",
+                    is_error=True,
+                )
+            
+            # Attempt conversion to integer
             offset = int(offset)
             limit = int(limit)
         except (TypeError, ValueError) as exc:
+            # Provide more specific error messages based on the type of failure
+            offset_type = type(offset).__name__
+            limit_type = type(limit).__name__
+            
+            # Check for common edge cases
+            if isinstance(offset, str) and not offset.strip():
+                offset_desc = "empty string"
+            elif isinstance(offset, str):
+                offset_desc = f"string '{offset}'"
+            else:
+                offset_desc = f"{offset_type} {offset!r}"
+                
+            if isinstance(limit, str) and not limit.strip():
+                limit_desc = "empty string"
+            elif isinstance(limit, str):
+                limit_desc = f"string '{limit}'"
+            else:
+                limit_desc = f"{limit_type} {limit!r}"
+            
             return ToolResult(
-                error=f"offset and limit must be integers, got offset={offset!r} limit={limit!r}: {exc}",
+                error=f"offset and limit must be integers, got offset={offset_desc}, limit={limit_desc}: {exc}",
                 is_error=True,
             )
         
