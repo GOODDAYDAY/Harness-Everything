@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Cleaned up ReadFileTool error messages for empty files
+- Removed redundant filename from error message when offset exceeds empty file length
+- Error message changed from "Offset {offset} exceeds file length (file is empty) in {filename}" to "Offset {offset} exceeds file length (file is empty)"
+- Maintains filename in error messages for non-empty files for better context
+- All existing tests continue to pass with cleaner error messages
+
 ## 2026-04-23: Fixed ReadFileTool offset validation with clearer error messages for empty files
 - Fixed offset validation bug in `ReadFileTool.execute()` by separating empty vs non-empty file validation
 - Improved error messages: "exceeds file length (file is empty)" for empty files vs "(N lines)" for non-empty files
