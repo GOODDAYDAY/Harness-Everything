@@ -462,7 +462,7 @@ def test_delete_file_atomic_validation_race_condition():
                 
                 # Verify _validate_atomic_path was called with correct parameters
                 mock_validate.assert_called_once_with(
-                    config, test_file_path_str, require_exists=True, check_scope=True
+                    config, test_file_path_str, require_exists=True, check_scope=True, resolve_symlinks=False
                 )
 
 
@@ -504,8 +504,8 @@ def test_validate_atomic_path_parameter_names():
 
 
 def test_symlink_resolution_consistent_across_tools():
-    """Test that MoveFileTool and CopyFileTool resolve symlinks like EditFileTool."""
-    # This test asserts the concrete improvement: all tools use resolve_symlinks=True
+    """Test that all file tools reject symlinks for security."""
+    # This test asserts the concrete improvement: all tools use resolve_symlinks=False
     # Read the source files directly to verify the parameter usage.
     import os
     
@@ -519,30 +519,30 @@ def test_symlink_resolution_consistent_across_tools():
     with open("harness/tools/file_read.py", "r") as f:
         read_source = f.read()
 
-    # Check that resolve_symlinks=True is present in all validation calls
+    # Check that resolve_symlinks=False is present in all validation calls for security
     # EditFileTool
-    assert "resolve_symlinks=True" in edit_source, "EditFileTool should use resolve_symlinks=True"
+    assert "resolve_symlinks=False" in edit_source, "EditFileTool should use resolve_symlinks=False to reject symlinks"
     
     # DeleteFileTool in file_ops.py
-    assert "await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "DeleteFileTool should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "DeleteFileTool should use resolve_symlinks=False to reject symlinks"
     
     # MoveFileTool source validation
-    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "MoveFileTool source validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "MoveFileTool source validation should use resolve_symlinks=False to reject symlinks"
     
     # MoveFileTool destination validation
-    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)" in ops_source, "MoveFileTool destination validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)" in ops_source, "MoveFileTool destination validation should use resolve_symlinks=False to reject symlinks"
     
     # CopyFileTool source validation
-    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=True)" in ops_source, "CopyFileTool source validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)" in ops_source, "CopyFileTool source validation should use resolve_symlinks=False to reject symlinks"
     
     # CopyFileTool destination validation
-    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=True)" in ops_source, "CopyFileTool destination validation should use resolve_symlinks=True"
+    assert "await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)" in ops_source, "CopyFileTool destination validation should use resolve_symlinks=False to reject symlinks"
     
     # WriteFileTool
-    assert "resolve_symlinks=True" in write_source, "WriteFileTool should use resolve_symlinks=True"
+    assert "resolve_symlinks=False" in write_source, "WriteFileTool should use resolve_symlinks=False to reject symlinks"
     
     # ReadFileTool
-    assert "resolve_symlinks=True" in read_source, "ReadFileTool should use resolve_symlinks=True"
+    assert "resolve_symlinks=False" in read_source, "ReadFileTool should use resolve_symlinks=False to reject symlinks"
 
 
 if __name__ == "__main__":

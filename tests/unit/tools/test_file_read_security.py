@@ -73,10 +73,11 @@ async def test_readfile_atomic_open_handles_broken_symlink():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Attempt read - should fail with appropriate error
+        # Attempt read - should fail because symlinks are rejected for security
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
-        assert "not found" in result.error.lower() or "no such file" in result.error.lower()
+        # Should reject symlink with appropriate error
+        assert "symlink" in result.error.lower() or "eloop" in str(result.error).lower() or "escapes" in result.error.lower()
 
 
 @pytest.mark.asyncio

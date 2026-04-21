@@ -50,7 +50,7 @@ class EditFileTool(Tool):
     ) -> ToolResult:
         # Use consolidated atomic validation and read
         read_result = await self._atomic_validate_and_read(
-            config, path, require_exists=True, check_scope=True, resolve_symlinks=True
+            config, path, require_exists=True, check_scope=True, resolve_symlinks=False
         )
         if isinstance(read_result, ToolResult):
             return read_result  # Error from validation or read
@@ -70,7 +70,7 @@ class EditFileTool(Tool):
         
         # Use consolidated atomic validation and write
         write_result = await self._atomic_validate_and_write(
-            config, path, new_text, require_exists=True, check_scope=True, resolve_symlinks=True
+            config, path, new_text, require_exists=True, check_scope=True, resolve_symlinks=False
         )
         if write_result.is_error:
             return write_result

@@ -33,6 +33,6 @@ class WriteFileTool(Tool):
     ) -> ToolResult:
         # Use consolidated atomic validation and write
         result = await self._atomic_validate_and_write(
-            config, path, content, require_exists=False, check_scope=True, resolve_symlinks=True
+            config, path, content, require_exists=False, check_scope=True, resolve_symlinks=False
         )
         return result
