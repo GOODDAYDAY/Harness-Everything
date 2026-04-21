@@ -42,15 +42,16 @@ jobs:
             # service's auto_push later sees a real branch to push from.
             git checkout main
             git reset --hard ${{ github.ref_name }}
-            # Sync server config from the tracked template (pipeline_server.json
-            # is gitignored so git reset doesn't touch it; this ensures config
-            # changes committed to the example template propagate automatically).
-            # v2 single-phase orchestrate config is the active default since
-            # 2026-04-21 — v1 (4-phase) preserved unchanged as the other file
-            # for comparison. Switch back by changing the filename on this line.
-            cp config/pipeline_example_self_improve_server_v2_orchestrate.json pipeline_server.json
+            # Sync server config from the tracked template (agent_server.json
+            # is gitignored; this ensures config changes committed to the
+            # example template propagate automatically).
+            # Agent mode is the active default since 2026-04-21.
+            # Previous pipeline_example_*.json files are preserved for reference;
+            # switch back by changing the cp filename and the ExecStart in
+            # deploy/harness.service.
+            cp config/agent_example_self_improve_server.json agent_server.json
             /home/ubuntu/harness-venv/bin/python -m py_compile \$(find harness -name "*.py") main.py
-            /home/ubuntu/harness-venv/bin/python -c "from harness.pipeline.pipeline_loop import PipelineConfig; c=PipelineConfig.from_dict(__import__('json').load(open('pipeline_server.json'))); print('config ok: auto_tag_at_end=%s' % c.auto_tag_at_end)"
+            /home/ubuntu/harness-venv/bin/python -c "from harness.agent import AgentConfig; c=AgentConfig.from_dict(__import__('json').load(open('agent_server.json'))); print('config ok: max_cycles=%s auto_tag_interval=%s' % (c.max_cycles, c.auto_tag_interval))"
           EOF
 
       - name: On smoke pass — advance harness-last-good tag
