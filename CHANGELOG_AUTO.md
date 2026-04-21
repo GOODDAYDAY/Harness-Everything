@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Added comprehensive test for EditFileTool empty string validation
+- Added test case `test_editfile_empty_string_to_empty_string_requires_replace_all` to verify that empty-to-empty string replacement in non-empty files requires `replace_all=True`
+- Test confirms the existing validation logic correctly rejects ambiguous no-op edits unless explicitly confirmed with `replace_all=True`
+- Test also verifies that empty-to-empty string replacement with `replace_all=True` correctly reports 0 replacements
+- All existing tests continue to pass with the new test coverage
+
 ## 2026-04-22: Enhanced empty string replacement validation in EditFileTool
 - Added explicit validation rejecting `old_str=""` and `new_str=""` unless `replace_all=True`, preventing ambiguous no-op edits
 - Fixed replacement count calculation for empty files when both old and new strings are empty (now correctly reports 0 replacements)

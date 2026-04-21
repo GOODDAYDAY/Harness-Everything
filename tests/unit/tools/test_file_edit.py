@@ -361,5 +361,44 @@ def test_editfile_empty_string_in_non_empty_file():
         assert "Replaced 0 occurrence(s)" in result.output
 
 
+def test_editfile_empty_string_to_empty_string_requires_replace_all():
+    """Test that EditFileTool requires replace_all=True for empty-to-empty string replacement in non-empty files."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a non-empty file
+        file_path = workspace / "test.txt"
+        file_path.write_text("hello world")
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test: Empty string to empty string replacement without replace_all should fail
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="",
+            replace_all=False
+        ))
+        assert result.is_error, "Empty-to-empty string replacement without replace_all should fail"
+        assert "no-op" in result.error.lower()
+        assert "replace_all=true" in result.error.lower()
+        
+        # Test: Empty string to empty string replacement with replace_all=True should work
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="",
+            replace_all=True
+        ))
+        assert not result.is_error, f"Empty-to-empty string replacement with replace_all=True should work: {result.error}"
+        assert "Replaced 0 occurrence(s)" in result.output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
