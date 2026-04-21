@@ -92,11 +92,23 @@ class AgentConfig:
     syntax_check_patterns: list[str] = field(
         default_factory=lambda: ["**/*.py"]
     )
-    # If True, each cycle ends with `git add -A && git commit` in each
-    # listed repo (relative to harness.workspace). Skipped when any
+    # If True, each cycle ends with `git add <changed paths> && git commit`
+    # in each listed repo (relative to harness.workspace). Skipped when any
     # gating hook fails.
     auto_commit: bool = True
     commit_repos: list[str] = field(default_factory=lambda: ["."])
+    # After a successful commit, push the branch to origin (or whichever
+    # remote is configured). Keep False for offline / sandboxed dev.
+    auto_push: bool = False
+    auto_push_remote: str = "origin"
+    auto_push_branch: str = "main"
+    # Every N successful cycles, create a tag + push it. Matches the
+    # PipelineLoop auto-tag mechanism so cycle tags can trigger the same
+    # deploy workflow. 0 disables tagging entirely.
+    # Tag format: <prefix>-<cycle_count>-<shortsha>, e.g. harness-r-10-a3f5d2c.
+    auto_tag_interval: int = 0
+    auto_tag_prefix: str = "harness-r"
+    auto_tag_push: bool = True
     # Artifact root — a new run_id subdirectory is created under this.
     output_dir: str = "harness_output"
     run_id: str | None = None
@@ -386,6 +398,111 @@ class AgentLoop:
             except Exception as exc:
                 log.warning("Agent: commit error in %s: %s", repo, exc)
 
+    # ---- push / tag ----
+
+    async def _auto_push_head(self, cycle: int) -> None:
+        """``git push <remote> <branch>`` from each configured repo.
+
+        Noisy-by-default — a push failure shouldn't abort the cycle loop
+        (remote could be down, credentials could have rotated, etc.), just
+        logs WARNING so the operator can see it in the normal output stream.
+        """
+        if not self.config.auto_push:
+            return
+        workspace = Path(self.config.harness.workspace)
+        for repo in self.config.commit_repos:
+            repo_path = workspace / repo if not Path(repo).is_absolute() else Path(repo)
+            if not repo_path.is_dir():
+                continue
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "push", self.config.auto_push_remote,
+                    self.config.auto_push_branch,
+                    cwd=str(repo_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    log.info("Agent: pushed cycle %d in %s", cycle + 1, repo)
+                else:
+                    log.warning(
+                        "Agent: push failed in %s: %s",
+                        repo, stderr.decode(errors="replace")[:200],
+                    )
+            except Exception as exc:
+                log.warning("Agent: push error in %s: %s", repo, exc)
+
+    async def _auto_tag_cycle(self, cycle: int) -> None:
+        """Tag HEAD after cycle N when ``cycle+1 % auto_tag_interval == 0``.
+
+        Disabled when ``auto_tag_interval`` is 0. Tag format is
+        ``<prefix>-<count>-<shortsha>`` mirroring the PipelineLoop naming
+        so any downstream CI watching ``<prefix>*`` fires identically.
+        """
+        interval = self.config.auto_tag_interval
+        if interval <= 0 or (cycle + 1) % interval != 0:
+            return
+        workspace = Path(self.config.harness.workspace)
+        for repo in self.config.commit_repos:
+            repo_path = workspace / repo if not Path(repo).is_absolute() else Path(repo)
+            if not repo_path.is_dir():
+                continue
+            try:
+                sha_proc = await asyncio.create_subprocess_exec(
+                    "git", "rev-parse", "--short=7", "HEAD",
+                    cwd=str(repo_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                sha_out, _ = await sha_proc.communicate()
+                if sha_proc.returncode != 0:
+                    log.warning("Agent: auto_tag rev-parse failed in %s", repo)
+                    continue
+                short_sha = sha_out.decode().strip()
+                tag_name = f"{self.config.auto_tag_prefix}-{cycle + 1}-{short_sha}"
+
+                tag_proc = await asyncio.create_subprocess_exec(
+                    "git", "tag", "-f", tag_name,
+                    cwd=str(repo_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, tag_err = await tag_proc.communicate()
+                if tag_proc.returncode != 0:
+                    log.warning(
+                        "Agent: auto_tag create failed in %s: %s",
+                        repo, tag_err.decode(errors="replace")[:200],
+                    )
+                    continue
+                log.info(
+                    "Agent: created tag %r in %s (cycle=%d)",
+                    tag_name, repo, cycle + 1,
+                )
+
+                if self.config.auto_tag_push:
+                    push_proc = await asyncio.create_subprocess_exec(
+                        "git", "push", self.config.auto_push_remote,
+                        tag_name,
+                        cwd=str(repo_path),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _, push_err = await push_proc.communicate()
+                    if push_proc.returncode == 0:
+                        log.info(
+                            "Agent: pushed tag %r to %s",
+                            tag_name, self.config.auto_push_remote,
+                        )
+                    else:
+                        log.warning(
+                            "Agent: tag push failed for %r: %s",
+                            tag_name,
+                            push_err.decode(errors="replace")[:200],
+                        )
+            except Exception as exc:
+                log.warning("Agent: tag error in %s: %s", repo, exc)
+
     # ---- main loop ----
 
     async def run(self) -> AgentResult:
@@ -440,6 +557,8 @@ class AgentLoop:
             changed_paths = collect_changed_paths(exec_log)
             if self.config.auto_commit and not hook_failures:
                 await self._auto_commit(cycle, text, changed_paths)
+                await self._auto_push_head(cycle)
+                await self._auto_tag_cycle(cycle)
             elif hook_failures:
                 log.warning(
                     "Agent: skipping commit for cycle %d — hook failures: %s",
