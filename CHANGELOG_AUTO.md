@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool offset validation for empty files
+- Consolidated offset validation logic in `ReadFileTool.execute()` for clarity
+- Fixed validation to correctly allow offset=1 on empty files as a valid operation
+- Combined duplicate error handling logic into a single condition for maintainability
+- Maintains existing behavior: offset=1 works on empty files, offset>1 returns error
+
 ## 2026-04-23: Fixed EditFileTool empty string replacement validation
 - Fixed validation logic in `EditFileTool.execute()` to allow empty-to-empty replacement as a no-op
 - Removed overly restrictive validation that rejected empty-to-empty replacement when `replace_all=False`
