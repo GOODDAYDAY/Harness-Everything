@@ -95,3 +95,8 @@
 - When `replace_all=False` and multiple occurrences exist, error now shows which lines contain the matches
 - Improves debugging experience by providing more context about where replacements would occur
 - All existing tests continue to pass with the enhanced error messages
+-e 
+## 2026-04-21: Enhanced cross-device copy fallback documentation in CopyFileTool
+- Improved code comments in `CopyFileTool.execute()` to better explain why `asyncio.to_thread` can fail with EXDEV for cross-device operations
+- Clarified that thread pool resource constraints or file descriptor handling issues can cause cross-device copy failures in threaded context
+- All existing tests continue to pass with the improved documentation

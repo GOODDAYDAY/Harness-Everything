@@ -164,7 +164,8 @@ class CopyFileTool(Tool):
             if exc.errno == errno.EXDEV:
                 try:
                     # Fallback for cross-device copy: use shutil.copy2 directly
-                    # (asyncio.to_thread might have issues with cross-device operations)
+                    # asyncio.to_thread can fail with EXDEV for cross-device operations
+                    # due to thread pool resource constraints or file descriptor handling
                     shutil.copy2(src, dst)
                     return ToolResult(output=f"Copied {src} -> {dst} (cross-device)")
                 except OSError as copy_exc:
