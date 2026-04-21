@@ -203,6 +203,26 @@ class CopyFileTool(Tool):
                     error=f"Cannot copy '{src}' to '{dst}': disk full (ENOSPC).",
                     is_error=True
                 )
+            if exc.errno == errno.EACCES:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': permission denied (EACCES).",
+                    is_error=True
+                )
+            if exc.errno == errno.ENOENT:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': file not found (ENOENT).",
+                    is_error=True
+                )
+            if exc.errno == errno.EISDIR:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': source is a directory, not a file (EISDIR).",
+                    is_error=True
+                )
+            if exc.errno == errno.ENOTDIR:
+                return ToolResult(
+                    error=f"Cannot copy '{src}' to '{dst}': a component in the path is not a directory (ENOTDIR).",
+                    is_error=True
+                )
             return ToolResult(error=f"Copy failed: {exc}", is_error=True)
         except Exception as exc:
             return ToolResult(error=f"Copy failed: {exc}", is_error=True)

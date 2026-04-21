@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Improved CopyFileTool error handling with user-friendly messages
+- Enhanced `CopyFileTool.execute()` to provide specific user-friendly error messages for common OS errors
+- Added handling for EACCES (permission denied), ENOENT (file not found), EISDIR (is a directory), and ENOTDIR (not a directory) errors
+- Maintains existing ENOSPC (disk full) and EXDEV (cross-device) error handling
+- Users now get actionable error messages like "Cannot copy 'source' to 'dest': permission denied (EACCES)" instead of generic "Copy failed: ..."
+- Added comprehensive test `test_copyfile_handles_os_errors_with_user_friendly_messages` to verify all error cases
+
 ## 2026-04-23: Fixed ReadFileTool offset validation to allow offset=1 on empty files
 - Fixed offset validation bug in `ReadFileTool.execute()` where offset=1 incorrectly failed on empty files
 - Modified validation logic to allow offset=1 on empty files while rejecting offset>1

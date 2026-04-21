@@ -639,5 +639,76 @@ def test_copyfile_cross_device_fallback_failure():
                     assert "Cross-device copy failed" in result.error
 
 
+def test_copyfile_handles_os_errors_with_user_friendly_messages():
+    """Test that CopyFileTool provides specific user-friendly error messages for common OS errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        source = workspace / "source.txt"
+        source.write_text("test content")
+        destination = workspace / "dest.txt"
+        
+        tool = CopyFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Mock validation to succeed - need to mock file_security.validate_atomic_path
+        with patch.object(tool.file_security, 'validate_atomic_path') as mock_validate:
+            # Also need to mock validate_and_prepare_parent_directory
+            with patch.object(tool.file_security, 'validate_and_prepare_parent_directory') as mock_parent:
+                # Mock validate_atomic_path to return success for source, destination, and any parent directory calls
+                def validate_side_effect(*args, **kwargs):
+                    # Check what path is being validated
+                    path = args[1] if len(args) > 1 else kwargs.get('path', '')
+                    if path == str(source):
+                        return (True, str(source))
+                    elif path == str(destination):
+                        return (True, str(destination))
+                    else:
+                        # For parent directory or other calls, return success
+                        return (True, path)
+                
+                mock_validate.side_effect = validate_side_effect
+                mock_parent.return_value = (True, None)  # parent directory validation succeeds
+            
+                # Test ENOSPC (disk full) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.ENOSPC, "No space left on device")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "disk full (ENOSPC)" in result.error
+                    assert "Cannot copy" in result.error
+                
+                # Test EACCES (permission denied) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.EACCES, "Permission denied")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "permission denied (EACCES)" in result.error
+                    assert "Cannot copy" in result.error
+                
+                # Test ENOENT (file not found) error - though validation should catch this earlier
+                # Note: FileNotFoundError is caught before OSError handler, so we get a different message
+                with patch('asyncio.to_thread', side_effect=OSError(errno.ENOENT, "No such file or directory")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    # FileNotFoundError is caught by specific handler before OSError handler
+                    assert "Source file disappeared after validation" in result.error
+                
+                # Test EISDIR (is a directory) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.EISDIR, "Is a directory")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "source is a directory, not a file (EISDIR)" in result.error
+                    assert "Cannot copy" in result.error
+                
+                # Test ENOTDIR (not a directory) error
+                with patch('asyncio.to_thread', side_effect=OSError(errno.ENOTDIR, "Not a directory")):
+                    result = asyncio.run(tool.execute(config, source=str(source), destination=str(destination)))
+                    assert result.is_error
+                    assert "a component in the path is not a directory (ENOTDIR)" in result.error
+                    assert "Cannot copy" in result.error
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
