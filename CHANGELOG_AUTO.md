@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed EditFileTool empty-to-empty string replacement count bug
+- Fixed bug where empty-to-empty string replacement (`old_str=""`, `new_str=""`) incorrectly reported 1 replacement instead of 0
+- Updated logic in `EditFileTool.execute()` to always return 0 replacements when both old and new strings are empty
+- Added comprehensive test case `test_editfile_empty_string_to_empty_string_in_empty_file` to verify the fix
+- All existing tests continue to pass with the corrected logic
+
 ## 2026-04-23: Fixed empty-to-empty string replacement bug in EditFileTool for empty files
 - Fixed bug where empty-to-empty string replacement (`old_str=""`, `new_str=""`) in empty files incorrectly reported 1 replacement instead of 0
 - Updated logic in `EditFileTool.execute()` to set `count = 0` (not 1) when replacing empty string with empty string in empty files

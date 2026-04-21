@@ -400,5 +400,32 @@ def test_editfile_empty_string_to_empty_string_requires_replace_all():
         assert "Replaced 0 occurrence(s)" in result.output
 
 
+def test_editfile_empty_string_to_empty_string_in_empty_file():
+    """Test that empty-to-empty replacement in empty files reports 0 replacements."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create an empty file
+        file_path = workspace / "empty.txt"
+        file_path.write_text("")
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test: Empty string to empty string replacement in empty file with replace_all=True
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="",
+            replace_all=True
+        ))
+        assert not result.is_error, f"Empty-to-empty string replacement in empty file should work: {result.error}"
+        assert "Replaced 0 occurrence(s)" in result.output, f"Expected 0 replacements for empty-to-empty in empty file, got: {result.output}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -128,10 +128,13 @@ class EditFileTool(Tool):
         
         # Calculate actual number of replacements made
         if old_str == "":
-            if text == "":
-                replaced = 1 if new_str != "" else 0
+            if new_str == "":
+                # Empty-to-empty replacement is always a no-op
+                replaced = 0
+            elif text == "":
+                replaced = 1
             else:
-                replaced = len(text) + 1 if new_str != "" else 0
+                replaced = len(text) + 1
         else:
             replaced = count if replace_all else 1
         
