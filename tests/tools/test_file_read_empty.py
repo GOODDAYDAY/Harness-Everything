@@ -37,6 +37,7 @@ async def test_read_file_empty_file_offset_validation():
         result = await tool.execute(config, path=os.path.basename(temp_path), offset=1, limit=10)
         assert not result.is_error, f"Expected success for offset=1, got error: {result.error}"
         assert result.output == "", f"Expected empty string output, got: {repr(result.output)}"
+        assert result.metadata.get("lines") == [], f"Expected lines metadata to be empty list for empty file, got: {result.metadata}"
         
         # Test 2: offset=2 should fail with appropriate error
         result2 = await tool.execute(config, path=os.path.basename(temp_path), offset=2, limit=10)
