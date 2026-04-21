@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-21: Enhanced atomicity in MoveFileTool cross-device fallback
+- Improved cross-device move fallback logic in `MoveFileTool.execute()` to ensure atomic copy+delete operations
+- Added cleanup of copied file if source deletion fails, preventing duplicate files in partial failure scenarios
+- Maintains backward compatibility while improving data integrity for cross-filesystem moves
+- All existing tests continue to pass with the enhanced atomicity guarantees
+
 ## 2026-04-21: Clarified error handling contract in file operations tools
 - Updated documentation in `base.py::_validate_and_prepare_parent_directory` to clarify that when validation fails, the second tuple element is guaranteed to be a ToolResult
 - Improved comments in `file_ops.py` MoveFileTool and CopyFileTool to reflect the guaranteed contract rather than defensive assumption

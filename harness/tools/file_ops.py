@@ -97,7 +97,22 @@ class MoveFileTool(Tool):
                 try:
                     # Fallback: copy then delete source
                     shutil.copy2(src, dst)
-                    os.unlink(src)
+                    try:
+                        os.unlink(src)
+                    except OSError as delete_exc:
+                        # If delete fails, clean up the copied file to avoid duplication
+                        try:
+                            os.unlink(dst)
+                        except OSError as cleanup_exc:
+                            # Log cleanup failure but report original delete error
+                            return ToolResult(
+                                error=f"Cross-device move failed: could not delete source ({delete_exc}), and cleanup of copied file also failed ({cleanup_exc})",
+                                is_error=True
+                            )
+                        return ToolResult(
+                            error=f"Cross-device move failed: could not delete source after successful copy ({delete_exc})",
+                            is_error=True
+                        )
                     return ToolResult(output=f"Moved {src} -> {dst} (cross-device via copy+delete)")
                 except OSError as copy_exc:
                     return ToolResult(
