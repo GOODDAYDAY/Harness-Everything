@@ -48,9 +48,16 @@
 - **Verification**: Confirmed that offset=1 is correctly allowed for empty files while other offsets are rejected
 - **Test validation**: Verified through comprehensive testing that:
   - offset=1 returns proper empty file output with "[filename] lines 1-0 of 0" header
-  - offset=2 (or higher) returns clear error: "Offset {offset} invalid for empty file {filename} (only offset=1 allowed)"
-  - offset=0 correctly fails with "offset must be ≥ 1, got 0"
-- **Consistency**: Verified that non-empty file behavior remains unchanged and correct
+
+## 2026-04-24: Fixed read_file tool to correctly handle empty files with offset=1
+- **FOCUS**: Fix read_file tool to correctly handle empty files with offset=1 (return empty content instead of error)
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute() method
+- **CHANGE**: Modified offset validation logic from `if offset > total + 1:` to `if offset > total + 1 or (total == 0 and offset > 1):`
+- **RATIONALE**: Ensures offset=1 is valid for empty files (returning empty content), while offset>1 is properly rejected with clear error message
+- **BEHAVIOR**: 
+  - Empty files with offset=1: returns successful ToolResult with empty string output
+  - Empty files with offset>1: returns error "Offset {offset} exceeds file length (0 lines)"
+  - Non-empty file behavior remains unchanged
 
 ## 2026-04-24: Fixed read_file offset validation bug for empty files
 - **Bug fix**: Corrected offset validation logic to properly allow offset=1 for empty files
