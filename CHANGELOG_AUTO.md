@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool offset validation with special handling for empty files
+- Fixed offset validation bug in `ReadFileTool.execute()` where offset=1 would fail on empty files
+- Added special handling before validation: when `total == 0 and offset == 1`, return empty output immediately
+- This allows offset=1 (the default) to succeed on empty files with proper empty output format
+- Maintains validation for offset>1 on empty files and all offsets on non-empty files
+- Updated tests verify the new behavior
+
 ## 2026-04-23: Fixed ReadFileTool offset validation logic for empty files
 - Fixed logical inconsistency in `ReadFileTool.execute()` offset validation
 - Changed condition from `if offset > total:` to `if offset > total and not (offset == 1 and total == 0):`
