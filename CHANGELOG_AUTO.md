@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-22: Enhanced empty string replacement validation in EditFileTool
+- Added explicit validation rejecting `old_str=""` and `new_str=""` unless `replace_all=True`, preventing ambiguous no-op edits
+- Fixed replacement count calculation for empty files when both old and new strings are empty (now correctly reports 0 replacements)
+- Improved clarity in replacement count logic for all empty string replacement scenarios
+- All existing tests continue to pass with the enhanced validation
+
 ## 2026-04-22: Verified and confirmed empty string replacement fix in EditFileTool
 - Verified that empty string replacement bug is already fixed in `EditFileTool.execute()`
 - When `old_str == ""`, `new_str == ""`, and `replace_all=True`, the tool correctly reports 0 replacements instead of `len(text) + 1`

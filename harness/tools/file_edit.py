@@ -56,6 +56,13 @@ class EditFileTool(Tool):
             return read_result  # Error from validation or read
         text, resolved = read_result
         
+        # Explicit validation for empty-string-to-empty-string replacement
+        if old_str == "" and new_str == "" and not replace_all:
+            return ToolResult(
+                error="Replacing empty string with empty string is a no-op and requires replace_all=True to confirm intent",
+                is_error=True
+            )
+        
         # Special handling for empty string replacement
         if old_str == "":
             # Empty string replacement is a special case
@@ -110,15 +117,20 @@ class EditFileTool(Tool):
         if old_str == "":
             # For empty string replacement, we need to calculate based on the result
             if text == "":
-                # Empty file: replacement always happens once
-                replaced = 1
-            else:
-                # For non-empty files with empty old_str:
-                # - If new_str is also empty, no replacements happen
-                # - Otherwise, len(text) + 1 replacements happen
+                # Empty file: replacement logic
                 if new_str == "":
+                    # Replacing nothing with nothing results in zero replacements
                     replaced = 0
                 else:
+                    # Insert new_str at the only position (empty file)
+                    replaced = 1
+            else:
+                # For non-empty files with empty old_str:
+                if new_str == "":
+                    # Replacing nothing with nothing results in zero replacements
+                    replaced = 0
+                else:
+                    # Insert new_str at every possible position (before each char and at end)
                     replaced = len(text) + 1
         else:
             replaced = count if replace_all else 1
