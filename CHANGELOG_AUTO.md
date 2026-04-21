@@ -83,3 +83,9 @@
 - When `asyncio.to_thread(shutil.copy2, ...)` raises EXDEV, falls back to direct `shutil.copy2` call
 - Added tests `test_copyfile_cross_device_fallback` and `test_copyfile_cross_device_fallback_failure` to verify behavior
 - Aligns CopyFileTool behavior with MoveFileTool which already has cross-device fallback
+-e 
+## 2026-04-21: Added explicit _atomic_read_text method to WriteFileTool
+- Added explicit `_atomic_read_text` method to `WriteFileTool` class that delegates to parent implementation
+- Method provides atomic file reading with TOCTOU protection for consistency with other file operation tools
+- Ensures WriteFileTool has complete API surface even though method is inherited from base class
+- Existing test `test_writefile_atomic_read_text` continues to pass with the explicit implementation
