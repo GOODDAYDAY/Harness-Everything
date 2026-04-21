@@ -148,5 +148,45 @@ async def test_readfile_respects_max_lines_limit():
         # Should read first 5000 lines
 
 
+@pytest.mark.asyncio
+async def test_readfile_offset_beyond_file_length():
+    """Test that ReadFileTool handles offset beyond file length correctly."""
+    tool = ReadFileTool()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a file with 5 lines
+        file_path = workspace / "test.txt"
+        file_path.write_text("Line 1\nLine 2\nLine 3\nLine 4\nLine 5")
+        
+        # Create mock config
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test with offset beyond file length
+        result = await tool.execute(config, path=str(file_path), offset=10, limit=5)
+        assert not result.is_error
+        # Should return empty metadata and "lines 0-0" in output
+        assert result.metadata["lines"] == []
+        assert "lines 0-0 of 5" in result.output
+        
+        # Test with offset exactly at end (line 6, file has 5 lines)
+        result2 = await tool.execute(config, path=str(file_path), offset=6, limit=5)
+        assert not result2.is_error
+        assert result2.metadata["lines"] == []
+        assert "lines 0-0 of 5" in result2.output
+        
+        # Test with offset within file for comparison
+        result3 = await tool.execute(config, path=str(file_path), offset=2, limit=2)
+        assert not result3.is_error
+        assert len(result3.metadata["lines"]) == 2
+        assert result3.metadata["lines"][0][0] == 2  # line number
+        assert result3.metadata["lines"][0][1] == "Line 2\n"  # line content
+        assert "lines 2-3 of 5" in result3.output
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
