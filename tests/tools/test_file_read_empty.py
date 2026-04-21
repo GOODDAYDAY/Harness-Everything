@@ -33,10 +33,12 @@ async def test_read_file_empty_file_offset_validation():
             return_value=("", temp_path)  # empty text, resolved path
         )
         
-        # Test 1: offset=1 should succeed with empty string output
+        # Test 1: offset=1 should succeed with formatted header output
         result = await tool.execute(config, path=os.path.basename(temp_path), offset=1, limit=10)
         assert not result.is_error, f"Expected success for offset=1, got error: {result.error}"
-        assert result.output == "", f"Expected empty string output, got: {repr(result.output)}"
+        # Empty files should return formatted header matching empty selection format
+        assert os.path.basename(temp_path) in result.output, f"Expected filename in output, got: {repr(result.output)}"
+        assert "lines 1-0 of 0" in result.output, f"Expected 'lines 1-0 of 0' in output, got: {repr(result.output)}"
         assert result.metadata.get("lines") == [], f"Expected lines metadata to be empty list for empty file, got: {result.metadata}"
         
         # Test 2: offset=2 should fail with appropriate error

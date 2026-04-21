@@ -7,6 +7,13 @@
 
 ## [Unreleased]
 ### Fixed
+- **FOCUS/TARGET/WHY NOW**: Fix empty file output format inconsistency in ReadFileTool to match non-empty file conventions
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method and tests/tools/test_file_read_empty.py
+- **CHANGE**: Updated empty file handling to return formatted header "[filename] lines 1-0 of 0\n" instead of empty string, making it consistent with empty selection format. Updated test assertions to verify new format.
+- **RATIONALE**: Empty files previously returned empty string output while non-empty files returned formatted headers, causing inconsistent output format that could break downstream consumers expecting uniform structure.
+- **BEHAVIOR**: Empty files with offset=1 now return formatted header matching empty selection convention, ensuring consistent output format across all file states.
+
+### Fixed
 - **FOCUS/TARGET/WHY NOW**: Fix ReadFileTool's offset validation for empty files to correctly handle offset=1
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method
 - **CHANGE**: Simplified offset validation condition from `if offset > total + 1 or (total == 0 and offset > 1):` to `if offset > total + 1:` and made empty file handling conditional on `offset == 1`
