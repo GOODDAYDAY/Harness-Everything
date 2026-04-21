@@ -147,7 +147,7 @@ class ReadFileTool(Tool):
             # Return empty string as output for empty files with offset=1
             return ToolResult(
                 output="",
-                metadata={"lines": []}
+                metadata={"lines": None}
             )
         # Handle empty selection (when start >= total for non-empty files)
         elif not selected:

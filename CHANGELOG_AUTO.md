@@ -5,6 +5,15 @@
 
 ---
 
+## 2026-04-24: Fixed empty file metadata inconsistency in ReadFileTool
+- **FOCUS**: Fix empty file metadata inconsistency in ReadFileTool.execute() by returning metadata={"lines": None} instead of metadata={"lines": []}
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()
+- **CHANGE**: Modified empty file handling to return metadata={"lines": None} instead of metadata={"lines": []} when total == 0
+- **RATIONALE**: Provides consistent metadata type (None vs empty list) for empty files, preventing potential downstream issues for consumers expecting consistent data types
+- **BEHAVIOR**: 
+  - Empty files with offset=1: returns metadata={"lines": None} (was {"lines": []})
+  - All other behavior remains unchanged
+
 ## 2026-04-24: Fixed empty file output handling in ReadFileTool
 - **FOCUS**: Fix empty file offset validation bug in ReadFileTool.execute() to correctly handle offset=1 for empty files
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()
