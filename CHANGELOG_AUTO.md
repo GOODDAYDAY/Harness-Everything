@@ -22,6 +22,11 @@
 - **Maintained backward compatibility**: String representations of integers ("1", "2") still work correctly
 - **Security enhancement**: Prevents confusing internal errors by catching type conversion failures early with user-friendly messages
 
+## 2026-04-21: Improved ReadFileTool error message precision
+- **Clearer error messages**: Enhanced error messages to clearly indicate which parameter (offset or limit) failed integer conversion
+- **Better debugging**: Users now get specific error messages like "offset must be an integer" or "limit must be an integer" instead of generic "offset and limit must be integers"
+- **Maintained functionality**: All existing type coercion and validation logic preserved with improved user experience
+
 ## 2026-04-24: Verified and enhanced ReadFileTool offset validation
 - **Verified offset validation correctness**: Confirmed that offset=total+1 is correctly allowed for non-empty files (returns empty selection)
 - **Added comprehensive test**: Added `test_read_file_offset_at_total_plus_one_returns_empty()` to explicitly test offset=total+1 behavior

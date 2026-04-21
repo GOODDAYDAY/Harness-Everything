@@ -60,31 +60,40 @@ class ReadFileTool(Tool):
                     is_error=True,
                 )
             
-            # Attempt conversion to integer
-            offset = int(offset)
-            limit = int(limit)
-        except (TypeError, ValueError) as exc:
-            # Provide more specific error messages based on the type of failure
-            offset_type = type(offset).__name__
-            limit_type = type(limit).__name__
+            # Attempt conversion to integer - try each separately for better error messages
+            try:
+                offset = int(offset)
+            except (TypeError, ValueError) as offset_exc:
+                # Provide specific error for offset conversion failure
+                if isinstance(offset, str) and not offset.strip():
+                    offset_desc = "empty string"
+                elif isinstance(offset, str):
+                    offset_desc = f"string '{offset}'"
+                else:
+                    offset_desc = f"{type(offset).__name__} {offset!r}"
+                return ToolResult(
+                    error=f"offset must be an integer, got {offset_desc}: {offset_exc}",
+                    is_error=True,
+                )
             
-            # Check for common edge cases
-            if isinstance(offset, str) and not offset.strip():
-                offset_desc = "empty string"
-            elif isinstance(offset, str):
-                offset_desc = f"string '{offset}'"
-            else:
-                offset_desc = f"{offset_type} {offset!r}"
-                
-            if isinstance(limit, str) and not limit.strip():
-                limit_desc = "empty string"
-            elif isinstance(limit, str):
-                limit_desc = f"string '{limit}'"
-            else:
-                limit_desc = f"{limit_type} {limit!r}"
-            
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError) as limit_exc:
+                # Provide specific error for limit conversion failure
+                if isinstance(limit, str) and not limit.strip():
+                    limit_desc = "empty string"
+                elif isinstance(limit, str):
+                    limit_desc = f"string '{limit}'"
+                else:
+                    limit_desc = f"{type(limit).__name__} {limit!r}"
+                return ToolResult(
+                    error=f"limit must be an integer, got {limit_desc}: {limit_exc}",
+                    is_error=True,
+                )
+        except Exception as exc:
+            # Catch any other unexpected exceptions
             return ToolResult(
-                error=f"offset and limit must be integers, got offset={offset_desc}, limit={limit_desc}: {exc}",
+                error=f"Unexpected error converting offset/limit to integers: {exc}",
                 is_error=True,
             )
         
