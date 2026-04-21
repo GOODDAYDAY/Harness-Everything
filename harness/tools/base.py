@@ -291,6 +291,98 @@ class FileSecurity:
                 is_error=True
             )
 
+    @staticmethod
+    async def atomic_validate_and_move(
+        config: HarnessConfig,
+        source: str,
+        destination: str,
+        require_exists: bool = True,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> Tuple[str, str] | ToolResult:
+        """Atomically validate source and destination paths for a move operation.
+        
+        Returns: (validated_source_path, validated_destination_path) on success,
+                 ToolResult on error.
+        """
+        # Validate source path atomically
+        validation_kwargs = {
+            "require_exists": require_exists,
+            "check_scope": check_scope,
+            "resolve_symlinks": resolve_symlinks,
+        }
+        
+        from harness.tools.base import Tool  # Import here to avoid circular import
+        is_valid_src, src_validated = await FileSecurity.validate_atomic_path(config, source, **validation_kwargs)
+        if not is_valid_src:
+            # src_validated is a ToolResult when is_valid_src is False
+            if isinstance(src_validated, ToolResult):
+                return src_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(src_validated), is_error=True)
+        
+        # Validate destination path atomically
+        # require_exists=False because destination may not exist yet
+        is_valid_dst, dst_validated = await FileSecurity.validate_atomic_path(
+            config, destination, require_exists=False, check_scope=check_scope, resolve_symlinks=resolve_symlinks
+        )
+        if not is_valid_dst:
+            # dst_validated is a ToolResult when is_valid_dst is False
+            if isinstance(dst_validated, ToolResult):
+                return dst_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(dst_validated), is_error=True)
+        
+        return src_validated, dst_validated
+
+    @staticmethod
+    async def atomic_validate_and_copy(
+        config: HarnessConfig,
+        source: str,
+        destination: str,
+        require_exists: bool = True,
+        check_scope: bool = True,
+        resolve_symlinks: bool = False
+    ) -> Tuple[str, str] | ToolResult:
+        """Atomically validate source and destination paths for a copy operation.
+        
+        Returns: (validated_source_path, validated_destination_path) on success,
+                 ToolResult on error.
+        """
+        # Validate source path atomically
+        validation_kwargs = {
+            "require_exists": require_exists,
+            "check_scope": check_scope,
+            "resolve_symlinks": resolve_symlinks,
+        }
+        
+        from harness.tools.base import Tool  # Import here to avoid circular import
+        is_valid_src, src_validated = await FileSecurity.validate_atomic_path(config, source, **validation_kwargs)
+        if not is_valid_src:
+            # src_validated is a ToolResult when is_valid_src is False
+            if isinstance(src_validated, ToolResult):
+                return src_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(src_validated), is_error=True)
+        
+        # Validate destination path atomically
+        # require_exists=False because destination may not exist yet
+        is_valid_dst, dst_validated = await FileSecurity.validate_atomic_path(
+            config, destination, require_exists=False, check_scope=check_scope, resolve_symlinks=resolve_symlinks
+        )
+        if not is_valid_dst:
+            # dst_validated is a ToolResult when is_valid_dst is False
+            if isinstance(dst_validated, ToolResult):
+                return dst_validated
+            else:
+                # This shouldn't happen, but handle defensively
+                return ToolResult(error=str(dst_validated), is_error=True)
+        
+        return src_validated, dst_validated
+
 
 class Tool(ABC):
     """Base class for all harness tools.
