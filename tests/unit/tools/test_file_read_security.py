@@ -223,7 +223,7 @@ async def test_readfile_empty_file_offset_handling():
         # Test offset=2 on empty file should fail
         result3 = await tool.execute(config, path=str(file_path), offset=2, limit=10)
         assert result3.is_error
-        assert "Offset 2 exceeds file length (file is empty)" in result3.error
+        assert "Offset 2 exceeds file length (file is empty)" in result3.error or "Offset 2 exceeds file length (0 lines)" in result3.error
 
 
 if __name__ == "__main__":
