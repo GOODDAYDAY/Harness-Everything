@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool confusing offset behavior
+- Fixed confusing output like "lines 10-9 of 5" when offset exceeds file length
+- `ReadFileTool.execute()` now returns clear error message when offset > total_lines
+- Updated `test_readfile_offset_beyond_file_length` test to expect error instead of empty results
+- Improves user experience by providing clear feedback for invalid offset values
+
 ## 2026-04-23: Enhanced MoveFileTool and CopyFileTool documentation for atomic validation
 - Updated comments in `MoveFileTool.execute()` and `CopyFileTool.execute()` to accurately reflect that both source AND destination paths are validated atomically
 - Previously misleading comments only mentioned source validation, but both tools already had full atomic validation for both paths

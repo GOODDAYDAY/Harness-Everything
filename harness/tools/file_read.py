@@ -82,10 +82,18 @@ class ReadFileTool(Tool):
         
 
         lines = text.splitlines(keepends=True)
-
+        total = len(lines)
+        
+        # Validate that offset is within file bounds
+        if offset > total:
+            filename = os.path.basename(resolved)
+            return ToolResult(
+                error=f"Offset {offset} exceeds file length ({total} lines) in {filename}",
+                is_error=True
+            )
+        
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
-        total = len(lines)
         
         # Handle empty selection (when start >= total)
         if not selected:
