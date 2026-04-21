@@ -276,7 +276,7 @@ def test_editfile_empty_string_in_empty_file():
             new_str="prefix "
         ))
         assert result.is_error, "Should require replace_all=True for empty string in non-empty file"
-        assert "appears" in result.error.lower() and "times" in result.error.lower()
+        assert "requires replace_all=true" in result.error.lower() and "ambiguity" in result.error.lower()
         
         # Test 3: Replace empty string with content in non-empty file with replace_all=True (should work)
         result = asyncio.run(tool.execute(
@@ -289,6 +289,60 @@ def test_editfile_empty_string_in_empty_file():
         assert not result.is_error, f"Should allow empty string replacement with replace_all=True: {result.error}"
         # With replace_all=True, empty string gets replaced before each character
         assert file_path.read_text().startswith("prefix ")
+
+
+def test_editfile_empty_string_in_non_empty_file():
+    """Test that EditFileTool correctly handles empty string replacement in non-empty files."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a non-empty file
+        file_path = workspace / "test.txt"
+        file_path.write_text("hello world")
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test 1: Empty string replacement without replace_all should fail with clear error
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="X"
+        ))
+        assert result.is_error, "Empty string replacement without replace_all should fail"
+        assert "requires replace_all=true" in result.error.lower()
+        assert "ambiguity" in result.error.lower()
+        
+        # Test 2: Empty string replacement with replace_all=True should work
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="X",
+            replace_all=True
+        ))
+        assert not result.is_error, f"Empty string replacement with replace_all=True should work: {result.error}"
+        # Empty string gets replaced at every position: before h, between h and e, etc.
+        assert file_path.read_text() == "XhXeXlXlXoX XwXoXrXlXdX"
+        
+        # Test 3: Verify the file still has the modified content
+        assert file_path.read_text() == "XhXeXlXlXoX XwXoXrXlXdX"
+        
+        # Test 4: Test with different content
+        file_path.write_text("ab")
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="-",
+            replace_all=True
+        ))
+        assert not result.is_error
+        assert file_path.read_text() == "-a-b-"
 
 
 if __name__ == "__main__":

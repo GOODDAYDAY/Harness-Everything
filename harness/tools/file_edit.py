@@ -67,6 +67,11 @@ class EditFileTool(Tool):
             else:
                 # Non-empty file: count is ambiguous with str.count("")
                 # It returns len(text) + 1, which doesn't match user intuition
+                if not replace_all:
+                    return ToolResult(
+                        error="Empty string replacement in non-empty files requires replace_all=True due to ambiguity",
+                        is_error=True
+                    )
                 count = len(text) + 1
         else:
             count = text.count(old_str)
