@@ -150,7 +150,7 @@ class ReadFileTool(Tool):
             filename = os.path.basename(resolved)
             header = f"[{filename}] lines {offset}-{offset-1} of {total}\n"
             numbered = ""
-            lines_metadata = []
+            lines_metadata = []  # Empty selection: no lines returned
         else:
             numbered = "".join(
                 f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)

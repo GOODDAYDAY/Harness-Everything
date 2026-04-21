@@ -21,6 +21,13 @@
 - **BEHAVIOR**: All file tools now use a common utility to handle results from atomic validation methods, reducing code duplication
 
 ### Fixed
+- **FOCUS/TARGET/WHY NOW**: Ensure consistent metadata format in ReadFileTool for empty selection cases
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()
+- **CHANGE**: Added explicit comment clarifying metadata handling for empty selection case and verified all code paths return consistent metadata format
+- **RATIONALE**: Ensures all execution paths (empty file, empty selection, normal selection) return metadata with consistent structure, preventing potential downstream issues
+- **BEHAVIOR**: All execution paths now explicitly document and return metadata={"lines": [...]} with appropriate content (empty list for no lines, list of tuples for selected lines)
+
+### Fixed
 - **FOCUS/TARGET/WHY NOW**: Fix syntax error in calculate_critical_range_discrimination function
 - **TARGET**: harness/evaluation/metrics.py::calculate_critical_range_discrimination()
 - **CHANGE**: Verified and confirmed the list comprehension for filtering critical scores is complete and syntactically correct
