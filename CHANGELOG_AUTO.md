@@ -6,6 +6,13 @@
 ---
 
 ## [Unreleased]
+### Fixed
+- **FOCUS/TARGET/WHY NOW**: Fix ReadFileTool's offset validation for empty files to correctly handle offset=1
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method
+- **CHANGE**: Simplified offset validation condition from `if offset > total + 1 or (total == 0 and offset > 1):` to `if offset > total + 1:` and made empty file handling conditional on `offset == 1`
+- **RATIONALE**: The tool now correctly returns success with empty output for offset=1 on empty files, while offset>1 returns a clear error. Previously, offset=1 on empty files would incorrectly fail with an "offset exceeds file length" error.
+- **BEHAVIOR**: Empty files with offset=1 return empty output, offset>1 returns error "Offset {offset} exceeds file length (0 lines)"
+
 ### Added
 - **FOCUS/TARGET/WHY NOW**: Add centralized error handling utility for atomic file operations to eliminate duplicated type checking logic
 - **TARGET**: harness/tools/base.py::handle_atomic_result
