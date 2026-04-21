@@ -45,3 +45,13 @@ test_*.py.bak
 
 # Intelligence probe results — append-only runtime artifact, not source
 benchmarks/evaluator_calibration/probe_results.jsonl
+
+# Claude Code per-project settings — never committed
+.claude/
+
+# Agent / pipeline run logs — transient debug output
+_agent_run*.log
+_*_run.log
+
+# External reference docs the user pasted in during sessions — keep local, never in git
+docs/external_reference/

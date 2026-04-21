@@ -328,8 +328,16 @@ class AgentLoop:
 
     # ---- commit ----
 
-    async def _auto_commit(self, cycle: int, agent_text: str) -> None:
-        """Run ``git add -A && git commit`` in each configured repo."""
+    async def _auto_commit(
+        self, cycle: int, agent_text: str, changed_paths: list[str],
+    ) -> None:
+        """Stage only the paths the agent touched, then commit in each repo.
+
+        Using ``git add <path>`` instead of ``git add -A`` keeps unrelated
+        untracked files (editor settings, local debug logs, external-reference
+        docs, etc.) out of the commit. Empty changed_paths still produces an
+        allow-empty commit so the cycle is recorded in the log.
+        """
         workspace = Path(self.config.harness.workspace)
         summary_line = agent_text.strip().splitlines()[0][:80] if agent_text.strip() else ""
         msg = f"agent: cycle {cycle + 1}"
@@ -342,13 +350,22 @@ class AgentLoop:
                 log.warning("Agent: commit_repos entry not found: %s", repo_path)
                 continue
             try:
-                add = await asyncio.create_subprocess_exec(
-                    "git", "add", "-A",
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await add.communicate()
+                if changed_paths:
+                    # ``git add -- <paths>`` records deletions too when the
+                    # path is gone, so delete_file / move_file sources
+                    # correctly show up as removals in the commit.
+                    add = await asyncio.create_subprocess_exec(
+                        "git", "add", "--", *changed_paths,
+                        cwd=str(repo_path),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    _, add_err = await add.communicate()
+                    if add.returncode != 0:
+                        log.warning(
+                            "Agent: git add failed in %s: %s",
+                            repo, add_err.decode(errors="replace")[:200],
+                        )
                 commit = await asyncio.create_subprocess_exec(
                     "git", "commit", "--allow-empty", "-m", msg,
                     cwd=str(repo_path),
@@ -357,7 +374,10 @@ class AgentLoop:
                 )
                 _, stderr = await commit.communicate()
                 if commit.returncode == 0:
-                    log.info("Agent: committed cycle %d in %s", cycle + 1, repo)
+                    log.info(
+                        "Agent: committed cycle %d in %s (%d path(s))",
+                        cycle + 1, repo, len(changed_paths),
+                    )
                 else:
                     log.warning(
                         "Agent: commit failed in %s: %s",
@@ -412,9 +432,14 @@ class AgentLoop:
             # 3. post-cycle hooks
             hook_failures = await self._run_hooks(cycle, exec_log)
 
-            # 4. auto-commit (only when all gating hooks passed)
+            # 4. auto-commit (only when all gating hooks passed). Stage the
+            # exact paths the agent's tool log declares it touched, not
+            # `git add -A` — unrelated untracked files (Claude Code settings,
+            # run logs, external-reference docs) would otherwise sneak into
+            # the commit.
+            changed_paths = collect_changed_paths(exec_log)
             if self.config.auto_commit and not hook_failures:
-                await self._auto_commit(cycle, text)
+                await self._auto_commit(cycle, text, changed_paths)
             elif hook_failures:
                 log.warning(
                     "Agent: skipping commit for cycle %d — hook failures: %s",
