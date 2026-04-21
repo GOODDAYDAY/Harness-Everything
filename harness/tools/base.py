@@ -206,7 +206,7 @@ class Tool(ABC):
             fd = os.open(resolved, flags)
         except OSError as exc:
             if exc.errno == errno.ELOOP:
-                return False, ToolResult(error=f"Symlink resolution escapes allowed directory: {resolved}", is_error=True)
+                return False, ToolResult(error=f"Symlinks are not allowed: {resolved}", is_error=True)
             elif exc.errno == errno.ENOENT:
                 if require_exists:
                     return False, ToolResult(error=f"File not found: {resolved}", is_error=True)

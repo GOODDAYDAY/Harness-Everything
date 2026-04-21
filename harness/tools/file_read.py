@@ -79,6 +79,11 @@ class ReadFileTool(Tool):
         if isinstance(atomic_result, ToolResult):
             return atomic_result  # Error from validation or read
         text, resolved = atomic_result
+        
+        # Explicit symlink rejection for additional safety
+        import os
+        if os.path.islink(resolved):
+            return ToolResult(error=f"Symlinks are not allowed: {resolved}", is_error=True)
         lines = text.splitlines(keepends=True)
 
         start = max(offset - 1, 0)

@@ -37,10 +37,10 @@ async def test_readfile_atomic_open_prevents_symlink_swap():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Test 1: Reading through a symlink should fail with O_NOFOLLOW
+        # Test 1: Reading through a symlink should fail with explicit symlink rejection
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
-        assert "symlink" in result.error.lower() or "ELOOP" in str(result.error)
+        assert "symlinks are not allowed" in result.error.lower()
         
         # Test 2: Replace symlink target after validation would occur
         # In a real attack, an attacker would swap the symlink target
@@ -52,7 +52,7 @@ async def test_readfile_atomic_open_prevents_symlink_swap():
         # Attempt read - should fail because symlinks are rejected
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
-        assert "symlink" in result.error.lower() or "ELOOP" in str(result.error)
+        assert "symlinks are not allowed" in result.error.lower()
 
 
 @pytest.mark.asyncio
@@ -76,8 +76,8 @@ async def test_readfile_atomic_open_handles_broken_symlink():
         # Attempt read - should fail because symlinks are rejected for security
         result = await tool.execute(config, path=str(symlink_path))
         assert result.is_error
-        # Should reject symlink with appropriate error
-        assert "symlink" in result.error.lower() or "eloop" in str(result.error).lower() or "escapes" in result.error.lower()
+        # Should reject symlink with explicit error message
+        assert "symlinks are not allowed" in result.error.lower()
 
 
 @pytest.mark.asyncio

@@ -71,4 +71,9 @@
 - **Enhanced**: Unicode homoglyph security guard in `base.py::_validate_path` now has explicit test verification
 - **Cleaned**: Removed dead `tempfile` import from `tests/test_path_security.py`
 - **Improved**: `test_unicode_normalization_attack` now has concrete assertions instead of passive print statements
-- **Verified**: All path security tests pass with stricter validation checks
+- **Verified**: All path security tests pass with stricter validation checks-e 
+## 2026-04-16: Explicit symlink rejection in ReadFileTool
+- Added explicit symlink rejection check in `ReadFileTool.execute()` for additional security
+- Updated error message in `_validate_atomic_path_sync` to "Symlinks are not allowed" for clarity
+- Updated security tests to expect the new explicit error message
+- Maintains TOCTOU protection while providing clearer error messages
