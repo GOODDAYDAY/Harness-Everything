@@ -73,7 +73,7 @@ class ReadFileTool(Tool):
             )
 
         # Combined atomic validation and read
-        atomic_result = await self._validate_and_read_atomic(
+        atomic_result = await self._atomic_validate_and_read(
             config, path, require_exists=True, check_scope=True, resolve_symlinks=True
         )
         if isinstance(atomic_result, ToolResult):

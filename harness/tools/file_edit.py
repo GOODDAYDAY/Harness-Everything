@@ -48,25 +48,14 @@ class EditFileTool(Tool):
         new_str: str,
         replace_all: bool = False,
     ) -> ToolResult:
-        # Use atomic validation for source file to prevent TOCTOU attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=True, check_scope=True, resolve_symlinks=True)
-        if not is_valid_path:
-            return path_validated  # This is the ToolResult error
-        resolved = path_validated
-
-        # Validate parent directory atomically to prevent TOCTOU symlink attacks
-        parent_dir = Path(resolved).parent
-        if str(parent_dir) != ".":  # Skip if parent is current directory
-            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
-                config, str(parent_dir), require_exists=True, check_scope=True, resolve_symlinks=True
-            )
-            if not is_valid_parent:
-                return parent_result  # This is a ToolResult error
-
-        # Use the shared atomic read helper
-        text, read_error = await self._atomic_read_text(config, resolved)
-        if read_error is not None:
-            return read_error
+        # Use consolidated atomic validation and read
+        read_result = await self._atomic_validate_and_read(
+            config, path, require_exists=True, check_scope=True, resolve_symlinks=True
+        )
+        if isinstance(read_result, ToolResult):
+            return read_result  # Error from validation or read
+        text, resolved = read_result
+        
         count = text.count(old_str)
 
         if count == 0:
@@ -79,10 +68,12 @@ class EditFileTool(Tool):
 
         new_text = text.replace(old_str, new_str, -1 if replace_all else 1)
         
-        # Write back using the new async atomic helper
-        write_error = await self._atomic_write_text(resolved, new_text)
-        if write_error is not None:
-            return write_error
+        # Use consolidated atomic validation and write
+        write_result = await self._atomic_validate_and_write(
+            config, path, new_text, require_exists=True, check_scope=True, resolve_symlinks=True
+        )
+        if write_result.is_error:
+            return write_result
         
         replaced = count if replace_all else 1
         return ToolResult(output=f"Replaced {replaced} occurrence(s) in {resolved}")

@@ -31,26 +31,8 @@ class WriteFileTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, path: str, content: str
     ) -> ToolResult:
-        # Use atomic validation for target file to prevent TOCTOU attacks
-        # require_exists=False because the file may not exist yet
-        # Atomic validation with resolve_symlinks=True prevents TOCTOU symlink attacks
-        is_valid_path, path_validated = await self._validate_atomic_path(config, path, require_exists=False, check_scope=True, resolve_symlinks=True)
-        if not is_valid_path:
-            return path_validated  # This is the ToolResult error
-        resolved = path_validated
-
-        # Validate parent directory atomically to prevent TOCTOU symlink attacks
-        parent_dir = Path(resolved).parent
-        if str(parent_dir) != ".":  # Skip if parent is current directory
-            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
-                config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=True
-            )
-            if not is_valid_parent:
-                return parent_result  # This is a ToolResult error
-
-        # Write back using the async atomic helper
-        write_error = await self._atomic_write_text(resolved, content)
-        if write_error is not None:
-            return write_error
-        
-        return ToolResult(output=f"Wrote {len(content)} bytes to {resolved}")
+        # Use consolidated atomic validation and write
+        result = await self._atomic_validate_and_write(
+            config, path, content, require_exists=False, check_scope=True, resolve_symlinks=True
+        )
+        return result
