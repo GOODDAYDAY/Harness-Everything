@@ -275,6 +275,24 @@ _WRITE_TOOLS = frozenset({
     "batch_edit", "batch_write",
 })
 
+# Tools that don't mutate shared state and can be executed in parallel within
+# a single LLM turn. Pure-function / read-filesystem / search / analysis
+# tools only — anything that writes files, runs shell commands, or hits the
+# network must stay sequential.
+_READ_ONLY_TOOL_NAMES = frozenset({
+    # file / directory reads
+    "batch_read", "read_file", "tree", "list_directory", "diff_files",
+    # search / grep
+    "grep_search", "glob_search", "feature_search", "todo_scan",
+    # git reads (no --write)
+    "git_status", "git_diff", "git_log", "git_search",
+    # static analysis (no side effects)
+    "code_analysis", "symbol_extractor", "cross_reference",
+    "data_flow", "call_graph", "dependency_analyzer",
+    # misc read/transform
+    "json_transform", "tool_discovery", "scratchpad",
+})
+
 
 def _paths_written_by(name: str, params: dict[str, Any]) -> list[str]:
     """Extract the set of paths a write-class tool will mutate.
@@ -545,6 +563,11 @@ class LLM:
             kwargs["api_key"] = api_key
         log.info("LLM client: base_url=%s model=%s", base_url or "(default)", config.model)
         self.client = anthropic.AsyncAnthropic(**kwargs)
+        # API-concurrency cap: clamp the configured value into [1, 20] so a
+        # misconfigured 0 doesn't deadlock every caller and an accidentally-huge
+        # value doesn't ignore the underlying provider's rate limit.
+        _max_cc = max(1, min(int(getattr(config, "max_concurrent_llm_calls", 4)), 20))
+        self._api_semaphore = asyncio.Semaphore(_max_cc)
 
     async def call(
         self,
@@ -572,12 +595,17 @@ class LLM:
             kwargs["tools"] = tools
 
         t0 = time.monotonic()
-        resp = await _call_with_retry(
-            lambda: asyncio.wait_for(
-                self.client.messages.create(**kwargs),
-                timeout=timeout,
+        # Gate every API call through the per-process semaphore so the
+        # provider's rate limit is respected even when multiple pipeline
+        # tasks (debate parallel rounds, dual evaluators, planner three-way)
+        # fire simultaneously.
+        async with self._api_semaphore:
+            resp = await _call_with_retry(
+                lambda: asyncio.wait_for(
+                    self.client.messages.create(**kwargs),
+                    timeout=timeout,
+                )
             )
-        )
         elapsed = time.monotonic() - t0
 
         text_parts: list[str] = []
@@ -680,9 +708,28 @@ class LLM:
         # Set relative to max_tokens so it scales with the configured budget.
         _TOKEN_SPEND_WARN = self.config.max_tokens * 4
 
+        # Accumulated scratchpad notes — the LLM can call the scratchpad tool
+        # to save findings that survive conversation pruning. We re-inject
+        # them into the system prompt on every turn.
+        scratchpad_notes: list[str] = []
+
         for turn in range(max_turns):
             turn_start = time.monotonic()
-            resp = await self.call(conversation, system=system, tools=tools_schema)
+            # Build the effective system prompt — original + any scratchpad
+            # notes accumulated this loop. The notes sit at the top because
+            # that's the highest-attention region across models and survives
+            # any future mid-conversation truncation.
+            if scratchpad_notes:
+                notes_block = (
+                    f"## Your Exploration Notes ({len(scratchpad_notes)} entr"
+                    f"{'ies' if len(scratchpad_notes) != 1 else 'y'})\n"
+                    + "\n".join(f"- {n}" for n in scratchpad_notes)
+                    + "\n\n"
+                )
+                effective_system = notes_block + (system or "")
+            else:
+                effective_system = system
+            resp = await self.call(conversation, system=effective_system, tools=tools_schema)
             turn_elapsed = time.monotonic() - turn_start
 
             # Accumulate token counts for the end-of-loop summary
@@ -768,13 +815,101 @@ class LLM:
                 )
                 return resp.text, execution_log
 
-            # Execute tools and build tool_result message
-            tool_results: list[dict[str, Any]] = []
-            for tc in resp.tool_calls:
-                result: ToolResult = await cached_registry.execute(
-                    tc["name"], self.config, tc["input"]
+            # Classify this turn's tool calls into three lanes:
+            #   scratchpad  — intercepted here (no I/O); the note gets saved
+            #                 and re-injected into the system prompt next turn
+            #   read-only   — pure reads/search/analysis; run in parallel via
+            #                 asyncio.gather
+            #   mutating    — edits / writes / bash / subprocess; run serially
+            #                 because order and exclusive filesystem access matter
+            # Results are keyed by the original tool_use index so the returned
+            # tool_result blocks preserve the order the API expects.
+            results_by_index: dict[int, tuple[ToolResult, dict[str, Any]]] = {}
+
+            read_only_tasks: list[tuple[int, dict[str, Any]]] = []
+            mutating_calls: list[tuple[int, dict[str, Any]]] = []
+
+            for idx, tc in enumerate(resp.tool_calls):
+                name = tc["name"]
+                if name == "scratchpad":
+                    # Handle inline — no I/O, no registry call.
+                    note_raw = (tc.get("input") or {}).get("note", "")
+                    note = str(note_raw).strip() if note_raw is not None else ""
+                    if not note:
+                        result = ToolResult(
+                            error="note cannot be empty", is_error=True
+                        )
+                    else:
+                        # Clip to the same cap the tool declares so we don't
+                        # silently grow the system prompt without bound.
+                        cap = 2000
+                        if len(note) > cap:
+                            note = note[:cap] + "… [truncated]"
+                        scratchpad_notes.append(note)
+                        result = ToolResult(
+                            output=(
+                                f"[scratchpad] saved ({len(note)} chars). "
+                                f"Will be re-injected into your system prompt "
+                                f"on every subsequent turn this loop."
+                            ),
+                            metadata={"note": note},
+                        )
+                    results_by_index[idx] = (result, tc)
+                elif name in _READ_ONLY_TOOL_NAMES:
+                    read_only_tasks.append((idx, tc))
+                else:
+                    mutating_calls.append((idx, tc))
+
+            # Read-only batch: run in parallel.
+            if read_only_tasks:
+                _ro_t0 = time.monotonic()
+                coros = [
+                    cached_registry.execute(
+                        tc["name"], self.config, tc["input"],
+                    )
+                    for _, tc in read_only_tasks
+                ]
+                ro_results = await asyncio.gather(*coros, return_exceptions=True)
+                for (idx, tc), res in zip(read_only_tasks, ro_results):
+                    if isinstance(res, BaseException):
+                        res = ToolResult(
+                            error=f"{type(res).__name__}: {res}",
+                            is_error=True,
+                        )
+                    results_by_index[idx] = (res, tc)
+                _ro_elapsed = time.monotonic() - _ro_t0
+                log.info(
+                    "  parallel_tools: %d read-only in %.2fs",
+                    len(read_only_tasks), _ro_elapsed,
                 )
-                # Log a concise one-liner per tool call with key path/command info
+
+            # Mutating calls: run sequentially — filesystem mutations and
+            # shell commands cannot be safely interleaved with each other.
+            if mutating_calls:
+                _mu_t0 = time.monotonic()
+                for idx, tc in mutating_calls:
+                    try:
+                        res = await cached_registry.execute(
+                            tc["name"], self.config, tc["input"],
+                        )
+                    except BaseException as exc:
+                        res = ToolResult(
+                            error=f"{type(exc).__name__}: {exc}",
+                            is_error=True,
+                        )
+                    results_by_index[idx] = (res, tc)
+                _mu_elapsed = time.monotonic() - _mu_t0
+                if len(mutating_calls) > 1:
+                    log.info(
+                        "  sequential_tools: %d mutating in %.2fs",
+                        len(mutating_calls), _mu_elapsed,
+                    )
+
+            # Emit results IN ORIGINAL ORDER — Anthropic requires tool_result
+            # blocks to match tool_use block order 1:1.
+            tool_results: list[dict[str, Any]] = []
+            for idx in range(len(resp.tool_calls)):
+                result, tc = results_by_index[idx]
                 call_detail = _summarise_tool_input(tc["name"], tc["input"])
                 if result.is_error:
                     log.warning(
