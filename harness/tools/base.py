@@ -677,8 +677,8 @@ class Tool(ABC):
         if str(parent_dir) != ".":  # Skip if parent is current directory
             is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
                 config, str(parent_dir), 
-                require_exists=not require_exists,  # For writes, parent may not exist
-                check_scope=check_scope, 
+                require_exists=False,  # For writes, parent may not exist and should be created
+                check_scope=False,  # Don't check parent directory against glob patterns - only check the file path
                 resolve_symlinks=resolve_symlinks
             )
             if not is_valid_parent:
