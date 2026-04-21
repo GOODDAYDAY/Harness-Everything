@@ -1,8 +1,9 @@
 """Harness-Everything entry point.
 
-Two modes:
+Three modes:
   Simple:   python main.py "task description" [config.json]
   Pipeline: python main.py --pipeline pipeline_config.json
+  Agent:    python main.py --agent agent_config.json
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import logging
 import sys
 from pathlib import Path
 
+from harness.agent import AgentConfig, AgentLoop
 from harness.core.config import HarnessConfig, PipelineConfig
 from harness.pipeline.simple_loop import HarnessLoop
 from harness.pipeline.pipeline_loop import PipelineLoop
@@ -98,6 +100,41 @@ async def run_pipeline(config: PipelineConfig, config_path: str | None = None) -
 
 
 # ===========================================================================
+# Agent mode
+# ===========================================================================
+
+
+async def run_agent(config: AgentConfig) -> int:
+    """Run the autonomous agent. Returns the process exit code.
+
+    Exit codes mirror pipeline mode for systemd compatibility:
+      0 — mission complete OR at least one cycle produced work
+      2 — nothing happened at all (zero cycles, or first cycle crashed
+          before any tool call)
+    """
+    loop = AgentLoop(config)
+    result = await loop.run()
+
+    print("\n" + "=" * 60)
+    print(f"Agent: mission_status={result.mission_status}")
+    print(f"Cycles run: {result.cycles_run}")
+    print(f"Total tool calls: {result.total_tool_calls}")
+    print(f"Run dir: {result.run_dir}")
+    if result.summary:
+        print(f"\nFinal summary (first 500 chars):\n{result.summary[:500]}")
+    print("=" * 60)
+
+    # Catastrophic exit when the agent didn't even get a full cycle done.
+    if result.cycles_run >= 1 and result.total_tool_calls == 0:
+        print(
+            "ZERO-WORK CATASTROPHE: agent completed cycles but made no tool calls "
+            "— exiting 2 so systemd treats this as a failure."
+        )
+        return 2
+    return 0
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -118,11 +155,24 @@ def main() -> None:
         exit_code = asyncio.run(run_pipeline(config, config_path=str(config_path)))
         sys.exit(exit_code)
 
+    # Agent mode
+    if "--agent" in args:
+        idx = args.index("--agent")
+        if idx + 1 >= len(args):
+            print("Usage: python main.py --agent <config.json>")
+            sys.exit(1)
+        config_path = Path(args[idx + 1])
+        with open(config_path) as f:
+            agent_cfg = AgentConfig.from_dict(json.load(f))
+        exit_code = asyncio.run(run_agent(agent_cfg))
+        sys.exit(exit_code)
+
     # Simple mode
     if not args:
         print("Usage:")
         print('  python main.py "task description" [config.json]')
         print("  python main.py --pipeline pipeline_config.json")
+        print("  python main.py --agent agent_config.json")
         sys.exit(1)
 
     task = args[0]
