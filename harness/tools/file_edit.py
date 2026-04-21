@@ -79,12 +79,21 @@ class EditFileTool(Tool):
                         error="Empty string replacement in non-empty files requires replace_all=True due to ambiguity",
                         is_error=True
                     )
-                count = len(text) + 1
+                # When new_str is also empty, this is a no-op
+                if new_str == "":
+                    count = 0
+                else:
+                    count = len(text) + 1
         else:
             count = text.count(old_str)
 
         if count == 0:
-            return ToolResult(error="old_str not found in file", is_error=True)
+            # Special case: empty-to-empty replacement with replace_all=True is a no-op
+            if old_str == "" and new_str == "" and replace_all:
+                # This is a valid no-op operation
+                pass
+            else:
+                return ToolResult(error="old_str not found in file", is_error=True)
         if count > 1 and not replace_all:
             # Find line numbers where old_str appears for better error messages
             lines = text.splitlines(keepends=True)
@@ -115,23 +124,10 @@ class EditFileTool(Tool):
         
         # Calculate actual number of replacements made
         if old_str == "":
-            # For empty string replacement, we need to calculate based on the result
             if text == "":
-                # Empty file: replacement logic
-                if new_str != "":
-                    # Insert new_str at the only position (empty file)
-                    replaced = 1
-                else:
-                    # Replacing nothing with nothing results in zero replacements
-                    replaced = 0
+                replaced = 1 if new_str != "" else 0
             else:
-                # For non-empty files with empty old_str:
-                if new_str != "":
-                    # Insert new_str at every possible position (before each char and at end)
-                    replaced = len(text) + 1
-                else:
-                    # Replacing nothing with nothing results in zero replacements
-                    replaced = 0
+                replaced = len(text) + 1 if new_str != "" else 0
         else:
             replaced = count if replace_all else 1
         

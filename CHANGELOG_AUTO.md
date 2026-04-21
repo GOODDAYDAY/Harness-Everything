@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Fixed incomplete replaced count calculation for empty-string replacements in EditFileTool
+- Fixed the incomplete `replaced` count calculation for empty-string replacements in `EditFileTool.execute()`
+- When `old_str=""` in non-empty files, the tool now correctly reports 1 replacement for `replace_all=False` and `len(text) + 1` replacements for `replace_all=True`
+- Added special handling for empty-to-empty replacement with `replace_all=True` to correctly report 0 replacements as a no-op
+- All existing tests continue to pass with the corrected logic
+
 ## 2026-04-23: Added comprehensive test for EditFileTool empty string validation
 - Added test case `test_editfile_empty_string_to_empty_string_requires_replace_all` to verify that empty-to-empty string replacement in non-empty files requires `replace_all=True`
 - Test confirms the existing validation logic correctly rejects ambiguous no-op edits unless explicitly confirmed with `replace_all=True`
