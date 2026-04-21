@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-23: Cleaned up WriteFileTool by removing unused _atomic_read_text method
+- Removed unused `_atomic_read_text` method from `WriteFileTool` class in `harness/tools/file_write.py`
+- Simplified class implementation by eliminating dead code that could be misused as a bypass pattern
+- Maintains all existing functionality while improving code clarity
+
 ## 2026-04-23: Fixed ReadFileTool offset validation with special handling for empty files
 - Fixed offset validation bug in `ReadFileTool.execute()` where offset=1 would fail on empty files
 - Added special handling before validation: when `total == 0 and offset == 1`, return empty output immediately
