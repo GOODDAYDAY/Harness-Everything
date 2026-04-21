@@ -138,16 +138,36 @@ class Executor:
             max_turns=self.config.max_tool_turns,
         )
 
-        # Extract unique file paths from write/edit operations
+        # Extract unique file paths from write/edit operations.
+        # Single-path tools carry `path` (or `destination` for move/copy);
+        # batch_edit carries `edits: [{path, ...}]` and batch_write carries
+        # `files: [{path, content}]` — both enumerated so a multi-file
+        # batch call doesn't disappear from the changed-files list.
         files_changed: list[str] = []
         seen: set[str] = set()
+
+        def _add(p: str) -> None:
+            if p and p not in seen:
+                files_changed.append(p)
+                seen.add(p)
+
+        _SINGLE_PATH_WRITE_TOOLS = (
+            "write_file", "edit_file", "delete_file", "move_file", "copy_file",
+            "file_patch", "find_replace",
+        )
         for entry in execution_log:
             tool_name = entry["tool"]
-            if tool_name in ("write_file", "edit_file", "delete_file", "move_file", "copy_file"):
-                path = entry["input"].get("path") or entry["input"].get("destination", "")
-                if path and path not in seen:
-                    files_changed.append(path)
-                    seen.add(path)
+            inp = entry.get("input") or {}
+            if tool_name in _SINGLE_PATH_WRITE_TOOLS:
+                _add(str(inp.get("path") or inp.get("destination") or ""))
+            elif tool_name == "batch_edit":
+                for edit in inp.get("edits") or []:
+                    if isinstance(edit, dict):
+                        _add(str(edit.get("path") or ""))
+            elif tool_name == "batch_write":
+                for f in inp.get("files") or []:
+                    if isinstance(f, dict):
+                        _add(str(f.get("path") or ""))
 
         log.info("Executor: %d tool calls, %d files changed", len(execution_log), len(files_changed))
 

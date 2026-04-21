@@ -21,10 +21,18 @@ Current optional tools
 * ``git_search``   — Git history/blame/grep search; high schema cost for a
                      specialised capability, so kept optional to reduce per-call
                      schema size for tasks that don't need git-history lookups.
+* ``read_file`` / ``edit_file`` / ``write_file``
+                   — Single-file variants, superseded by ``batch_read`` /
+                     ``batch_edit`` / ``batch_write`` respectively. Kept
+                     available as opt-in when a specific integration needs
+                     one-at-a-time semantics; default pipelines/agents use
+                     the batch variants so a multi-file change costs one
+                     LLM round-trip instead of N.
 
-Current default tools (30 of 30)
+Current default tools
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-All other tools in this module (no network access required).
+All other tools in this module (no network access required) plus the new
+``batch_read`` / ``batch_edit`` / ``batch_write`` / ``scratchpad`` tools.
 """
 
 import logging
@@ -58,6 +66,10 @@ from harness.tools.json_transform import JsonTransformTool
 from harness.tools.discovery import ToolDiscoveryTool
 from harness.tools.git_search import GitSearchTool
 from harness.tools.todo_scan import TodoScanTool
+from harness.tools.batch_read import BatchReadTool
+from harness.tools.batch_edit import BatchEditTool
+from harness.tools.batch_write import BatchWriteTool
+from harness.tools.scratchpad import ScratchpadTool
 
 log = logging.getLogger(__name__)
 
@@ -66,9 +78,20 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_TOOLS: list[Tool] = [
-    ReadFileTool(),
-    WriteFileTool(),
-    EditFileTool(),
+    # --- BATCH FILE TOOLS (primary) ---
+    # batch_read / batch_edit / batch_write replace the single-file variants
+    # in default agent / pipeline runs. One LLM round-trip can read or write
+    # up to 50 files; one batch_edit can land up to 100 search/replaces.
+    # The LLM should default to these — single-file tools are opt-in via
+    # extra_tools=["read_file"] when an integration genuinely needs them.
+    BatchReadTool(),
+    BatchEditTool(),
+    BatchWriteTool(),
+    # scratchpad: persistent notes injected back into system prompt on each
+    # subsequent turn. Survives conversation pruning. The LLM loop intercepts
+    # scratchpad tool calls in core/llm.py.
+    ScratchpadTool(),
+    # --- OTHER FILE / DIR OPS ---
     DeleteFileTool(),
     MoveFileTool(),
     CopyFileTool(),
@@ -112,6 +135,12 @@ OPTIONAL_TOOLS: list[Tool] = [
     WebSearchTool(),    # DuckDuckGo search + page fetch; needs network access
     HttpRequestTool(),  # Generic HTTP client (GET/POST/etc.); needs network access
     GitSearchTool(),    # Git history/blame/grep; high schema cost, opt in via extra_tools
+    # Single-file file tools — superseded by batch_read/batch_edit/batch_write
+    # in default runs. Opt in via extra_tools=["read_file", "edit_file",
+    # "write_file"] when a specific integration needs one-file-at-a-time.
+    ReadFileTool(),
+    EditFileTool(),
+    WriteFileTool(),
 ]
 
 # ---------------------------------------------------------------------------

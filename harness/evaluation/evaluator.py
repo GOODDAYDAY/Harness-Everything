@@ -36,9 +36,17 @@ log = logging.getLogger(__name__)
 
 # Tools whose output is usually large and low-signal for the evaluator — we
 # keep only a short snippet instead of 200 chars.
-_VERBOSE_TOOLS = frozenset({"read_file", "bash", "tree", "list_directory", "grep_search", "glob_search"})
+_VERBOSE_TOOLS = frozenset({
+    "read_file", "batch_read",
+    "bash", "tree", "list_directory",
+    "grep_search", "glob_search",
+})
 # Tools whose output is always useful in full (up to the per-entry cap).
-_IMPORTANT_TOOLS = frozenset({"write_file", "edit_file", "delete_file", "move_file", "copy_file", "file_patch"})
+_IMPORTANT_TOOLS = frozenset({
+    "write_file", "edit_file", "delete_file", "move_file", "copy_file",
+    "file_patch",
+    "batch_edit", "batch_write",
+})
 _ENTRY_CAP_IMPORTANT = 300   # chars kept per important tool output
 _ENTRY_CAP_VERBOSE = 80      # chars kept per verbose tool output
 _MAX_LOG_ENTRIES = 40        # cap total entries shown (avoids 30-turn loops flooding the prompt)
