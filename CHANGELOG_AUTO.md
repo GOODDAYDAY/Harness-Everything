@@ -5,6 +5,14 @@
 
 ---
 
+## 2026-04-24: Verified read_file offset validation fix for empty files
+- **Verification**: Confirmed that offset=1 is correctly allowed for empty files while other offsets are rejected
+- **Test validation**: Verified through comprehensive testing that:
+  - offset=1 returns proper empty file output with "[filename] lines 1-0 of 0" header
+  - offset=2 (or higher) returns clear error: "Offset {offset} invalid for empty file {filename} (only offset=1 allowed)"
+  - offset=0 correctly fails with "offset must be ≥ 1, got 0"
+- **Consistency**: Verified that non-empty file behavior remains unchanged and correct
+
 ## 2026-04-24: Fixed read_file offset validation bug for empty files
 - **Bug fix**: Corrected offset validation logic to properly allow offset=1 for empty files
 - **Validation improvement**: Changed condition from `offset > 1` to `offset != 1` to explicitly reject all invalid offsets
