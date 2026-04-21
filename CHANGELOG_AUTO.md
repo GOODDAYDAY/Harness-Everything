@@ -7,6 +7,13 @@
 
 ## [Unreleased]
 ### Fixed
+- **FOCUS/TARGET/WHY NOW**: Fix empty file offset validation bug in ReadFileTool to allow offset=1 for empty files
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute()
+- **CHANGE**: Added explicit validation condition `(total == 0 and offset > 1)` alongside existing `offset > total + 1` check to ensure empty files only accept offset=1
+- **RATIONALE**: Provides redundant validation for empty file edge case, ensuring offset=1 succeeds while offset>1 fails with clear error message
+- **BEHAVIOR**: Empty files with offset=1 return formatted header "[filename] lines 1-0 of 0\n", offset>1 returns error "Offset {offset} exceeds file length (0 lines)"
+
+### Fixed
 - **FOCUS/TARGET/WHY NOW**: Fix empty file output format inconsistency in ReadFileTool to match non-empty file conventions
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method and tests/tools/test_file_read_empty.py
 - **CHANGE**: Updated empty file handling to return formatted header "[filename] lines 1-0 of 0\n" instead of empty string, making it consistent with empty selection format. Updated test assertions to verify new format.

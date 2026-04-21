@@ -126,7 +126,7 @@ class ReadFileTool(Tool):
         
         # Validate that offset is within file bounds
         # Offset must be ≤ total+1 lines (1-based indexing, allowing offset=1 for empty files)
-        if offset > total + 1:
+        if offset > total + 1 or (total == 0 and offset > 1):
             filename = os.path.basename(resolved)
             return ToolResult(
                 error=f"Offset {offset} exceeds file length ({total} lines) in {filename}",
