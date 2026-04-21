@@ -70,7 +70,11 @@ class EditFileTool(Tool):
             # For non-empty files, we require replace_all=True due to ambiguity
             if text == "":
                 # Empty file: allow replacement
-                count = 1
+                # But if new_str is also empty, it's a no-op (count = 0)
+                if new_str == "":
+                    count = 0
+                else:
+                    count = 1
             else:
                 # Non-empty file: count is ambiguous with str.count("")
                 # It returns len(text) + 1, which doesn't match user intuition
