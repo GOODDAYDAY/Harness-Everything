@@ -427,5 +427,79 @@ def test_editfile_empty_string_to_empty_string_in_empty_file():
         assert "Replaced 0 occurrence(s)" in result.output, f"Expected 0 replacements for empty-to-empty in empty file, got: {result.output}"
 
 
+def test_editfile_dry_run():
+    """Test that EditFileTool dry_run parameter previews changes without modifying file."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file
+        file_path = workspace / "test.txt"
+        file_path.write_text("hello world\nthis is a test\ngoodbye world\nanother line")
+        
+        tool = EditFileTool()
+        config = Mock(spec=HarnessConfig)
+        config.workspace = str(workspace)
+        config.allowed_paths = [str(workspace)]
+        
+        # Test 1: dry_run with replace_all=True
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="world",
+            new_str="universe",
+            replace_all=True,
+            dry_run=True
+        ))
+        assert not result.is_error, f"dry_run should not error: {result.error}"
+        assert "Would replace 2 occurrence(s)" in result.output
+        assert "hello world" in result.output
+        assert "hello universe" in result.output or "'hello world' -> 'hello universe'" in result.output
+        
+        # Verify file was not modified
+        assert file_path.read_text() == "hello world\nthis is a test\ngoodbye world\nanother line"
+        
+        # Check metadata contains changes_preview
+        assert "changes_preview" in result.metadata
+        changes_preview = result.metadata["changes_preview"]
+        assert isinstance(changes_preview, list)
+        assert len(changes_preview) > 0
+        
+        # Test 2: dry_run with replace_all=True
+        result2 = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="world",
+            new_str="universe",
+            replace_all=True,
+            dry_run=True
+        ))
+        assert not result2.is_error
+        assert "Would replace 2 occurrence(s)" in result2.output
+        
+        # Test 3: dry_run with old_str not found - should return error
+        result3 = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="nonexistent",
+            new_str="something",
+            dry_run=True
+        ))
+        assert result3.is_error
+        assert "old_str not found" in result3.error
+        
+        # Test 4: Actually perform the edit to verify dry_run was accurate
+        result4 = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="world",
+            new_str="universe",
+            replace_all=True
+        ))
+        assert not result4.is_error
+        assert "Replaced 2 occurrence(s)" in result4.output
+        assert file_path.read_text() == "hello universe\nthis is a test\ngoodbye universe\nanother line"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

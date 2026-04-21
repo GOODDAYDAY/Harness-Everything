@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Added dry-run mode to EditFileTool
+- Added `dry_run` parameter to `EditFileTool` for safe previewing of changes
+- When `dry_run=True`, tool returns preview of changes without modifying file
+- Preview includes formatted output and `metadata["changes_preview"]` with line-by-line changes
+- Added `validate_path_scope` function to `harness/core/security.py` to fix missing import
+- Added comprehensive test `test_editfile_dry_run` verifying preview accuracy and file preservation
+
 ## 2026-04-23: Improved ReadFileTool offset validation clarity
 - Refactored offset validation in `ReadFileTool.execute()` for better readability
 - Separated empty file case (`total == 0 and offset > 1`) from non-empty file case (`total > 0 and offset > total`)
