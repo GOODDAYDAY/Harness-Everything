@@ -77,10 +77,14 @@ class HarnessConfig:
     max_iterations: int = 5
 
     # --- tool-use budget ---
-    max_tool_turns: int = 30
+    max_tool_turns: int = 60
     # Cap on the number of tool-use turns in a single executor call_with_tools
     # loop.  Lower values reduce runaway token spend on simple tasks; higher
     # values allow more complex multi-step executions.  Valid range: 1–200.
+    # Raised from 30 on 2026-04-21: empirical observation showed executors
+    # hitting the 20-turn server cap in 7/7 rounds, with 50–60% of turns
+    # going to read_file/grep_search for state inspection, leaving 0–1 turns
+    # for actual edits. 60 gives breathing room for read → edit → verify.
 
     # --- API concurrency ---
     max_concurrent_llm_calls: int = 4
