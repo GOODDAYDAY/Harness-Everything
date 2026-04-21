@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Fixed ReadFileTool offset validation to allow offset=1 on empty files
+- Fixed offset validation bug in `ReadFileTool.execute()` where offset=1 incorrectly failed on empty files
+- Modified validation logic to allow offset=1 on empty files while rejecting offset>1
+- Empty files now return proper empty result with header "lines 1-0 of 0" for offset=1
+- Maintains validation for offset>1 on empty files and all offsets on non-empty files
+- Updated test `test_readfile_empty_file_offset_handling` to verify new behavior
+
 ## 2026-04-23: Fixed ReadFileTool offset validation inconsistency for empty files
 - Fixed offset validation inconsistency in `ReadFileTool.execute()` where offset=1 was specially allowed for empty files
 - Removed special handling for empty files with offset=1, letting standard validation handle all cases consistently
