@@ -54,8 +54,12 @@ class EditFileTool(Tool):
         if old_str == "":
             # Special handling for empty string replacement
             if text == "":
+                # Empty-to-empty: count = 0 (no replacement needed)
+                # Empty-to-non-empty: count = 1 (insert at position 0)
                 count = 1 if new_str != "" else 0
             else:
+                # Non-empty text with empty old_str: count = len(text) + 1 positions
+                # where empty string can be inserted (before each char + after last)
                 count = len(text) + 1 if new_str != "" else 0
         else:
             count = text.count(old_str)
@@ -103,6 +107,13 @@ class EditFileTool(Tool):
         replace_all: bool = False,
         dry_run: bool = False,
     ) -> ToolResult:
+        # Validate empty string replacement before reading file
+        if old_str == "" and not replace_all and new_str != "":
+            return ToolResult(
+                error="Empty string replacement requires replace_all=True when new_str is non-empty due to ambiguity (empty string matches everywhere)",
+                is_error=True
+            )
+        
         # Use consolidated atomic validation and read
         read_result = await self.file_security.atomic_validate_and_read(
             config, path, require_exists=True, check_scope=True, resolve_symlinks=False
@@ -116,15 +127,6 @@ class EditFileTool(Tool):
         new_text, count, changes_preview = self._calculate_changes(
             text, old_str, new_str, replace_all
         )
-        
-        # Special handling for empty string replacement validation
-        if old_str == "" and not replace_all and new_str != "":
-            return ToolResult(
-                error="Empty string replacement requires replace_all=True when new_str is non-empty due to ambiguity (empty string matches everywhere)",
-                is_error=True
-            )
-
-
 
         if count == 0:
             # Special case: empty-to-empty replacement is always a no-op
@@ -153,7 +155,10 @@ class EditFileTool(Tool):
         # Handle dry-run mode
         if dry_run:
             if count == 0:
-                output_msg = f"Would make no changes to {resolved} (old_str not found)"
+                if old_str == "" and new_str == "":
+                    output_msg = f"Would make no changes to {resolved} (empty-to-empty replacement is a no-op)"
+                else:
+                    output_msg = f"Would make no changes to {resolved} (old_str not found)"
             else:
                 # Format preview output
                 preview_lines = []

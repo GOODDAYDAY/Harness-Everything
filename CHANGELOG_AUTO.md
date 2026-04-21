@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Fixed EditFileTool empty string validation and edge cases
+- Moved empty string replacement validation to beginning of `execute()` method for safety
+- Fixed `_calculate_changes()` to correctly handle empty-to-empty replacements (count=0)
+- Improved dry-run output message for empty-to-empty case to clarify it's a no-op
+- Removed duplicate validation logic and extra blank lines for cleaner code
+- Empty-to-empty replacement is now correctly identified as a valid no-op operation
+
 ## 2026-04-23: Enhanced EditFileTool empty string replacement logic
 - Simplified `EditFileTool._calculate_changes()` counting logic for empty string replacements
 - Added explicit handling for empty-to-non-empty replacement in empty files (count=1)
