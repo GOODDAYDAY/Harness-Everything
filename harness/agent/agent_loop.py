@@ -33,8 +33,6 @@ import datetime
 import json
 import logging
 import re
-import signal
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +41,7 @@ from typing import Any
 from harness.core.artifacts import ArtifactStore
 from harness.core.config import HarnessConfig
 from harness.core.llm import LLM
+from harness.core.signal_util import install_shutdown_handlers
 from harness.pipeline.hooks import (
     ImportSmokeHook,
     StaticCheckHook,
@@ -50,6 +49,7 @@ from harness.pipeline.hooks import (
     VerificationHook,
 )
 from harness.tools import build_registry
+from harness.tools.path_utils import collect_changed_paths
 
 log = logging.getLogger(__name__)
 
@@ -216,15 +216,7 @@ class AgentLoop:
             )
 
     def _install_signal_handlers(self) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, self._request_shutdown)
-        except (NotImplementedError, RuntimeError):
-            # Windows: add_signal_handler is not supported. Harness-Everything
-            # runs on Linux in production; Windows local-dev still works without
-            # graceful shutdown (Ctrl-C simply kills the process).
-            log.debug("Agent: signal handlers not available on this platform")
+        install_shutdown_handlers(self._request_shutdown)
 
     # ---- per-cycle prompt construction ----
 
@@ -311,33 +303,10 @@ class AgentLoop:
         hooks = self._build_hooks()
         if not hooks:
             return []
-        # Collect changed files from the exec log — hooks can consult this.
-        files_changed: list[str] = []
-        seen: set[str] = set()
-        single_path = {"write_file", "edit_file", "file_patch", "find_replace"}
-        for e in exec_log:
-            if not e.get("success", not e.get("is_error", False)):
-                continue
-            tool = e["tool"]
-            inp = e.get("input") or {}
-            if tool in single_path:
-                p = str(inp.get("path") or "")
-                if p and p not in seen:
-                    seen.add(p); files_changed.append(p)
-            elif tool == "batch_edit":
-                for edit in inp.get("edits") or []:
-                    if isinstance(edit, dict) and edit.get("path"):
-                        p = str(edit["path"])
-                        if p not in seen:
-                            seen.add(p); files_changed.append(p)
-            elif tool == "batch_write":
-                for f in inp.get("files") or []:
-                    if isinstance(f, dict) and f.get("path"):
-                        p = str(f["path"])
-                        if p not in seen:
-                            seen.add(p); files_changed.append(p)
-
-        ctx = {"cycle": cycle, "files_changed": files_changed}
+        ctx = {
+            "cycle": cycle,
+            "files_changed": collect_changed_paths(exec_log),
+        }
         failures: list[str] = []
         for hook in hooks:
             try:
@@ -360,7 +329,7 @@ class AgentLoop:
     # ---- commit ----
 
     async def _auto_commit(self, cycle: int, agent_text: str) -> None:
-        """Run `git add -A && git commit -m "agent: cycle N — <summary>"`."""
+        """Run ``git add -A && git commit`` in each configured repo."""
         workspace = Path(self.config.harness.workspace)
         summary_line = agent_text.strip().splitlines()[0][:80] if agent_text.strip() else ""
         msg = f"agent: cycle {cycle + 1}"
@@ -373,12 +342,6 @@ class AgentLoop:
                 log.warning("Agent: commit_repos entry not found: %s", repo_path)
                 continue
             try:
-                await asyncio.create_subprocess_exec(
-                    "git", "add", "-A",
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
                 add = await asyncio.create_subprocess_exec(
                     "git", "add", "-A",
                     cwd=str(repo_path),
@@ -392,7 +355,7 @@ class AgentLoop:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await commit.communicate()
+                _, stderr = await commit.communicate()
                 if commit.returncode == 0:
                     log.info("Agent: committed cycle %d in %s", cycle + 1, repo)
                 else:

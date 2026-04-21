@@ -66,34 +66,28 @@ class GlobSearchTool(Tool):
             Path(p).resolve(strict=False) for p in config.allowed_paths
         ] or [root]
 
-        # Enumerate, cap candidates, then filter out anything that (after
-        # symlink resolution) escapes the allow-list. This catches the case
-        # where a symlink inside the workspace points to an external path —
-        # glob would happily return that link target without this check.
-        candidates: list[Path] = []
-        capped = False
-        for i, m in enumerate(root.glob(pattern)):
-            if i >= self.MAX_CANDIDATES:
-                capped = True
-                break
-            candidates.append(m)
-
+        # Enumerate with the is_file filter inline so the candidate cap
+        # counts files-passing-the-filter rather than raw glob entries —
+        # a tree dominated by directories would otherwise fill the cap
+        # with non-files and miss real matches. The per-match .resolve()
+        # check catches symlinks inside the workspace that point outside.
         safe: list[tuple[Path, float]] = []
-        for m in candidates:
+        capped = False
+        for m in root.glob(pattern):
             if not m.is_file():
                 continue
+            if len(safe) >= self.MAX_CANDIDATES:
+                capped = True
+                break
             try:
                 resolved = m.resolve()
+                mtime = m.stat().st_mtime
             except OSError:
                 continue
             if not any(
                 resolved == a or resolved.is_relative_to(a) for a in allowed
             ):
                 continue
-            try:
-                mtime = m.stat().st_mtime
-            except OSError:
-                mtime = 0.0
             safe.append((m, mtime))
 
         safe.sort(key=lambda kv: kv[1], reverse=True)

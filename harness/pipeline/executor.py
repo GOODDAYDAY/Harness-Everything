@@ -138,36 +138,11 @@ class Executor:
             max_turns=self.config.max_tool_turns,
         )
 
-        # Extract unique file paths from write/edit operations.
-        # Single-path tools carry `path` (or `destination` for move/copy);
-        # batch_edit carries `edits: [{path, ...}]` and batch_write carries
-        # `files: [{path, content}]` — both enumerated so a multi-file
-        # batch call doesn't disappear from the changed-files list.
-        files_changed: list[str] = []
-        seen: set[str] = set()
-
-        def _add(p: str) -> None:
-            if p and p not in seen:
-                files_changed.append(p)
-                seen.add(p)
-
-        _SINGLE_PATH_WRITE_TOOLS = (
-            "write_file", "edit_file", "delete_file", "move_file", "copy_file",
-            "file_patch", "find_replace",
-        )
-        for entry in execution_log:
-            tool_name = entry["tool"]
-            inp = entry.get("input") or {}
-            if tool_name in _SINGLE_PATH_WRITE_TOOLS:
-                _add(str(inp.get("path") or inp.get("destination") or ""))
-            elif tool_name == "batch_edit":
-                for edit in inp.get("edits") or []:
-                    if isinstance(edit, dict):
-                        _add(str(edit.get("path") or ""))
-            elif tool_name == "batch_write":
-                for f in inp.get("files") or []:
-                    if isinstance(f, dict):
-                        _add(str(f.get("path") or ""))
+        # Unique file paths touched by this execution's tool calls.
+        # Shared helper handles all single-path + batch shapes; see
+        # harness/tools/path_utils.py.
+        from harness.tools.path_utils import collect_changed_paths
+        files_changed = collect_changed_paths(execution_log, success_only=False)
 
         log.info("Executor: %d tool calls, %d files changed", len(execution_log), len(files_changed))
 

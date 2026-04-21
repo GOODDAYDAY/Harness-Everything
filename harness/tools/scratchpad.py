@@ -1,26 +1,11 @@
 """scratchpad — persistent notes the LLM can write to survive context pruning.
 
-This tool is **intercepted by the LLM loop** (``call_with_tools`` in
-``harness/core/llm.py``) before it reaches the normal registry dispatch.
-The interceptor extracts the ``note`` argument, appends it to a per-cycle
-notes list, and injects the collected notes at the top of the *system
-prompt* on subsequent turns — so they survive the conversation-pruning
-threshold (300K chars) that otherwise evicts old tool results.
-
-Why do this?
-------------
-Long agent cycles (200 tool turns) routinely exceed the pruning threshold.
-When that happens, older tool results are truncated and the agent loses
-access to file contents it read early on. Without scratchpad, the agent's
-only recourse is to re-read the same files — wasteful and slow. With
-scratchpad, the agent is told:
-
-    "Save your key findings here; do NOT re-read files to recall them."
-
-The interceptor handles the I/O — this ``execute`` method is a fallback
-that runs only when something bypasses the interceptor (unit tests, or a
-future code path that calls the registry directly). It simply echoes the
-note back so calls don't fail.
+The LLM loop in ``harness/core/llm.py`` intercepts scratchpad calls and
+injects collected notes at the top of the system prompt on every
+subsequent turn — so they outlive the conversation-pruning threshold that
+otherwise evicts old tool results. This ``execute`` method is the fallback
+path for callers that bypass the interceptor (tests, direct registry use);
+it echoes the note back so nothing fails.
 """
 
 from __future__ import annotations
@@ -45,7 +30,6 @@ class ScratchpadTool(Tool):
     )
     tags = frozenset({"analysis"})
 
-    # Practical cap so a single note can't bloat the system prompt.
     MAX_NOTE_CHARS = 2000
 
     def input_schema(self) -> dict[str, Any]:
@@ -67,15 +51,7 @@ class ScratchpadTool(Tool):
     async def execute(
         self, config: HarnessConfig, *, note: str,
     ) -> ToolResult:
-        # Fallback path (interceptor in llm.py normally handles this).
-        # Just echo the note truncated to the cap; the interceptor will
-        # override this when it's active.
-        if not isinstance(note, str):
-            return ToolResult(
-                error=f"note must be a string, got {type(note).__name__}",
-                is_error=True,
-            )
-        note = note.strip()
+        note = (note or "").strip()
         if not note:
             return ToolResult(error="note cannot be empty", is_error=True)
         if len(note) > self.MAX_NOTE_CHARS:
