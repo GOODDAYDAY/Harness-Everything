@@ -106,5 +106,21 @@ class EditFileTool(Tool):
         if write_result.is_error:
             return write_result
         
-        replaced = count if replace_all else 1
+        # Calculate actual number of replacements made
+        if old_str == "":
+            # For empty string replacement, we need to calculate based on the result
+            if text == "":
+                # Empty file: replacement always happens once
+                replaced = 1
+            else:
+                # For non-empty files with empty old_str:
+                # - If new_str is also empty, no replacements happen
+                # - Otherwise, len(text) + 1 replacements happen
+                if new_str == "":
+                    replaced = 0
+                else:
+                    replaced = len(text) + 1
+        else:
+            replaced = count if replace_all else 1
+        
         return ToolResult(output=f"Replaced {replaced} occurrence(s) in {resolved}")

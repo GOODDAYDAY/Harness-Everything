@@ -343,6 +343,22 @@ def test_editfile_empty_string_in_non_empty_file():
         ))
         assert not result.is_error
         assert file_path.read_text() == "-a-b-"
+        
+        # Test 5: Test empty string replacement with empty new_str (no-op)
+        file_path.write_text("hello world")
+        original_content = file_path.read_text()
+        result = asyncio.run(tool.execute(
+            config,
+            path=str(file_path),
+            old_str="",
+            new_str="",
+            replace_all=True
+        ))
+        assert not result.is_error
+        # File should be unchanged
+        assert file_path.read_text() == original_content
+        # Should report 0 replacements (not len(text) + 1)
+        assert "Replaced 0 occurrence(s)" in result.output
 
 
 if __name__ == "__main__":

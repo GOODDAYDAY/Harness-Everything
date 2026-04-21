@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-21: Fixed empty string replacement count bug in EditFileTool
+- Fixed incorrect replacement count reporting in `EditFileTool.execute()` when replacing empty string with empty string in non-empty files
+- When `old_str == ""`, `new_str == ""`, and `replace_all=True`, the tool now correctly reports 0 replacements instead of `len(text) + 1`
+- Added test case to verify empty string replacement with empty new_str behaves as a no-op with correct replacement count
+- All existing tests continue to pass with the fix
+
 ## 2026-04-21: Enhanced atomicity in MoveFileTool cross-device fallback
 - Improved cross-device move fallback logic in `MoveFileTool.execute()` to ensure atomic copy+delete operations
 - Added cleanup of copied file if source deletion fails, preventing duplicate files in partial failure scenarios
