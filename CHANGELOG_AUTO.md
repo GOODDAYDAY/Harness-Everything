@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Enhanced MoveFileTool and CopyFileTool documentation for atomic validation
+- Updated comments in `MoveFileTool.execute()` and `CopyFileTool.execute()` to accurately reflect that both source AND destination paths are validated atomically
+- Previously misleading comments only mentioned source validation, but both tools already had full atomic validation for both paths
+- This clarifies the security posture and prevents confusion about TOCTOU protection
+- All existing tests continue to pass, confirming the tools already properly validate both paths
+
 ## 2026-04-23: Fixed EditFileTool empty-to-empty string replacement count bug
 - Fixed bug where empty-to-empty string replacement (`old_str=""`, `new_str=""`) incorrectly reported 1 replacement instead of 0
 - Updated logic in `EditFileTool.execute()` to always return 0 replacements when both old and new strings are empty
