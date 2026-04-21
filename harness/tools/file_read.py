@@ -88,14 +88,7 @@ class ReadFileTool(Tool):
         # Validate that offset is within file bounds
         # Offset must be ≤ total lines (1-based indexing)
         # Special case: empty files (total == 0) allow offset=1
-        if total == 0:
-            if offset != 1:
-                filename = os.path.basename(resolved)
-                return ToolResult(
-                    error=f"Offset {offset} exceeds file length ({total} lines) in {filename}",
-                    is_error=True
-                )
-        elif offset > total:
+        if offset > total and not (total == 0 and offset == 1):
             filename = os.path.basename(resolved)
             return ToolResult(
                 error=f"Offset {offset} exceeds file length ({total} lines) in {filename}",
@@ -107,7 +100,7 @@ class ReadFileTool(Tool):
         
         # Handle empty file case (total == 0)
         if total == 0:
-            # For empty files, offset must be 1 (already validated above)
+            # For empty files, offset=1 is allowed (already validated above)
             filename = os.path.basename(resolved)
             header = f"[{filename}] lines 1-0 of 0\n"
             numbered = ""
