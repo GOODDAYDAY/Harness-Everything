@@ -273,3 +273,9 @@
 - Added explicit type checking to ensure string errors are converted to `ToolResult` objects for consistent error handling
 - Updated documentation in `base.py` to clarify the return type contract of `_validate_and_prepare_parent_directory`
 - All existing tests continue to pass with the improved error handling
+
+## 2026-04-23: Fixed ReadFileTool offset validation bug for empty files
+- Fixed offset validation bug in `ReadFileTool.execute()` to correctly reject offset=1 on empty files
+- Changed validation logic from separate checks for empty/non-empty files to unified `if offset > total:` check
+- This ensures offset validation is consistent: offset must be ≤ total lines (1-based indexing)
+- Updated test in `test_file_read_security.py` to expect error for offset=1 on empty files
