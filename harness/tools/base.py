@@ -307,7 +307,11 @@ class Tool(ABC):
             resolve_symlinks: If True, symlinks are resolved to their final target 
                 before scope checking. If False, the symlink path itself is validated.
         
-        Returns (is_valid, validated_path_str | ToolResult_error).
+        Returns: tuple[bool, str | ToolResult] where:
+            - First element is True if validation succeeded, False otherwise
+            - Second element is validated path string on success, or ToolResult error on failure
+            - Callers must check the type of the second element before using it
+        
         If require_exists=False and directory doesn't exist, it will be created.
         """
         # Skip if parent is current directory

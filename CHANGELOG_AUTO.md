@@ -71,7 +71,7 @@
 - **Enhanced**: Unicode homoglyph security guard in `base.py::_validate_path` now has explicit test verification
 - **Cleaned**: Removed dead `tempfile` import from `tests/test_path_security.py`
 - **Improved**: `test_unicode_normalization_attack` now has concrete assertions instead of passive print statements
-- **Verified**: All path security tests pass with stricter validation checks-e 
+- **Verified**: All path security tests pass with stricter validation checks
 ## 2026-04-16: Explicit symlink rejection in ReadFileTool
 - Added explicit symlink rejection check in `ReadFileTool.execute()` for additional security
 - Updated error message in `_validate_atomic_path_sync` to "Symlinks are not allowed" for clarity
@@ -83,19 +83,19 @@
 - When `asyncio.to_thread(shutil.copy2, ...)` raises EXDEV, falls back to direct `shutil.copy2` call
 - Added tests `test_copyfile_cross_device_fallback` and `test_copyfile_cross_device_fallback_failure` to verify behavior
 - Aligns CopyFileTool behavior with MoveFileTool which already has cross-device fallback
--e 
+
 ## 2026-04-21: Added explicit _atomic_read_text method to WriteFileTool
 - Added explicit `_atomic_read_text` method to `WriteFileTool` class that delegates to parent implementation
 - Method provides atomic file reading with TOCTOU protection for consistency with other file operation tools
 - Ensures WriteFileTool has complete API surface even though method is inherited from base class
 - Existing test `test_writefile_atomic_read_text` continues to pass with the explicit implementation
--e 
+
 ## 2026-04-21: Improved error messages in EditFileTool
 - Enhanced error messages in `EditFileTool.execute()` to include line numbers when `old_str` appears multiple times
 - When `replace_all=False` and multiple occurrences exist, error now shows which lines contain the matches
 - Improves debugging experience by providing more context about where replacements would occur
 - All existing tests continue to pass with the enhanced error messages
--e 
+
 ## 2026-04-21: Enhanced cross-device copy fallback documentation in CopyFileTool
 - Improved code comments in `CopyFileTool.execute()` to better explain why `asyncio.to_thread` can fail with EXDEV for cross-device operations
 - Clarified that thread pool resource constraints or file descriptor handling issues can cause cross-device copy failures in threaded context
@@ -106,3 +106,9 @@
 - Empty string replacement in empty files now works correctly (treats empty file as having one empty string)
 - Empty string replacement in non-empty files requires `replace_all=True` due to ambiguity of multiple positions
 - Added comprehensive test `test_editfile_empty_string_in_empty_file` to verify all edge cases
+
+## 2026-04-21: Fixed error handling in MoveFileTool and CopyFileTool
+- Enhanced `MoveFileTool.execute()` and `CopyFileTool.execute()` to properly handle error returns from `_validate_and_prepare_parent_directory`
+- Added explicit type checking to ensure string errors are converted to `ToolResult` objects for consistent error handling
+- Updated documentation in `base.py` to clarify the return type contract of `_validate_and_prepare_parent_directory`
+- All existing tests continue to pass with the improved error handling
