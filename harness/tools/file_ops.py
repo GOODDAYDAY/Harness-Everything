@@ -57,14 +57,14 @@ class MoveFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for both source and destination files to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)
+        is_valid_src, src_validated = await self.file_security.validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)
+        is_valid_dst, dst_validated = await self.file_security.validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
@@ -72,7 +72,7 @@ class MoveFileTool(Tool):
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
-            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
+            is_valid_parent, parent_result = await self.file_security.validate_and_prepare_parent_directory(
                 config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=False
             )
             if not is_valid_parent:
@@ -149,14 +149,14 @@ class CopyFileTool(Tool):
         self, config: HarnessConfig, *, source: str, destination: str
     ) -> ToolResult:
         # Use atomic validation for both source and destination files to prevent TOCTOU attacks
-        is_valid_src, src_validated = await self._validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)
+        is_valid_src, src_validated = await self.file_security.validate_atomic_path(config, source, require_exists=True, check_scope=True, resolve_symlinks=False)
         if not is_valid_src:
             return src_validated  # This is the ToolResult error
         src = src_validated
         
         # Use atomic validation for destination to prevent TOCTOU attacks
         # require_exists=False because destination may not exist yet
-        is_valid_dst, dst_validated = await self._validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)
+        is_valid_dst, dst_validated = await self.file_security.validate_atomic_path(config, destination, require_exists=False, check_scope=True, resolve_symlinks=False)
         if not is_valid_dst:
             return dst_validated  # This is a ToolResult error
         dst = dst_validated  # This is the validated path string
@@ -164,7 +164,7 @@ class CopyFileTool(Tool):
         # Validate parent directory atomically to prevent TOCTOU symlink attacks
         parent_dir = Path(dst).parent
         if str(parent_dir) != ".":  # Skip if parent is current directory
-            is_valid_parent, parent_result = await self._validate_and_prepare_parent_directory(
+            is_valid_parent, parent_result = await self.file_security.validate_and_prepare_parent_directory(
                 config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=False
             )
             if not is_valid_parent:
