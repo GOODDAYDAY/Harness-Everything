@@ -76,7 +76,8 @@ class MoveFileTool(Tool):
                 config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=False
             )
             if not is_valid_parent:
-                # parent_result could be a string or ToolResult - ensure we return a ToolResult
+                # parent_result should be a ToolResult when is_valid_parent is False
+                # Defensive check in case implementation changes
                 if isinstance(parent_result, ToolResult):
                     return parent_result
                 else:
@@ -152,7 +153,8 @@ class CopyFileTool(Tool):
                 config, str(parent_dir), require_exists=False, check_scope=True, resolve_symlinks=False
             )
             if not is_valid_parent:
-                # parent_result could be a string or ToolResult - ensure we return a ToolResult
+                # parent_result should be a ToolResult when is_valid_parent is False
+                # Defensive check in case implementation changes
                 if isinstance(parent_result, ToolResult):
                     return parent_result
                 else:

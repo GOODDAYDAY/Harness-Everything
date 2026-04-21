@@ -5,6 +5,11 @@
 
 ---
 
+## 2026-04-21: Clarified error handling contract in file operations tools
+- Updated documentation in `base.py::_validate_and_prepare_parent_directory` to clarify that when validation fails, the second tuple element is guaranteed to be a ToolResult
+- Improved comments in `file_ops.py` MoveFileTool and CopyFileTool to reflect the guaranteed contract rather than defensive assumption
+- All existing tests continue to pass with the clarified documentation
+
 ## 2026-04-16: Removed parent directory creation from EditFileTool
 - Removed parent directory creation logic from `EditFileTool.execute()` since editing existing files shouldn't create parent directories
 - Changed parent directory validation from `require_exists=False` to `require_exists=True` for consistency

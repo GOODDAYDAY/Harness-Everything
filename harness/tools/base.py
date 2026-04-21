@@ -311,6 +311,7 @@ class Tool(ABC):
             - First element is True if validation succeeded, False otherwise
             - Second element is validated path string on success, or ToolResult error on failure
             - Callers must check the type of the second element before using it
+            - When first element is False, second element is guaranteed to be a ToolResult
         
         If require_exists=False and directory doesn't exist, it will be created.
         """
