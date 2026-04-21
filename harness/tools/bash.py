@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
+
+# Shell metacharacters that can chain a second command after a benign-looking
+# first token. The old denylist check only inspected the first token of the
+# whole command; `echo hi && rm -rf /` bypassed it because `echo` is allowed.
+# We split on these operators, then check the leading token of every segment.
+# Single `|` is included so `ls | rm -rf /` is caught; `||` is handled by the
+# same split since `|` matches sub-string.
+_SHELL_CHAIN_RE = re.compile(r"&&|\|\||;|\||&")
 
 
 class BashTool(Tool):
@@ -36,24 +45,39 @@ class BashTool(Tool):
 
     @staticmethod
     def _denied_command(command: str, denylist: list[str]) -> str | None:
-        """Return the matched denylist entry if the command's first token is denied, else None.
+        """Return the matched denylist entry, if any, or None.
 
-        Splits the command with shlex to handle quoted leading tokens correctly.
-        Falls back to a simple split on shlex.ValueError (e.g. unmatched quotes)
-        so that malformed commands are still checked rather than silently allowed.
+        Checks the first token of **every** shell-chain segment, not just the
+        overall command. `echo hi && rm -rf /` splits into ``['echo hi ',
+        ' rm -rf /']`` and the `rm` segment is caught. Chaining operators
+        handled: ``&&  ||  ;  |  &``.
+
+        Uses shlex for the per-segment tokenisation so quoted leading tokens
+        work correctly; falls back to plain split on shlex.ValueError
+        (unmatched quote, etc.) — malformed commands are still checked, not
+        silently allowed.
         """
-        try:
-            tokens = shlex.split(command)
-        except ValueError:
-            tokens = command.split()
-        if not tokens:
+        denyset = set(denylist)
+        segments = _SHELL_CHAIN_RE.split(command) if command else []
+        if not segments:
             return None
-        first = tokens[0]
-        # Also strip any path prefix so "/usr/bin/rm" matches "rm"
-        first_base = os.path.basename(first)
-        for denied in denylist:
-            if first == denied or first_base == denied:
-                return denied
+        for seg in segments:
+            seg = seg.strip()
+            if not seg:
+                continue
+            try:
+                tokens = shlex.split(seg)
+            except ValueError:
+                tokens = seg.split()
+            if not tokens:
+                continue
+            first = tokens[0]
+            # Strip any path prefix so "/usr/bin/rm" matches "rm".
+            first_base = os.path.basename(first)
+            if first in denyset:
+                return first
+            if first_base in denyset:
+                return first_base
         return None
 
     async def execute(

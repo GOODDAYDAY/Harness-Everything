@@ -14,11 +14,15 @@ class GrepSearchTool(Tool):
     name = "grep_search"
     description = (
         "Search file contents using a regex pattern. "
-        "Returns matching lines with file paths and line numbers. "
-        "Supports filtering by file glob (e.g. '*.py')."
+        "Returns matching lines with file paths (relative to root) and "
+        "line numbers. Supports filtering by file glob (e.g. '*.py')."
     )
     requires_path_check = True
     tags = frozenset({"search"})
+
+    # Hard cap on files scanned to keep `**/*` regex searches bounded on
+    # huge repos. Files beyond this are skipped with a header note.
+    MAX_GLOB_FILES = 5000
 
     def input_schema(self) -> dict[str, Any]:
         return {
@@ -69,10 +73,11 @@ class GrepSearchTool(Tool):
         limit: int = 100,
     ) -> ToolResult:
         raw = path if path else config.workspace
-        resolved, err = self._resolve_and_check(config, raw)
-        if err:
-            return err
-        root = Path(resolved)
+        # _check_path: symlink-resolved + allowed_paths-validated start point.
+        checked = self._check_path(config, raw)
+        if isinstance(checked, ToolResult):
+            return checked
+        root = Path(checked)
 
         flags = re.IGNORECASE if case_insensitive else 0
         try:
@@ -80,12 +85,33 @@ class GrepSearchTool(Tool):
         except re.error as exc:
             return ToolResult(error=f"Invalid regex: {exc}", is_error=True)
 
-        # collect files
+        # Resolve allow-list once so per-file validation is cheap.
+        allowed = [
+            Path(p).resolve(strict=False) for p in config.allowed_paths
+        ] or [root]
+
+        # Collect files. Per-file `resolve() ∈ allowed` filter catches symlinks
+        # inside the workspace that point outside it (otherwise grep would
+        # happily read them).
+        files: list[Path] = []
+        capped = False
         if root.is_file():
             files = [root]
         else:
             glob_pat = file_glob or "**/*"
-            files = sorted(f for f in root.glob(glob_pat) if f.is_file())
+            for i, f in enumerate(root.glob(glob_pat)):
+                if i >= self.MAX_GLOB_FILES:
+                    capped = True
+                    break
+                if not f.is_file():
+                    continue
+                try:
+                    r = f.resolve()
+                except OSError:
+                    continue
+                if any(r == a or r.is_relative_to(a) for a in allowed):
+                    files.append(f)
+            files.sort()
 
         results: list[str] = []
         total = 0
@@ -115,7 +141,15 @@ class GrepSearchTool(Tool):
                 break
 
         if not results:
-            return ToolResult(output=f"No matches for /{pattern}/ in {resolved}")
+            msg = f"No matches for /{pattern}/ in {root}"
+            if capped:
+                msg += (
+                    f"  (file scan stopped at {self.MAX_GLOB_FILES}; "
+                    "narrow with file_glob or path)"
+                )
+            return ToolResult(output=msg)
 
-        header = f"Found {total} match(es) for /{pattern}/:\n"
-        return ToolResult(output=header + "\n".join(results))
+        header = f"Found {total} match(es) for /{pattern}/:"
+        if capped:
+            header += f"  (file scan stopped at {self.MAX_GLOB_FILES}; narrow file_glob to see beyond)"
+        return ToolResult(output=header + "\n" + "\n".join(results))
