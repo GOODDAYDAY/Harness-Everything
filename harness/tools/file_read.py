@@ -129,7 +129,7 @@ class ReadFileTool(Tool):
         if offset > total + 1:
             filename = os.path.basename(resolved)
             return ToolResult(
-                error=f"Offset {offset} exceeds file length ({total} lines) in {filename}",
+                error=f"Offset {offset} exceeds maximum allowed value ({total + 1}) for file with {total} lines in {filename}. Note: offset={total + 1} is allowed to create an empty selection.",
                 is_error=True
             )
         

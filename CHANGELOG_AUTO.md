@@ -6,6 +6,13 @@
 ---
 
 ## [Unreleased]
+### Improved
+- **FOCUS/TARGET/WHY NOW**: Improve error message clarity for offset validation in ReadFileTool to explain why offset can be one past end of file
+- **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method and tests/tools/test_file_read_empty.py
+- **CHANGE**: Updated error message from "Offset {offset} exceeds file length ({total} lines) in {filename}" to "Offset {offset} exceeds maximum allowed value ({total + 1}) for file with {total} lines in {filename}. Note: offset={total + 1} is allowed to create an empty selection."
+- **RATIONALE**: The previous error message was confusing when offset=total+1 is actually allowed for creating empty selections. The new message clearly explains the allowed range and the purpose of allowing offset=total+1.
+- **BEHAVIOR**: Users now get clearer guidance about valid offset values, understanding that offset can be one past the end of the file to create an empty selection.
+
 ### Fixed
 - **FOCUS/TARGET/WHY NOW**: Fix empty file offset validation bug in ReadFileTool by simplifying condition
 - **TARGET**: harness/tools/file_read.py::ReadFileTool.execute method
