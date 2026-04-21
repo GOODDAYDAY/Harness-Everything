@@ -89,3 +89,9 @@
 - Method provides atomic file reading with TOCTOU protection for consistency with other file operation tools
 - Ensures WriteFileTool has complete API surface even though method is inherited from base class
 - Existing test `test_writefile_atomic_read_text` continues to pass with the explicit implementation
+-e 
+## 2026-04-21: Improved error messages in EditFileTool
+- Enhanced error messages in `EditFileTool.execute()` to include line numbers when `old_str` appears multiple times
+- When `replace_all=False` and multiple occurrences exist, error now shows which lines contain the matches
+- Improves debugging experience by providing more context about where replacements would occur
+- All existing tests continue to pass with the enhanced error messages

@@ -61,8 +61,21 @@ class EditFileTool(Tool):
         if count == 0:
             return ToolResult(error="old_str not found in file", is_error=True)
         if count > 1 and not replace_all:
+            # Find line numbers where old_str appears for better error messages
+            lines = text.splitlines(keepends=True)
+            line_numbers = []
+            current_pos = 0
+            for i, line in enumerate(lines, 1):
+                if old_str in line:
+                    line_numbers.append(i)
+                current_pos += len(line)
+            
+            line_info = f" on lines {', '.join(map(str, line_numbers[:5]))}"
+            if len(line_numbers) > 5:
+                line_info += f" and {len(line_numbers) - 5} more"
+            
             return ToolResult(
-                error=f"old_str appears {count} times — set replace_all=true or provide more context",
+                error=f"old_str appears {count} times{line_info} — set replace_all=true or provide more context",
                 is_error=True,
             )
 
