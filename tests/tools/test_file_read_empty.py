@@ -127,9 +127,61 @@ async def test_read_file_empty_selection_metadata():
         os.unlink(temp_path)
 
 
+@pytest.mark.asyncio
+async def test_read_file_offset_beyond_bounds_clear_error():
+    """Test that ReadFileTool provides clear error messages when offset exceeds bounds."""
+    
+    # Create a temporary file with content
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        f.write('line1\nline2\nline3\n')
+        temp_path = f.name
+    
+    try:
+        # Create config with workspace set to temp directory
+        config = HarnessConfig(workspace=os.path.dirname(temp_path))
+        
+        # Create tool instance
+        tool = ReadFileTool()
+        
+        # Mock file_security.atomic_validate_and_read to return the text
+        tool.file_security = MagicMock()
+        tool.file_security.atomic_validate_and_read = AsyncMock(
+            return_value=("line1\nline2\nline3\n", temp_path)
+        )
+        
+        # Test: offset=5 (total_lines + 2) should fail with clear error message
+        result = await tool.execute(config, path=os.path.basename(temp_path), offset=5, limit=10)
+        
+        # Should error
+        assert result.is_error, f"Expected error for offset=5 (beyond bounds), got success"
+        
+        # Error message should mention the valid offset range
+        assert "Valid offset range is 1 to 3 (to read lines) or 4 (to create empty selection)" in result.error, \
+            f"Expected clear error message about valid offset range, got: {result.error}"
+        
+        # Error message should include the filename
+        assert os.path.basename(temp_path) in result.error, \
+            f"Expected filename in error message, got: {result.error}"
+        
+        # Test: offset=0 should still fail with offset validation error
+        result2 = await tool.execute(config, path=os.path.basename(temp_path), offset=0, limit=10)
+        assert result2.is_error, f"Expected error for offset=0"
+        assert "offset must be ≥ 1" in result2.error, f"Expected 'offset must be ≥ 1' in error, got: {result2.error}"
+        
+        # Test: offset=4 (total_lines + 1) should succeed (empty selection)
+        result3 = await tool.execute(config, path=os.path.basename(temp_path), offset=4, limit=10)
+        assert not result3.is_error, f"Expected success for offset=4 (empty selection), got error: {result3.error}"
+        assert result3.metadata['lines'] == [], f"Expected empty lines metadata for offset=4, got: {result3.metadata['lines']}"
+        
+    finally:
+        # Clean up
+        os.unlink(temp_path)
+
+
 if __name__ == "__main__":
     # Run tests directly for debugging
     asyncio.run(test_read_file_empty_file_offset_validation())
     asyncio.run(test_read_file_empty_file_integration())
     asyncio.run(test_read_file_empty_selection_metadata())
+    asyncio.run(test_read_file_offset_beyond_bounds_clear_error())
     print("All tests passed!")

@@ -504,3 +504,11 @@
 - Simplified validation logic by removing special case for empty files and using unified `if offset > total + 1:` check
 - This allows offset=1 for empty files (returns empty output) while rejecting offset>1
 - Updated tests in `test_file_read_empty.py` and `test_file_read_security.py` to match new behavior
+
+## 2026-04-24: Improved ReadFileTool error message clarity for offset validation
+- Enhanced error message in `ReadFileTool.execute()` to explicitly state valid offset range
+- Changed error from "Offset {offset} exceeds maximum allowed value ({total + 1})..." to include "Valid offset range is 1 to {total} (to read lines) or {total + 1} (to create empty selection)"
+- Renamed variable `total` to `total_lines` for better code readability
+- Added clarifying comment explaining offset can be 1 to total_lines (to read lines) or total_lines+1 (to create empty selection)
+- Added new test `test_read_file_offset_beyond_bounds_clear_error()` to verify clear error messages
+- Test verifies error message mentions valid range and filename, and that offset=total_lines+1 succeeds for empty selection

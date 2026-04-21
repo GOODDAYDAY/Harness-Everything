@@ -122,25 +122,26 @@ class ReadFileTool(Tool):
         
 
         lines = text.splitlines(keepends=True)
-        total = len(lines)
+        total_lines = len(lines)
         
         # Validate that offset is within file bounds
-        # Offset must be ≤ total+1 lines (1-based indexing, allowing offset=1 for empty files)
-        if offset > total + 1:
+        # Offset can be 1 to total_lines (to read lines) or total_lines+1 (to create empty selection)
+        # This follows 1-based indexing where offset=1 means start at first line
+        if offset > total_lines + 1:
             filename = os.path.basename(resolved)
             return ToolResult(
-                error=f"Offset {offset} exceeds maximum allowed value ({total + 1}) for file with {total} lines in {filename}. Note: offset={total + 1} is allowed to create an empty selection.",
+                error=f"Offset {offset} exceeds maximum allowed value ({total_lines + 1}) for file with {total_lines} lines in {filename}. Valid offset range is 1 to {total_lines} (to read lines) or {total_lines + 1} (to create empty selection).",
                 is_error=True
             )
         
         start = max(offset - 1, 0)
         selected = lines[start : start + limit]
         
-        # Handle empty selection (when start >= total for non-empty files, or empty file)
+        # Handle empty selection (when start >= total_lines for non-empty files, or empty file)
         if not selected:
             # Extract filename from resolved path
             filename = os.path.basename(resolved)
-            header = f"[{filename}] lines {offset}-{offset-1} of {total}\n"
+            header = f"[{filename}] lines {offset}-{offset-1} of {total_lines}\n"
             numbered = ""
             lines_metadata = []  # Empty selection: no lines returned
         else:
@@ -149,7 +150,7 @@ class ReadFileTool(Tool):
             )
             # Extract filename from resolved path
             filename = os.path.basename(resolved)
-            header = f"[{filename}] lines {start+1}-{min(start+limit, total)} of {total}\n"
+            header = f"[{filename}] lines {start+1}-{min(start+limit, total_lines)} of {total_lines}\n"
             
             # Create structured metadata with line numbers and content
             lines_metadata = [
