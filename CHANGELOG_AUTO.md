@@ -5,6 +5,12 @@
 
 ---
 
+## 2026-04-23: Improved ReadFileTool offset validation clarity
+- Refactored offset validation in `ReadFileTool.execute()` for better readability
+- Separated empty file case (`total == 0 and offset > 1`) from non-empty file case (`total > 0 and offset > total`)
+- Maintains same behavior: allows `offset=1` on empty files while rejecting `offset>1`
+- All tests pass, improving code maintainability without changing functionality
+
 ## 2026-04-23: Fixed ReadFileTool offset validation for empty files
 - Fixed offset validation logic in `ReadFileTool.execute()` to correctly handle empty files
 - Changed validation from `if offset > total and total > 0:` to `if offset > max(total, 1):`
