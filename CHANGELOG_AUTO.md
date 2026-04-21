@@ -5,6 +5,13 @@
 
 ---
 
+## 2026-04-23: Enhanced EditFileTool empty string replacement logic
+- Simplified `EditFileTool._calculate_changes()` counting logic for empty string replacements
+- Added explicit handling for empty-to-non-empty replacement in empty files (count=1)
+- Maintains validation that empty string replacement in non-empty files requires replace_all=True
+- Ensures consistent behavior across edge cases while preserving existing API
+- All existing tests continue to pass, including empty string replacement tests
+
 ## 2026-04-23: Fixed empty string replacement bug in EditFileTool
 - Fixed `EditFileTool._calculate_changes()` method to correctly count replacements when old_str is empty
 - Improved error message for empty string replacement validation to clarify why replace_all=True is required

@@ -54,15 +54,9 @@ class EditFileTool(Tool):
         if old_str == "":
             # Special handling for empty string replacement
             if text == "":
-                if new_str == "":
-                    count = 0
-                else:
-                    count = 1
+                count = 1 if new_str != "" else 0
             else:
-                if new_str == "":
-                    count = 0
-                else:
-                    count = len(text) + 1
+                count = len(text) + 1 if new_str != "" else 0
         else:
             count = text.count(old_str)
         
@@ -129,6 +123,10 @@ class EditFileTool(Tool):
                 error="Empty string replacement in non-empty files requires replace_all=True due to ambiguity (empty string matches everywhere)",
                 is_error=True
             )
+
+        # Special handling for empty-to-non-empty replacement in empty files
+        if old_str == "" and text == "" and new_str != "":
+            count = 1
 
         if count == 0:
             # Special case: empty-to-empty replacement is always a no-op
