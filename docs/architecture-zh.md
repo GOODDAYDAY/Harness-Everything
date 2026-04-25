@@ -53,6 +53,8 @@ graph LR
     P5 -->|重启| L5["Tag → CI → 重启循环"]
     L5 --> P6["循环会断"]
     P6 -->|兜底| L6["心跳 + 回滚 + 强制 tag"]
+    L6 --> P7["评判趋平<br/>无记忆/无探索<br/>无法自修改"]
+    P7 -->|V5 四件套| L7["多轴评估 + 经验记忆<br/>+ 探索机制 + 策略层"]
 
     style P1 fill:#FF6B6B,color:white,stroke:none
     style P2 fill:#FF6B6B,color:white,stroke:none
@@ -60,12 +62,14 @@ graph LR
     style P4 fill:#FF6B6B,color:white,stroke:none
     style P5 fill:#FF6B6B,color:white,stroke:none
     style P6 fill:#FF6B6B,color:white,stroke:none
+    style P7 fill:#FF6B6B,color:white,stroke:none
     style L1 fill:#50C878,color:white,stroke:none
     style L2 fill:#50C878,color:white,stroke:none
     style L3 fill:#50C878,color:white,stroke:none
     style L4 fill:#50C878,color:white,stroke:none
     style L5 fill:#50C878,color:white,stroke:none
     style L6 fill:#50C878,color:white,stroke:none
+    style L7 fill:#9B59B6,color:white,stroke:none
 ```
 
 ### 第 1 层：代码太多,上下文放不下
@@ -267,6 +271,155 @@ GitHub Actions 看到 tag → SSH 到服务器 → 部署新代码 → 重启进
 | LLM 把部署脚本改坏了 | prompt 里的 PROTECTION 黑名单 |
 | 部署了坏代码 | CI 烟测 + 回滚到 harness-last-good |
 | 磁盘满 | 清理 cron 每天删旧数据 |
+
+### 第 7 层（V5）：评判趋平、无记忆、无探索、无法自修改
+
+**问题**：V4 跑了一段时间后暴露出四个结构性瓶颈：
+
+1. **评判趋平** — 单一分数（0-10）区分度不够。"还行"和"真好"得分差不多，评估在真空中循环，没有外部基准校准
+2. **无跨周期学习** — `memory.jsonl` 只是流水账日志，没有经验提炼和抽象。LLM 上一轮犯的错，下一轮还会犯
+3. **纯 exploitation** — 只会小步优化，在局部最优附近打转，永远不会尝试大胆的新方向
+4. **无法自修改** — agent 改不了自己的 evaluator prompt 和评估权重。这些配置硬编码在 Python 文件里（如 `harness/prompts/dual_evaluator.py`），import 一次就冻在内存里，改了也不生效
+
+**解法**：V5 四个新模块，每个解决一个瓶颈：
+
+```
+瓶颈 1（评判趋平）      → MultiAxisEvaluator（多轴评估）
+瓶颈 2（无跨周期学习）  → ExperienceStore（结构化经验记忆）
+瓶颈 3（纯 exploitation）→ Exploration Mode（探索机制）
+瓶颈 4（无法自修改）    → EvalConfig（热重载）+ MetaAgent（策略层）
+```
+
+#### 1. 多轴评估 — 5 维向量替代单一分数
+
+```
+旧（V4）:  evaluator 输出 "SCORE: 7.5" → 一个数字，区分度低
+新（V5）:  evaluator 输出 [correctness, code_quality, arch_health, novelty, alignment]
+           ↓
+           加权平均 = 最终分数,权重可从磁盘热加载
+```
+
+```mermaid
+graph LR
+    subgraph V5 多轴评估
+        CODE[改动] --> VEC[5 维向量]
+        VEC --> C[correctness<br/>正确性 35%]
+        VEC --> Q[code_quality<br/>代码质量 25%]
+        VEC --> A[arch_health<br/>架构健康 15%]
+        VEC --> N[novelty<br/>新颖度 10%]
+        VEC --> AL[alignment<br/>策略一致性 15%]
+        C --> WAVG[加权平均]
+        Q --> WAVG
+        A --> WAVG
+        N --> WAVG
+        AL --> WAVG
+        WAVG --> SCORE[最终分数]
+    end
+
+    style VEC fill:#9B59B6,color:white,stroke:none
+    style SCORE fill:#50C878,color:white,stroke:none
+```
+
+每个维度独立评分（0-10），两个评估视角（basic + diffusion）并行跑，平均后得到最终向量。权重存在 `harness/config/eval_weights.json`，每次评估前热加载 — MetaAgent 改了权重文件，下一次评估立刻用新权重。
+
+#### 2. 结构化经验记忆 — 不只记"做了什么"，还记"学到了什么"
+
+```
+旧（V4 memory.jsonl）:
+  {"cycle": 5, "score": 7.2, "proposal": "改了一堆东西..."}
+  → 流水账，不懂从中学习
+
+新（V5 ExperienceStore）:
+  Experience(
+    cycle=5,
+    eval_vector=[8,7,6,5,9],    # 多轴向量
+    action_summary="合并两个 AST 工具减少重复",
+    reflection="共享 boilerplate 提取为 _ast_utils 是正确的……",  # LLM 的反思
+    abstraction="当多个工具共享 >30% 代码时，提取公共模块到 core/",  # 提炼的模式
+    tags=["tool_merge", "dedup", "ast"],
+    was_reverted=false,
+  )
+```
+
+接口：
+- `record(exp)` — 追加经验
+- `query(["evaluator", "scoring"])` — 按标签检索相关经验
+- `compress(ratio)` — 合并相似经验，提炼更抽象的规则
+- `format_context(max_entries)` — 格式化给 LLM 和 MetaAgent 读
+
+#### 3. 探索机制 — 不只 exploitation，还要 exploration
+
+```
+正常轮（exploitation）:
+  评估权重: 正确性 0.35, 代码质量 0.25, 架构 0.15, 新颖度 0.10, 一致性 0.15
+  → 小步优化，稳妥为主
+
+探索轮（exploration）:
+  评估权重: 正确性 0.15, 代码质量 0.10, 架构 0.10, 新颖度 0.50, 一致性 0.15
+  → 新颖度权重提到 50%，鼓励大胆尝试
+  → 放松 gate（允许失败），scope 限定到单一模块
+  → 每 N 轮（默认 3 轮）插入一次探索轮
+```
+
+#### 4. 策略层 + 热重载 — agent 能改自己了
+
+```
+┌─────────────────────────────────────────────────────┐
+│ MetaAgent（每 5-10 轮运行一次，不写代码，只出策略）      │
+│                                                     │
+│ 输入:                                                │
+│   • ExperienceStore.format_context(limit=20)         │
+│   • 分数趋势（过去 N 轮的多轴变化）                     │
+│   • 当前评估权重                                      │
+│                                                     │
+│ 输出:                                                │
+│   • focus_axis: "novelty"（接下来重点优化哪个维度）     │
+│   • adjust_weights: {"novelty": 0.3, ...}（调整权重）  │
+│   • exploration_frequency: 3（调整探索频率）            │
+│   • reasoning: "..."（策略推理过程）                    │
+│                                                     │
+│ MetaAgent 的决策写入 eval_weights.json → 下次评估      │
+│ 热加载新权重 → 不重启就生效                              │
+└─────────────────────────────────────────────────────┘
+```
+
+配合 `GetSelfConfigTool`（注册给 agent 的工具），agent 可以查询"我的配置文件在哪"，然后自己修改 evaluator prompt 和权重。
+
+**V5 新增文件**：
+
+| 文件 | 职责 |
+|---|---|
+| `harness/evaluation/multi_axis.py` | 5 维向量评估器，替代单一分数 |
+| `harness/core/experience.py` | 结构化经验记忆，替代 JSONL 流水账 |
+| `harness/pipeline/meta_agent.py` | 策略层：分析趋势，调整方向 |
+| `harness/core/eval_config.py` | 热重载配置：prompt 和权重从磁盘读取 |
+| `harness/tools/self_config.py` | Agent 自感知工具：查询自己的配置路径 |
+
+**V5 架构总览**：
+
+```mermaid
+graph TD
+    subgraph 每轮执行
+        WORKER[Worker Agent<br/>改代码] --> EVAL[MultiAxisEvaluator<br/>5 维向量打分]
+        EVAL --> EXP[ExperienceStore<br/>记录经验 + 反思 + 抽象]
+    end
+
+    subgraph 每 N 轮策略调整
+        EXP --> META[MetaAgent<br/>分析趋势 + 调整策略]
+        META -->|改权重| CONFIG[EvalConfig<br/>热重载,不重启生效]
+        CONFIG -->|影响| EVAL
+        META -->|决定探索频率| EXPLORE[Exploration Phase<br/>novelty-weighted 尝试]
+    end
+
+    EXPLORE --> WORKER
+
+    style WORKER fill:#4A90D9,color:white,stroke:none
+    style EVAL fill:#9B59B6,color:white,stroke:none
+    style EXP fill:#50C878,color:white,stroke:none
+    style META fill:#FF8C42,color:white,stroke:none
+    style CONFIG fill:#FFD700,color:black,stroke:none
+    style EXPLORE fill:#E74C3C,color:white,stroke:none
+```
 
 ---
 
@@ -548,17 +701,20 @@ PipelineConfig                     # 顶层配置
 │   ├── allowed_paths: [workspace]
 │   └── max_tool_turns: 20
 ├── phases: [PhaseConfig]          #   阶段列表
-│   ├── name, mode (debate/implement)
+│   ├── name, mode (debate/implement/exploration)
 │   ├── system_prompt (含 $file_context 等模板变量)
 │   └── glob_patterns (注入哪些文件)
 ├── outer_rounds: 10               #   每个 chunk 跑几轮
 ├── patience: 5                    #   几轮没进步就早停
+├── evaluation_engine: "multi_axis" #   V5: 评估引擎 ('dual' 或 'multi_axis')
+├── exploration_interval: 3        #   V5: 每 N 轮插入探索轮 (0=禁用)
+├── meta_agent_interval: 5         #   V5: 每 N 轮运行策略层 (0=禁用)
 ├── auto_push_interval: 1          #   每轮 push
 └── auto_tag_at_end: true          #   退出必打 tag
 
 InnerResult                        # 单次尝试的结果
 ├── proposal: str                  #   LLM 的提案或改动
-├── dual_score                     #   双重评分
+├── dual_score                     #   双重评分 (V4) 或 multi_axis 向量 (V5)
 │   ├── basic: (score, critique)   #     缺陷评估
 │   └── diffusion: (score, critique)#    波及效应
 └── tool_call_log: [dict]          #   工具调用记录
@@ -567,6 +723,13 @@ PhaseResult                        # 阶段结果
 ├── synthesis: str                 #   合成后的最终方案
 ├── best_score: float              #   最高分
 └── inner_results: [InnerResult]   #   所有尝试
+
+EvalVector (V5)                    # 多轴评估向量
+├── correctness: float             #   正确性 (0-10)
+├── code_quality: float            #   代码质量 (0-10)
+├── arch_health: float             #   架构健康 (0-10)
+├── novelty: float                 #   新颖度 (0-10)
+└── alignment: float               #   策略一致性 (0-10)
 ```
 
 ---
@@ -580,7 +743,12 @@ PhaseResult                        # 阶段结果
 | `harness/core/config.py` | 配置 | JSON → 配置对象,路径安全验证 |
 | `harness/pipeline/pipeline_loop.py` | 外层循环 | 轮次编排、push、tag、早停、关闭 |
 | `harness/pipeline/phase_runner.py` | 阶段执行 | 代码注入、内层轮次、评估、合成、hooks |
-| `harness/evaluation/dual_evaluator.py` | 质量把关 | 两个 LLM 并行打分,选最好的方案 |
+| `harness/evaluation/dual_evaluator.py` | 质量把关(V4) | 两个 LLM 并行打分,选最好的方案 |
+| `harness/evaluation/multi_axis.py` | **质量把关(V5)** | 5 维向量评估,权重热加载 |
+| `harness/core/experience.py` | **V5 记忆** | 结构化经验,含反思和抽象提炼 |
+| `harness/pipeline/meta_agent.py` | **V5 策略层** | 分析趋势,调整评估权重和探索频率 |
+| `harness/core/eval_config.py` | **V5 热配置** | evaluator prompt/权重从磁盘热加载 |
+| `harness/tools/self_config.py` | **V5 自感知** | agent 查询自己配置文件位置的工具 |
 | `harness/tools/registry.py` | 工具分发 | 工具注册、参数校验、异常封装 |
 | `harness/tools/base.py` | 工具安全 | `_check_path` 路径边界检查 |
 | `harness/pipeline/hooks.py` | 验证 | 语法检查 + git commit（富信息） |
@@ -631,4 +799,4 @@ flowchart TD
 
 ## 一段话总结
 
-> 把项目代码扔给 LLM,让它分析、提改进方案、用工具改代码。用另一个 LLM 调用评判改得好不好,选最好的方案 commit。多轮迭代,每轮都比上一轮基于更好的代码。因为 Python 模块加载后就固化在内存里,所以每 10 轮重启一次进程让改进生效。重启通过 git tag 触发 GitHub Actions 自动部署实现,形成无人值守的自改进循环。工具系统（30 个文件/搜索/执行工具）本质上只是给 LLM 戴的安全手套——只留一个 bash 也能跑,但更危险、更费 token。
+> 把项目代码扔给 LLM,让它分析、提改进方案、用工具改代码。用另一个 LLM 调用评判改得好不好——V4 用单一分数,V5 升级为 5 维向量（正确性、代码质量、架构健康、新颖度、策略一致性）,区分度更高。选最好的方案 commit。多轮迭代,每轮都比上一轮基于更好的代码。V5 新增结构化经验记忆,不只记"做了什么"还提炼"学到了什么"；探索机制定期突破局部最优；MetaAgent 策略层每 N 轮分析趋势并自动调整评估权重。因为 Python 模块加载后就固化在内存里,所以每 10 轮重启一次进程让改进生效——但 evaluator prompt 和权重通过热重载机制无需重启即可更新。重启通过 git tag 触发 GitHub Actions 自动部署实现,形成无人值守的自改进循环。工具系统（30 个文件/搜索/执行工具）本质上只是给 LLM 戴的安全手套——只留一个 bash 也能跑,但更危险、更费 token。
