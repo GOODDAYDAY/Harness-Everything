@@ -53,6 +53,8 @@ graph LR
     P5 -->|restart| L5["Tag → CI → Restart"]
     L5 --> P6["Loop can break"]
     P6 -->|safety nets| L6["Heartbeat + Rollback<br/>+ Force Tag"]
+    L6 --> P7["Score plateau<br/>No memory/exploration<br/>Can't self-modify"]
+    P7 -->|V5 suite| L7["Multi-Axis Eval + Memory<br/>+ Exploration + Strategy"]
 
     style P1 fill:#FF6B6B,color:white,stroke:none
     style P2 fill:#FF6B6B,color:white,stroke:none
@@ -60,12 +62,14 @@ graph LR
     style P4 fill:#FF6B6B,color:white,stroke:none
     style P5 fill:#FF6B6B,color:white,stroke:none
     style P6 fill:#FF6B6B,color:white,stroke:none
+    style P7 fill:#FF6B6B,color:white,stroke:none
     style L1 fill:#50C878,color:white,stroke:none
     style L2 fill:#50C878,color:white,stroke:none
     style L3 fill:#50C878,color:white,stroke:none
     style L4 fill:#50C878,color:white,stroke:none
     style L5 fill:#50C878,color:white,stroke:none
     style L6 fill:#50C878,color:white,stroke:none
+    style L7 fill:#9B59B6,color:white,stroke:none
 ```
 
 ### Layer 1: Code Too Large for Context
@@ -234,6 +238,130 @@ edit_file("harness/core/llm.py", ...)  # disk changes
 | LLM breaks deploy scripts | `SELF-IMPROVEMENT LOOP PROTECTION` blocklist in prompts |
 | Bad code deployed | CI smoke test + rollback to `harness-last-good` |
 | Disk full | Cleanup cron deletes old data daily |
+
+### Layer 7 (V5): Score Plateau, No Memory, No Exploration, Can't Self-Modify
+
+**Problem**: After extended runs, V4 hit four structural bottlenecks:
+
+1. **Score plateau** — A single 0–10 score can't distinguish "good enough" from "excellent." Evaluation cycles in a vacuum with no external calibration.
+2. **No cross-cycle learning** — `memory.jsonl` is just a log stream, not structured memory. The LLM repeats mistakes from previous cycles because there's no abstraction layer.
+3. **Pure exploitation** — Only small local improvements, never tries bold new directions. Gets stuck in local optima.
+4. **Can't self-modify** — The agent can't change its own evaluator prompts or weights. These are hardcoded in Python files (e.g. `harness/prompts/dual_evaluator.py`), imported once, and frozen in memory.
+
+**Solution**: Four new V5 modules, each targeting one bottleneck:
+
+```
+Bottleneck 1 (score plateau)      → MultiAxisEvaluator
+Bottleneck 2 (no memory)          → ExperienceStore
+Bottleneck 3 (no exploration)     → Exploration Mode
+Bottleneck 4 (can't self-modify)  → EvalConfig (hot-reload) + MetaAgent (strategy layer)
+```
+
+#### 1. Multi-Axis Evaluation — 5-dim vector replaces single score
+
+```
+V4: evaluator outputs "SCORE: 7.5" → one number, low discrimination
+V5: evaluator outputs [correctness, code_quality, arch_health, novelty, alignment]
+     ↓
+     weighted average = final score, weights hot-reloaded from disk
+```
+
+Each dimension scored 0–10 independently. Two evaluator perspectives (basic + diffusion) run in parallel, results averaged. Weights stored in `harness/config/eval_weights.json`, hot-reloaded on every evaluation — MetaAgent adjusts weights, next evaluation uses them immediately without restart.
+
+#### 2. Structured Experience Memory — not just "what I did" but "what I learned"
+
+```
+V4 memory.jsonl:
+  {"cycle": 5, "score": 7.2, "proposal": "changed stuff..."}
+  → Log stream, no learning from it
+
+V5 ExperienceStore:
+  Experience(
+    cycle=5,
+    eval_vector=[8,7,6,5,9],    # multi-axis vector
+    action_summary="Merged two AST tools, extracted shared helpers",
+    reflection="Shared boilerplate extraction was correct; _ast_utils is the right home",
+    abstraction="When 2+ tools share >30% code, extract common module to core/",
+    tags=["tool_merge", "dedup", "ast"],
+    was_reverted=false,
+  )
+```
+
+API: `record()`, `query(tags)`, `compress(ratio)`, `format_context(max_entries)`.
+
+#### 3. Exploration Mode — not just exploit, also explore
+
+```
+Exploit round:
+  weights: correctness 0.35, code_quality 0.25, arch 0.15, novelty 0.10, alignment 0.15
+  → safe incremental improvements
+
+Explore round:
+  weights: correctness 0.15, code_quality 0.10, arch 0.10, novelty 0.50, alignment 0.15
+  → novelty at 50%, rewards bold new approaches
+  → relaxed gating (allows failure), scope limited to single module
+  → injected every N rounds (default every 3)
+```
+
+#### 4. Strategy Layer + Hot Reload — the agent can change itself
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ MetaAgent (runs every 5-10 rounds, reads, does NOT code)   │
+│                                                            │
+│ Inputs:                                                    │
+│   • ExperienceStore.format_context(limit=20)               │
+│   • Score trends (multi-axis, last N cycles)               │
+│   • Current evaluation weights                             │
+│                                                            │
+│ Outputs:                                                   │
+│   • focus_axis: "novelty" (which dimension to prioritize)  │
+│   • adjust_weights: {"novelty": 0.3, ...}                  │
+│   • exploration_frequency: 3                               │
+│   • reasoning: "..." (strategy rationale)                  │
+│                                                            │
+│ Decisions written to eval_weights.json → next evaluation   │
+│ hot-reloads new weights → takes effect without restart     │
+└────────────────────────────────────────────────────────────┘
+```
+
+Paired with `GetSelfConfigTool` (registered agent tool), the agent can discover where its config files live and modify its own evaluator prompts and weights.
+
+**V5 New Files**:
+
+| File | Role |
+|---|---|
+| `harness/evaluation/multi_axis.py` | 5-dim vector evaluator replacing single score |
+| `harness/core/experience.py` | Structured memory replacing JSONL log stream |
+| `harness/pipeline/meta_agent.py` | Strategy layer: analyzes trends, adjusts direction |
+| `harness/core/eval_config.py` | Hot-reload config: prompts & weights read from disk |
+| `harness/tools/self_config.py` | Agent self-awareness tool: shows config file paths |
+
+**V5 Architecture Overview**:
+
+```mermaid
+graph TD
+    subgraph Per-Round Execution
+        WORKER[Worker Agent<br/>writes code] --> EVAL[MultiAxisEvaluator<br/>5-dim vector]
+        EVAL --> EXP[ExperienceStore<br/>record + reflect + abstract]
+    end
+
+    subgraph Every N Rounds: Strategy
+        EXP --> META[MetaAgent<br/>analyze trends + adjust]
+        META -->|modify weights| CONFIG[EvalConfig<br/>hot-reload, no restart]
+        CONFIG -->|affects| EVAL
+        META -->|set explore freq| EXPLORE[Exploration Phase<br/>novelty-weighted attempt]
+    end
+
+    EXPLORE --> WORKER
+
+    style WORKER fill:#4A90D9,color:white,stroke:none
+    style EVAL fill:#9B59B6,color:white,stroke:none
+    style EXP fill:#50C878,color:white,stroke:none
+    style META fill:#FF8C42,color:white,stroke:none
+    style CONFIG fill:#FFD700,color:black,stroke:none
+    style EXPLORE fill:#E74C3C,color:white,stroke:none
+```
 
 ---
 
@@ -459,17 +587,20 @@ PipelineConfig                     # Top-level config
 │   ├── allowed_paths: [workspace]
 │   └── max_tool_turns: 20
 ├── phases: [PhaseConfig]          #   Phase list
-│   ├── name, mode (debate/implement)
+│   ├── name, mode (debate/implement/exploration)
 │   ├── system_prompt (with $file_context template vars)
 │   └── glob_patterns (which files to inject)
 ├── outer_rounds: 10               #   Rounds per chunk
 ├── patience: 5                    #   Early stop after N stale rounds
+├── evaluation_engine: "multi_axis" #   V5: eval engine ('dual' or 'multi_axis')
+├── exploration_interval: 3        #   V5: explore every N rounds (0=disabled)
+├── meta_agent_interval: 5         #   V5: strategy layer every N rounds (0=disabled)
 ├── auto_push_interval: 1          #   Push every round
 └── auto_tag_at_end: true          #   Force tag on every exit
 
 InnerResult                        # Single attempt result
 ├── proposal: str                  #   LLM's proposal or changes
-├── dual_score                     #   Dual scores
+├── dual_score                     #   Dual scores (V4) or multi_axis vector (V5)
 │   ├── basic: (score, critique)   #     Defect evaluation
 │   └── diffusion: (score, critique)#    Ripple effects
 └── tool_call_log: [dict]          #   Tool call records
@@ -478,6 +609,13 @@ PhaseResult                        # Phase result
 ├── synthesis: str                 #   Synthesized final proposal
 ├── best_score: float              #   Highest score
 └── inner_results: [InnerResult]   #   All attempts
+
+EvalVector (V5)                    # Multi-axis evaluation vector
+├── correctness: float             #   Correctness (0-10)
+├── code_quality: float            #   Code quality (0-10)
+├── arch_health: float             #   Architecture health (0-10)
+├── novelty: float                 #   Novelty (0-10)
+└── alignment: float               #   Strategic alignment (0-10)
 ```
 
 ---
@@ -491,7 +629,12 @@ PhaseResult                        # Phase result
 | `harness/core/config.py` | Config | JSON → config object, path security validation |
 | `harness/pipeline/pipeline_loop.py` | Outer loop | Round orchestration, push, tag, early stop, shutdown |
 | `harness/pipeline/phase_runner.py` | Phase execution | Context injection, inner rounds, evaluation, synthesis, hooks |
-| `harness/evaluation/dual_evaluator.py` | Quality gate | Two LLMs score in parallel, pick the best proposal |
+| `harness/evaluation/dual_evaluator.py` | Quality gate (V4) | Two LLMs score in parallel, pick the best proposal |
+| `harness/evaluation/multi_axis.py` | **Quality gate (V5)** | 5-dim vector eval, hot-reloaded weights |
+| `harness/core/experience.py` | **V5 Memory** | Structured experience with reflection & abstraction |
+| `harness/pipeline/meta_agent.py` | **V5 Strategy** | Analyzes trends, adjusts weights & exploration |
+| `harness/core/eval_config.py` | **V5 Hot Config** | Evaluator prompts & weights hot-reloaded from disk |
+| `harness/tools/self_config.py` | **V5 Self-Aware** | Agent tool to discover its own config file paths |
 | `harness/tools/registry.py` | Tool dispatch | Registration, param validation, exception wrapping |
 | `harness/tools/base.py` | Tool security | `_check_path` workspace boundary enforcement |
 | `harness/pipeline/hooks.py` | Verification | Syntax check + git commit (rich metadata) |
@@ -503,4 +646,4 @@ PhaseResult                        # Phase result
 
 ## One-Paragraph Summary
 
-> Feed project code to an LLM, let it analyze and improve, using tools to read and edit files. A separate LLM call judges the quality; only the best proposals get committed. Multiple rounds iterate, each building on the improved code from the previous round. Because Python modules are loaded once at startup and frozen in memory, the process must restart every N rounds for improvements to take effect. Restart is driven by git tags triggering a GitHub Actions workflow that SSH-deploys and restarts the service — forming an unattended self-improvement loop. The tool system (30+ file/search/execution tools) is essentially safety gloves for the LLM — a single `bash` tool could do everything, but it would be less safe and more expensive.
+> Feed project code to an LLM, let it analyze and improve, using tools to read and edit files. A separate LLM call judges quality — V4 used a single score, V5 upgrades to a 5-dimension vector (correctness, code quality, architecture health, novelty, strategic alignment) for better discrimination. Only the best proposals get committed. Multiple rounds iterate, each building on the improved code from the previous round. V5 adds structured experience memory that abstracts reusable patterns, an exploration mode that periodically breaks out of local optima, and a MetaAgent strategy layer that analyzes trends and auto-adjusts evaluation weights. Because Python modules are loaded once at startup and frozen in memory, the process must restart every N rounds for code improvements to take effect — but evaluator prompts and weights hot-reload from disk, changing without restart. Restart is driven by git tags triggering a GitHub Actions workflow that SSH-deploys and restarts the service — forming an unattended self-improvement loop. The tool system (30+ file/search/execution tools) is essentially safety gloves for the LLM — a single `bash` tool could do everything, but it would be less safe and more expensive.

@@ -1,6 +1,6 @@
 # Harness-Everything
 
-Provider-agnostic AI coding harness that autonomously improves codebases through iterative, multi-phase LLM loops.
+Provider-agnostic AI coding harness that autonomously improves codebases through iterative, multi-phase LLM loops. **V5** adds multi-axis evaluation, structured experience memory, exploration mode, and a MetaAgent strategy layer that can modify its own evaluator prompts and weights at runtime.
 
 Works with any LLM supporting the Anthropic API format (Claude, DeepSeek, Gemini via gateway, etc.).
 
@@ -20,18 +20,35 @@ python main.py --pipeline config/pipeline_example_self_improve.json
 ## Architecture
 
 ```
-Pipeline Mode:
+Pipeline Mode (V5):
   Outer Round 1..N
-    +-- Phase 1..M (debate or implement)
+    ├── MetaAgent (every N rounds: analyze trends, adjust strategy)
+    ├── Exploration Phase (every N rounds: novelty-weighted attempts)
+    +-- Phase 1..M (debate, implement, or exploration)
     |     +-- Inner Round 1..K
     |     |     +-- Executor (tool-use loop: read, edit, grep, bash...)
-    |     |     +-- DualEvaluator (basic + diffusion, parallel)
+    |     |     +-- MultiAxisEvaluator (5-dim vector: correctness, code_quality,
+    |     |           arch_health, novelty, alignment — weights hot-reloaded)
     |     +-- Synthesis (merge best proposals)
+    |     +-- ExperienceStore (record + reflect + abstract patterns)
     |     +-- Hooks (syntax check, pytest, git commit)
-    +-- Auto-push (git push every N rounds)
+    +-- Auto-push (git pull --rebase + push every N rounds)
     +-- Auto-tag (git tag + push, triggers CI/CD)
     +-- Early stop (patience-based)
 ```
+
+## V5 Features
+
+| Module | File | Description |
+|---|---|---|
+| **Multi-Axis Eval** | `harness/evaluation/multi_axis.py` | 5-dim vector (correctness, code_quality, arch_health, novelty, alignment) replaces single 0–10 score. Weights hot-reloaded from `harness/config/eval_weights.json`. |
+| **Experience Memory** | `harness/core/experience.py` | Structured memory replacing JSONL logs. Each entry records the eval vector, LLM self-reflection, abstracted patterns, and searchable tags. |
+| **Exploration Mode** | `harness/pipeline/phase_runner.py` | Novelty-weighted exploration rounds (novelty at 50%) injected every N rounds. Relaxed gating lets the agent try bold new approaches. |
+| **MetaAgent** | `harness/pipeline/meta_agent.py` | Strategy layer running every N rounds. Reads experience store + score trends, outputs: focus axis, weight adjustments, exploration frequency. |
+| **Hot-Reload Config** | `harness/core/eval_config.py` | Evaluator prompts and weights stored as plain `.txt`/`.json` files on disk. Read fresh every evaluation — changes take effect without restart. |
+| **Self-Awareness** | `harness/tools/self_config.py` | `GetSelfConfigTool` lets the agent discover where its own config files live and modify them at runtime. |
+
+See [`docs/architecture-zh.md`](docs/architecture-zh.md) (Chinese) or [`docs/architecture-en.md`](docs/architecture-en.md) (English) for the full evolution from V1 (raw while-loop) through V5 (self-modifying agent).
 
 ## LLM Provider
 
@@ -66,6 +83,9 @@ Templates in [`config/`](config/):
 | `outer_rounds` | 5 | Rounds per chunk |
 | `inner_rounds` | 3 | Proposals per phase |
 | `patience` | 3 | Early stop after N non-improving rounds |
+| `evaluation_engine` | `"dual"` | V5: `"dual"` (legacy) or `"multi_axis"` (5-dim vector) |
+| `exploration_interval` | 0 | V5: Novelty-weighted exploration every N rounds (0=off) |
+| `meta_agent_interval` | 0 | V5: Strategy-layer meta-agent every N rounds (0=off) |
 | `max_tool_turns` | 30 | Tool calls per executor loop |
 | `max_file_context_chars` | 60000 | Source code injection budget |
 | `auto_push_interval` | 0 | Push every N rounds (0 = disabled) |
@@ -272,27 +292,36 @@ harness/
   core/
     config.py          # HarnessConfig, PipelineConfig
     llm.py             # Async LLM client (retry, pruning, file-read cache)
+    eval_config.py     # **V5** Hot-reload evaluator prompts & weights from disk
+    experience.py      # **V5** Structured memory with reflection & abstraction
     security.py        # Path security: homoglyphs, null bytes, control chars
     artifacts.py       # Hierarchical run/round/phase/inner storage
     checkpoint.py      # Resume-safe .done markers
     project_context.py # Project metadata injection
   pipeline/
     pipeline_loop.py   # Outer rounds: auto-push, auto-tag, meta-review, shutdown
+    meta_agent.py      # **V5** Strategy layer: analyzes trends, adjusts direction
     phase_runner.py    # Inner rounds, synthesis, parallel debate
     phase.py           # PhaseConfig, InnerResult, PhaseResult (data only)
     simple_loop.py     # Simple mode orchestrator
     executor.py        # Tool-use agentic loop
     planner.py         # Three-way plan generation
     hooks.py           # SyntaxCheck, Pytest, GitCommitHook
-    memory.py          # Cross-round JSONL learning
+    memory.py          # Cross-round JSONL learning (V4)
     metrics.py         # Structured per-phase metrics
     three_way.py       # Conservative/aggressive/merge resolver
   evaluation/
-    dual_evaluator.py  # Basic + Diffusion parallel evaluation
+    multi_axis.py      # **V5** 5-dim vector evaluator (replaces single score)
+    dual_evaluator.py  # Basic + Diffusion parallel evaluation (V4)
     evaluator.py       # Three-way evaluator
     static_analysis.py # Deterministic code checks
-  tools/               # 30+ tools (file ops, search, git, bash, AST analysis)
-  prompts/             # System prompts for planner, evaluator, synthesis
+  tools/
+    self_config.py      # **V5** Agent self-awareness: discover own config paths
+    *.py                # 30+ tools (file ops, search, git, bash, AST analysis)
+  prompts/
+    eval_basic.txt      # **V5** Basic evaluator prompt (hot-reloadable)
+    eval_diffusion.txt  # **V5** Diffusion evaluator prompt (hot-reloadable)
+    *.py                # System prompts for planner, evaluator, synthesis (V4)
 deploy/
   harness.service      # systemd user unit
   heartbeat.sh         # Cron: restart after 3-strike failure
