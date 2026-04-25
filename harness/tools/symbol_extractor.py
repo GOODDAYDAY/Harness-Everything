@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools._ast_utils import parse_module, safe_parse
+from harness.tools._ast_utils import safe_parse
 from harness.tools.base import Tool, ToolResult
 from harness.tools.cross_reference import CrossReferenceTool
 
@@ -92,7 +92,7 @@ class _SymbolMatch:
         lineno: int,
         end_lineno: int,
         source_text: str,
-        kind: str,  # "function", "async_function", "class", "method", "async_method"
+        kind: str,  # "function", "async_function", "class", "method", "async_method", "constant"
     ) -> None:
         self.qualname = qualname
         self.file = file
@@ -203,6 +203,36 @@ def _extract_symbols_from_source(
                             )
                         )
 
+        # ---- top-level assignment (constant / variable) ----
+        # Handles `MY_CONST = "..."` and `MY_CONST: str = "..."` at module level.
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            # Determine target name(s)
+            if isinstance(node, ast.AnnAssign):
+                # `MY_CONST: str = "..."` → single target
+                if isinstance(node.target, ast.Name):
+                    names_here = [node.target.id]
+                else:
+                    names_here = []
+            else:
+                # `MY_CONST = "..."` → may be a tuple-unpack; only handle simple
+                names_here = [
+                    t.id for t in node.targets if isinstance(t, ast.Name)
+                ]
+
+            for var_name in names_here:
+                if _matches(var_name, var_name):
+                    text = textwrap.dedent(_get_source_segment(source, node))
+                    matches.append(
+                        _SymbolMatch(
+                            qualname=var_name,
+                            file=filepath,
+                            lineno=node.lineno,
+                            end_lineno=node.end_lineno or node.lineno,
+                            source_text=text,
+                            kind="constant",
+                        )
+                    )
+
     return matches
 
 
@@ -264,11 +294,13 @@ class SymbolExtractorTool(Tool):
 
     Unlike ``read_file`` (line-range based) or ``code_analysis`` (symbol
     table only), this tool returns the **exact source text** of a named
-    function, class, or method — nothing more, nothing less.
+    function, class, method, or top-level constant — nothing more, nothing less.
 
     This is especially useful when:
 
     * You need to read a large file but only care about one or two functions.
+    * You want to read a large module-level constant (e.g. a prompt template)
+      without reading the whole file.
     * You want to verify the current implementation of a specific method
       before editing it (more precise than read_file + grep).
     * You are generating a patch and need the exact current text to compute
@@ -279,6 +311,7 @@ class SymbolExtractorTool(Tool):
     * ``"MyClass"``                — entire class body
     * ``"MyClass.my_method"``      — single method
     * ``"my_function"``            — top-level function
+    * ``"_MY_CONST"``              — top-level constant/variable assignment
     * ``"_helper_*"``              — all top-level names matching the glob
     * ``["ClassA", "ClassB.run"]`` — multiple symbols in one call
 
@@ -299,11 +332,12 @@ class SymbolExtractorTool(Tool):
 
     name = "symbol_extractor"
     description = (
-        "Extract the complete source of named Python functions, classes, or methods "
-        "using AST — no need to know line numbers. "
-        "Supply a symbol name like 'MyClass', 'MyClass.method', or a glob pattern "
-        "like '_check_*'. Can search a single file or a whole directory. "
+        "Extract the complete source of named Python functions, classes, methods, "
+        "or top-level constants/variables using AST — no need to know line numbers. "
+        "Supply a symbol name like 'MyClass', 'MyClass.method', '_MY_CONST', or a "
+        "glob pattern like '_check_*'. Can search a single file or a whole directory. "
         "Much more token-efficient than read_file when you only need one function. "
+        "Also works for module-level string constants (e.g. prompt templates). "
         "Does not execute any code."
     )
     requires_path_check = True
@@ -343,10 +377,10 @@ class SymbolExtractorTool(Tool):
                 "context_lines": {
                     "type": "integer",
                     "description": (
-                        "Number of lines to include before each symbol definition "
-                        "(useful to capture decorators). Default: 0."
+                        "Required — no default. "
+                        "Use 2-3 for local context, 5+ for broader view. "
+                        "Use 0 if no context before the definition is needed."
                     ),
-                    "default": 0,
                 },
                 "format": {
                     "type": "string",
@@ -357,11 +391,11 @@ class SymbolExtractorTool(Tool):
                 "limit": {
                     "type": "integer",
                     "description": (
-                        "Maximum number of symbols to return (default: 20). "
+                        "Required — no default. "
+                        "Use 10-20 for focused lookup, 50+ for broad scan. "
                         "Prevents accidental giant outputs when a broad glob "
                         "matches hundreds of symbols."
                     ),
-                    "default": 20,
                 },
                 "find_cross_references": {
                     "type": "boolean",
@@ -381,10 +415,10 @@ class SymbolExtractorTool(Tool):
         *,
         path: str,
         symbols: str | list[str],
-        file_glob: str = "**/*.py",
         context_lines: int = 0,
-        format: str = "text",  # noqa: A002
         limit: int = 20,
+        file_glob: str = "**/*.py",
+        format: str = "text",  # noqa: A002
         find_cross_references: bool = False,
     ) -> ToolResult:
         # Normalise symbols to a list of non-empty strings
@@ -400,9 +434,9 @@ class SymbolExtractorTool(Tool):
             )
 
         # Resolve and path-check
-        resolved, err = self._resolve_and_check(config, path)
-        if err:
-            return err
+        resolved = self._check_path(config, path)
+        if isinstance(resolved, ToolResult):
+            return resolved
 
         p = Path(resolved)
 
@@ -483,7 +517,15 @@ class SymbolExtractorTool(Tool):
                 for m in all_matches
             ]
             
-            # Add cross_references field if requested
+            # When cross-references are not requested, return a plain list for
+            # simplicity.  When cross-refs are included, wrap in a dict so both
+            # symbols and cross_references can be returned together.
+            if not find_cross_references:
+                output = json.dumps(data, indent=2, ensure_ascii=False)
+                if truncated:
+                    output += f"\n// ... (truncated to {limit} symbols)"
+                return ToolResult(output=output)
+
             result_dict = {"symbols": data}
             if find_cross_references:
                 # Initialize cross-reference tool
@@ -521,7 +563,14 @@ class SymbolExtractorTool(Tool):
                             is_error=True
                         )
                 
-                result_dict["cross_references"] = cross_ref_results
+                # For a single symbol, unwrap the nesting so the output is a
+                # flat {callers, callees, test_files} dict rather than
+                # {symbol_name: {callers, ...}}.  For multiple symbols keep
+                # the per-symbol nesting for disambiguation.
+                if len(cross_ref_results) == 1:
+                    result_dict["cross_references"] = next(iter(cross_ref_results.values()))
+                else:
+                    result_dict["cross_references"] = cross_ref_results
             
             output = json.dumps(result_dict, indent=2, ensure_ascii=False)
             if truncated:
@@ -536,7 +585,7 @@ class SymbolExtractorTool(Tool):
             else:
                 msg_parts.append(f"in {resolved}")
             if syntax_errors:
-                msg_parts.append(f"\nNotes:\n" + "\n".join(f"  {e}" for e in syntax_errors[:5]))
+                msg_parts.append("\nNotes:\n" + "\n".join(f"  {e}" for e in syntax_errors[:5]))
             return ToolResult(output=" ".join(msg_parts[:2]) + (
                 "\n" + "\n".join(msg_parts[2:]) if len(msg_parts) > 2 else ""
             ))

@@ -27,13 +27,16 @@ Key design decisions
 from __future__ import annotations
 
 import ast
+import logging
 from collections import deque
 from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
-from harness.tools._ast_utils import parse_module, call_name, extract_callees
+from harness.tools._ast_utils import parse_module, extract_callees
 from harness.tools.base import Tool, ToolResult
+
+log = logging.getLogger(__name__)
 
 _MAX_OUTPUT_BYTES = 24_000
 _MAX_NODES = 200
@@ -147,7 +150,10 @@ class CallGraphTool(Tool):
         "Returns a graph of nodes, each with its definition location and its "
         "outgoing calls. Supports bare function names ('my_func') and "
         "qualified method names ('MyClass.my_method'). "
-        "No external dependencies — pure AST."
+        "No external dependencies — pure AST. "
+        "Use this for forward/downward tracing: what does a function depend on? "
+        "Prefer cross_reference when you want reverse tracing (who calls this "
+        "function?) or need definition location + test files in one call."
     )
     requires_path_check = False  # manual allowed_paths enforcement via _check_dir_root
     tags = frozenset({"analysis"})
@@ -171,8 +177,11 @@ class CallGraphTool(Tool):
                 },
                 "depth": {
                     "type": "integer",
-                    "description": "How many call levels deep to trace (default: 3, max: 5).",
-                    "default": 3,
+                    "description": (
+                        "Required — no default. "
+                        "Use 1-2 for direct relations, 3-5 for deep trace. "
+                        "Max: 5."
+                    ),
                     "minimum": 1,
                     "maximum": 5,
                 },
@@ -186,15 +195,15 @@ class CallGraphTool(Tool):
                     "default": False,
                 },
             },
-            "required": ["function_name"],
+            "required": ["function_name", "depth"],
         }
 
     async def execute(
         self,
         config: HarnessConfig,
+        depth: int,
         function_name: str = "",
         root: str = "",
-        depth: int = 3,
         include_builtins: bool = False,
     ) -> ToolResult:
         function_name = function_name.strip()

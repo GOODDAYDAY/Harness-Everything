@@ -24,10 +24,14 @@ from harness.tools.base import (
 class BatchReadTool(Tool):
     name = "batch_read"
     description = (
-        "Primary tool for reading files. Reads multiple files in one call. "
-        "Prefer this over read_file — each call is one LLM round-trip, so "
-        "reading 10 files here costs the same as reading 1. "
-        "Each file returns line-numbered content with a header."
+        "Primary tool for reading files — use this for everything, even a single "
+        "file. Reads one or many files in a single call (one LLM round-trip). "
+        "Much faster than read_file or bash. Supports line ranges via "
+        "offset/limit, so you can read exactly the section you need. "
+        "Always use this instead of read_file. "
+        "You MUST specify limit (lines per file) — there is no default. "
+        "Think about what you need: 100 for a quick scan, 200-300 for "
+        "understanding a module, 500+ only when you truly need it all."
     )
     requires_path_check = True
     tags = frozenset({"file_read"})
@@ -56,7 +60,9 @@ class BatchReadTool(Tool):
                     "type": "integer",
                     "description": (
                         f"Max lines per file (default {self.MAX_LINES_PER_FILE}). "
-                        "All files in this call use the same limit."
+                        "Choose based on what you need: 100 for a quick scan, "
+                        "200-300 for understanding a module, 500+ only when you"
+                        " truly need the whole file. All files use the same limit."
                     ),
                     "default": 2000,
                 },

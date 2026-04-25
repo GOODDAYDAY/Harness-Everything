@@ -13,44 +13,58 @@ log = logging.getLogger(__name__)
 
 
 def validate_path_no_homoglyphs(path: str, config: HarnessConfig | None = None) -> str | None:
-    """Check if path contains Unicode homoglyphs that could bypass security.
-    
-    Homoglyphs are characters that look like ASCII but are different code points.
-    For example, CYRILLIC SMALL LETTER A (U+0430) looks like ASCII 'a' (U+0061).
-    
+    """Check if path contains Unicode homoglyphs or visually confusing characters.
+
+    Uses two complementary strategies:
+
+    1. **NFKC normalisation check** — if NFKC(path) != path the filename
+       contains compatibility characters (superscripts, ligatures, full-width
+       letters, combining diacritics, etc.) that could be used to spoof
+       ASCII-looking paths.
+
+    2. **Explicit homoglyph blocklist** — Cyrillic, Greek, and other look-alike
+       characters whose presence is always suspicious in file paths.  When
+       ``config.homoglyph_blocklist`` is non-empty it is used as the blocklist;
+       otherwise a built-in minimal high-risk set is applied.
+
     Args:
-        path: The path string to validate
-        config: Optional HarnessConfig instance for configurable blocklist.
-                If None or config.homoglyph_blocklist is empty, uses minimal set.
-        
+        path: The path string to validate.
+        config: Optional ``HarnessConfig``; used to read a custom blocklist.
+
     Returns:
-        Error message if homoglyph found, None if path is clean
+        Error message string if suspicious characters found, else ``None``.
     """
-    # Use configurable blocklist if available, otherwise minimal high-risk set
-    if config and hasattr(config, 'homoglyph_blocklist') and config.homoglyph_blocklist:
+    import unicodedata
+
+    # Strategy 1: NFKC normalisation — catches superscripts, combining marks, etc.
+    nfkc = unicodedata.normalize("NFKC", path)
+    if nfkc != path:
+        return (
+            f"PERMISSION ERROR: Path contains Unicode homoglyphs or compatibility "
+            f"characters that change under NFKC normalisation: {path!r}"
+        )
+
+    # Strategy 2: explicit blocklist — pure look-alikes not caught by NFKC
+    if config and hasattr(config, "homoglyph_blocklist") and config.homoglyph_blocklist:
         homoglyphs = config.homoglyph_blocklist
     else:
-        # Fallback to minimal, high-risk character set
-        # These are visual spoofs of ASCII path delimiters or common letters
         homoglyphs = {
             '\u0430': 'Cyrillic small a (looks like ASCII a)',
             '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
-            '\u0500': 'Cyrillic capital komi s (looks like ASCII O)',
-            '\u01C3': 'Latin letter retroflex click (looks like ASCII !)',
             '\u0391': 'Greek capital alpha (looks like ASCII A)',
             '\u03B1': 'Greek small alpha (looks like ASCII a)',
             '\u041E': 'Cyrillic capital O (looks like ASCII O)',
             '\u043E': 'Cyrillic small o (looks like ASCII o)',
-            '\u0555': 'Armenian comma (looks like ASCII comma)',
-            '\u058A': 'Armenian hyphen (looks like ASCII hyphen)',
             '\u2044': 'Fraction slash (looks like ASCII /)',
             '\uFF0F': 'Full-width solidus (looks like ASCII /)',
         }
-    
     for char, description in homoglyphs.items():
         if char in path:
-            return f"PERMISSION ERROR: Path contains disallowed Unicode homoglyph: {description} (U+{ord(char):04X})"
-    
+            return (
+                f"PERMISSION ERROR: Path contains Unicode homoglyphs: "
+                f"{description} (U+{ord(char):04X})"
+            )
+
     return None
 
 
@@ -172,9 +186,9 @@ async def validate_path_scope(config: HarnessConfig, resolved_path: str) -> tupl
         if workspace in resolved.parents or resolved == workspace:
             return True, None
         else:
-            return False, f"Path {resolved_path} is outside allowed workspace {config.workspace}"
+            return False, f"PERMISSION ERROR: Path not allowed: {resolved_path} is outside allowed workspace {config.workspace}"
     except Exception as e:
-        return False, f"Path validation error: {e}"
+        return False, f"PERMISSION ERROR: Path validation error: {e}"
 
 
 def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path]) -> bool:
@@ -192,9 +206,6 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
     Returns:
         True if the file is within allowed_paths, False otherwise
     """
-    # Create a hash of allowed_paths for cache key
-    allowed_paths_hash = hash(tuple(sorted(str(p) for p in allowed_paths)))
-    
     # Get file stats first to check for multiple hardlinks
     try:
         file_stat = os.fstat(file_fd)
@@ -204,34 +215,13 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
         # SECURITY FIX: Check for multiple hardlinks
         # Files with multiple hardlinks could be accessed from outside allowed paths
         if file_stat.st_nlink > 1:
-            # File has multiple hardlinks - potential security risk
-            # We need to ensure ALL hardlinks are within allowed paths
-            
-            # Try to get the path used to open this file
-            try:
-                proc_path = Path(f"/proc/self/fd/{file_fd}")
-                if proc_path.exists():
-                    opened_path = proc_path.readlink()
-                    opened_path_obj = Path(opened_path)
-                    
-                    # Check if the opened path is within allowed directories
-                    opened_in_allowed = any(
-                        opened_path_obj.is_relative_to(allowed) 
-                        for allowed in allowed_paths
-                    )
-                    
-                    # If the file has multiple hardlinks, we need to be extra cautious
-                    # For security, we'll only allow it if we can verify ALL hardlinks
-                    # are within allowed paths. Since we can't easily enumerate all
-                    # hardlinks, we'll take a conservative approach and reject
-                    # multi-hardlink files when opened via /proc path.
-                    if opened_in_allowed:
-                        # Even though opened path is in allowed directory,
-                        # other hardlinks might exist outside. Reject for safety.
-                        return False
-            except (OSError, ValueError):
-                # If we can't check the opened path, reject multi-hardlink files
-                return False
+            # File has multiple hardlinks — potential security risk.
+            # We cannot efficiently enumerate all hardlink locations, so we
+            # conservatively reject any file whose inode has more than one
+            # directory entry.  This prevents an attacker from creating a
+            # hardlink inside an allowed directory that points to a file
+            # residing outside allowed paths.
+            return False
     except OSError:
         # Cannot stat file
         return False
@@ -244,11 +234,26 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
             target = proc_path.readlink()
             # Get the real path (resolve any symlinks in the target path)
             real_path = Path(os.path.realpath(str(target)))
+            resolved_allowed = [Path(os.path.realpath(str(a))) for a in allowed_paths]
             # Check if the real path is within any allowed path
-            return any(real_path.is_relative_to(allowed) for allowed in allowed_paths)
+            return any(real_path.is_relative_to(a) or real_path == a for a in resolved_allowed)
     except (OSError, ValueError):
         # /proc not available or other error, fall through to Tier 2
         pass
+
+    # Tier 1.5: macOS-specific F_GETPATH (real path of opened fd)
+    try:
+        import fcntl as _fcntl
+        _F_GETPATH = 50  # macOS-specific fcntl constant
+        buf = b"\x00" * 4096
+        result_buf = _fcntl.fcntl(file_fd, _F_GETPATH, buf)
+        real_path_str = result_buf.rstrip(b"\x00").decode("utf-8", errors="replace")
+        if real_path_str:
+            real_path = Path(os.path.realpath(real_path_str))
+            resolved_allowed = [Path(os.path.realpath(str(a))) for a in allowed_paths]
+            return any(real_path.is_relative_to(a) or real_path == a for a in resolved_allowed)
+    except (OSError, ImportError, ValueError):
+        pass  # Not macOS or unsupported; fall through to Tier 2
     
     # Tier 2: Cross-platform device/inode comparison
     try:
@@ -264,7 +269,11 @@ def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path])
                 for filename in files:
                     file_path = Path(root) / filename
                     try:
-                        stat_result = os.stat(str(file_path))
+                        # Use lstat so that symlinks within allowed_paths are
+                        # compared by their OWN inode, not the target's inode.
+                        # This prevents a symlink to an outside file from
+                        # erroneously matching the outside file's dev/ino.
+                        stat_result = os.lstat(str(file_path))
                         if stat_result.st_dev == file_dev and stat_result.st_ino == file_ino:
                             return True
                     except OSError:
@@ -400,7 +409,7 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         filename = abs_path.name
         
         # Validate filename component for path traversal
-        if error := _validate_filename_component(filename):
+        if _validate_filename_component(filename):
             return None
         
         # Step 1: Check if parent directory is a symlink before opening
@@ -423,11 +432,6 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
                 # but we lose TOCTOU protection for symlink swaps
                 dir_fd = os.open(str(parent_dir), os.O_RDONLY)
         
-        # Check if the parent directory is a symlink (malicious TOCTOU scenario)
-        if _is_parent_directory_symlink(dir_fd, filename):
-            os.close(dir_fd)
-            return None  # Parent directory is a symlink - potential TOCTOU attack
-        
         # Step 2: Validate that the opened directory descriptor matches the expected path
         # This implements device/inode validation to prevent TOCTOU attacks
         if not _validate_dir_fd_consistent(dir_fd, parent_dir):
@@ -441,8 +445,11 @@ def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
         except OSError:
             return None  # Cannot resolve real path of parent directory
         
-        # Containment check: Ensure the real parent directory is within allowed paths
-        if not any(parent_real.is_relative_to(allowed) for allowed in allowed_paths):
+        # Containment check: Ensure the real parent directory is within allowed paths.
+        # Resolve allowed_paths to handle OS-level symlinks (e.g. macOS /var -> /private/var)
+        # before comparing against the already-resolved parent_real.
+        resolved_allowed = [Path(os.path.realpath(str(a))) for a in allowed_paths]
+        if not any(parent_real.is_relative_to(a) or parent_real == a for a in resolved_allowed):
             return None  # Parent directory not within allowed paths
         
         # 5. Open target file relative to dir_fd

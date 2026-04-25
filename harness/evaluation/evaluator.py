@@ -23,7 +23,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.pipeline.executor import ExecutionResult
@@ -100,14 +100,22 @@ def _build_log_summary(execution_log: list[dict]) -> str:
         is_error = _is_tool_error(out)
 
         # Build a concise key for the input
-        key = (
-            inp.get("path")
-            or inp.get("source")
-            or inp.get("destination")
-            or (f"$ {inp['command'][:60]}" if "command" in inp else None)
-            or (f"pattern={inp['pattern']!r}" if "pattern" in inp else None)
-            or ""
-        )
+        # Batch tools: summarise as "N files" or "N edits"
+        if "paths" in inp:
+            key = f"{len(inp['paths'])} files"
+        elif "edits" in inp:
+            key = f"{len(inp['edits'])} edits"
+        elif "files" in inp and tool == "batch_write":
+            key = f"{len(inp['files'])} files"
+        else:
+            key = (
+                inp.get("path")
+                or inp.get("source")
+                or inp.get("destination")
+                or (f"$ {inp['command'][:60]}" if "command" in inp else None)
+                or (f"pattern={inp['pattern']!r}" if "pattern" in inp else None)
+                or ""
+            )
 
         if is_error:
             snippet = out[:400]
@@ -135,12 +143,48 @@ def _build_log_summary(execution_log: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _extract_before_snapshots(execution_log: list[dict]) -> dict[str, str]:
-    """Extract pre-execution file content from read_file calls in the log.
+def _strip_line_numbers(output: str) -> str:
+    """Strip ReadFileTool / BatchReadTool line-number prefixes from output.
 
-    The executor is instructed to ``read_file`` every file before editing it.
-    We harvest those reads to build a ``{rel_path: source_before}`` snapshot
-    dictionary that enables the structural-regression check in static analysis.
+    Both tools emit numbered output like::
+
+        [filename.py] lines 1-N of M
+             1\\tline content...
+
+    or (batch_read)::
+
+        --- path [N lines] ---
+             1\\tline content...
+
+    Returns raw source text suitable for AST parsing.
+    """
+    lines = output.split("\n")
+    # Detect header line from ReadFileTool ("[file.py] lines ...")
+    # or BatchReadTool ("--- path [...] ---")
+    start = 0
+    if lines and (
+        (lines[0].startswith("[") and "] lines " in lines[0])
+        or lines[0].startswith("--- ")
+    ):
+        start = 1
+
+    raw_lines: list[str] = []
+    for ln in lines[start:]:
+        tab_pos = ln.find("\t")
+        if tab_pos >= 0 and ln[:tab_pos].strip().isdigit():
+            raw_lines.append(ln[tab_pos + 1:])
+        else:
+            raw_lines.append(ln)
+    return "\n".join(raw_lines)
+
+
+def _extract_before_snapshots(execution_log: list[dict]) -> dict[str, str]:
+    """Extract pre-execution file content from read calls in the log.
+
+    The executor is instructed to read files before editing them (via
+    ``batch_read`` or ``read_file``).  We harvest those reads to build a
+    ``{rel_path: source_before}`` snapshot dictionary that enables the
+    structural-regression check in static analysis.
 
     Only the *first* read of each path is kept (subsequent reads may be
     post-edit verification reads, which would give us the *after* state).
@@ -153,33 +197,50 @@ def _extract_before_snapshots(execution_log: list[dict]) -> dict[str, str]:
     """
     snapshots: dict[str, str] = {}
     for entry in execution_log:
-        if entry.get("tool") != "read_file":
-            continue
-        path = entry.get("input", {}).get("path", "")
-        output = entry.get("output", "")
-        if not path or not output:
-            continue
-        # Normalise path separators and skip already-seen paths
-        norm = str(Path(path))
-        if norm in snapshots:
-            continue  # keep first (pre-edit) read only
-        # Strip the line-number header emitted by ReadFileTool:
-        #   "[filename.py] lines 1-N of M\n     1\tline content..."
-        # We want raw source text for AST parsing, not the annotated form.
-        lines = output.split("\n")
-        # The header is always the first line when produced by ReadFileTool
-        if lines and lines[0].startswith("[") and "] lines " in lines[0]:
-            raw_lines: list[str] = []
-            for ln in lines[1:]:
-                # Each content line is: "   N\t<actual code line>"
-                tab_pos = ln.find("\t")
-                if tab_pos >= 0:
-                    raw_lines.append(ln[tab_pos + 1:])
+        tool = entry.get("tool", "")
+
+        if tool == "read_file":
+            path = entry.get("input", {}).get("path", "")
+            output = entry.get("output", "")
+            if not path or not output:
+                continue
+            norm = str(Path(path))
+            if norm not in snapshots:
+                snapshots[norm] = _strip_line_numbers(output)
+
+        elif tool == "batch_read":
+            # batch_read output contains multiple file blocks separated by
+            # "--- path [N lines] ---" headers
+            output = entry.get("output", "")
+            if not output:
+                continue
+            # Split on block headers
+            current_path: str | None = None
+            current_lines: list[str] = []
+            for line in output.split("\n"):
+                if line.startswith("--- ") and line.endswith("---"):
+                    # Save previous block
+                    if current_path:
+                        norm = str(Path(current_path))
+                        if norm not in snapshots:
+                            snapshots[norm] = _strip_line_numbers(
+                                "\n".join(current_lines)
+                            )
+                    # Parse new header: "--- path/to/file [N lines] ---"
+                    header = line[4:-4].strip()
+                    bracket = header.rfind("[")
+                    current_path = header[:bracket].strip() if bracket > 0 else header
+                    current_lines = []
                 else:
-                    raw_lines.append(ln)
-            snapshots[norm] = "\n".join(raw_lines)
-        else:
-            snapshots[norm] = output
+                    current_lines.append(line)
+            # Save last block
+            if current_path:
+                norm = str(Path(current_path))
+                if norm not in snapshots:
+                    snapshots[norm] = _strip_line_numbers(
+                        "\n".join(current_lines)
+                    )
+
     return snapshots
 
 
@@ -459,8 +520,7 @@ def _extract_structured_feedback(verdict_text: str, phase_mode: str = "implement
         - "calibration_anchor_details": list of specific anchors detected
     """
     import re
-    from typing import Any
-    
+
     result: dict[str, Any] = {
         "score": None,
         "score_breakdown": {},

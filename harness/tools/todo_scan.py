@@ -229,28 +229,27 @@ class TodoScanTool(Tool):
                 "max_results": {
                     "type": "integer",
                     "description": (
-                        f"Maximum total annotations to return "
-                        f"(default: {_DEFAULT_MAX_RESULTS}, "
-                        f"max: {_MAX_RESULTS_HARD_CAP})."
+                        "Required — no default. "
+                        "Use 10-20 for focused scan, 50-100 for comprehensive. "
+                        f"Max: {_MAX_RESULTS_HARD_CAP}."
                     ),
-                    "default": _DEFAULT_MAX_RESULTS,
                     "minimum": 1,
                     "maximum": _MAX_RESULTS_HARD_CAP,
                 },
             },
-            "required": [],
+            "required": ["max_results"],
         }
 
     async def execute(
         self,
         config: HarnessConfig,
         *,
+        max_results: int,
         root: str = "",
         file_glob: str = _DEFAULT_FILE_GLOB,
         tags: list[str] | None = None,
         sort_by: str = "file",
         include_context: bool = False,
-        max_results: int = _DEFAULT_MAX_RESULTS,
     ) -> ToolResult:
         # ------------------------------------------------------------------ #
         # 1. Validate / normalise inputs

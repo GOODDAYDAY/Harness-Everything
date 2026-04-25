@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import glob as glob_mod
+import os
 import py_compile
 import sys
 from abc import ABC, abstractmethod
@@ -27,7 +28,7 @@ class VerificationHook(ABC):
     """Base class for post-execution verification hooks."""
 
     name: str
-    # When True, failure of this hook suppresses subsequent GitCommitHook
+    # When True, failure of this hook suppresses all subsequent hook
     # executions in the same phase. Leave False for advisory checks whose
     # failure should still allow the commit (e.g. pytest when the phase's
     # job is to add new, initially-failing tests).
@@ -110,21 +111,37 @@ class ImportSmokeHook(VerificationHook):
         self.timeout = timeout
 
     async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
+        if not self.modules and not self.smoke_calls:
+            return HookResult(passed=True, output="(no modules to check)", errors="")
         import_stmts = "\n".join(f"import {m}" for m in self.modules)
         call_stmts = "\n".join(self.smoke_calls)
         # build_registry() exercises tool class loading, which is the most
         # common place a refactor breaks imports without hitting top-level
-        # module imports directly.
-        script = (
-            f"{import_stmts}\n"
+        # module imports directly.  Skip when running against an external
+        # project (modules list was overridden, harness may not be importable).
+        harness_src_root = str(Path(__file__).resolve().parents[2])
+        ws_is_harness = str(Path(config.workspace).resolve()) == harness_src_root
+        registry_check = (
             "from harness.tools import build_registry\n"
             "build_registry()\n"
+        ) if ws_is_harness else ""
+        script = (
+            f"{import_stmts}\n"
+            f"{registry_check}"
             f"{call_stmts}\n"
         )
         # Use sys.executable so the smoke runs under the same interpreter
         # (and thus the same venv / installed packages) as the harness itself.
         # Hardcoding "python" fails inside venv-based deployments where the
         # bare name is not on PATH.
+        # The harness package may not be pip-installed; ensure the source
+        # root (parent of the top-level ``harness/`` package) is on
+        # PYTHONPATH so the subprocess can import it even when cwd is the
+        # target workspace (which won't contain ``harness/``).
+        env = {**os.environ}
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{harness_src_root}:{existing}" if existing else harness_src_root
+
         proc: asyncio.subprocess.Process | None = None
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -132,6 +149,7 @@ class ImportSmokeHook(VerificationHook):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=config.workspace,
+                env=env,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=self.timeout

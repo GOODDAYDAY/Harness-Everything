@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
-from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -14,7 +11,13 @@ from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, hand
 @enforce_atomic_validation
 class WriteFileTool(Tool):
     name = "write_file"
-    description = "Create a new file or completely overwrite an existing file with the given content."
+    description = (
+        "Create a new file or completely overwrite an existing file with the "
+        "given content. WARNING: replaces the entire file — all prior content "
+        "is lost. For partial changes use edit_file (single file) or "
+        "batch_edit (multi-file). For writing multiple new files at once, "
+        "prefer batch_write."
+    )
     requires_path_check = True
     tags = frozenset({"file_write"})
 
@@ -22,8 +25,8 @@ class WriteFileTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Absolute or relative file path"},
-                "content": {"type": "string", "description": "Full file content to write"},
+                "path": {"type": "string", "description": "File path to create or overwrite (directories are created automatically)"},
+                "content": {"type": "string", "description": "Complete new file content. Replaces the entire file — do NOT omit unchanged sections."},
             },
             "required": ["path", "content"],
         }

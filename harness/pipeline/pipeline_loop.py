@@ -6,6 +6,7 @@ import asyncio as _asyncio
 import datetime
 import json
 import logging
+import copy
 import re
 import time
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from harness.core.artifacts import ArtifactStore
 from harness.core.checkpoint import CheckpointManager
-from harness.core.config import PipelineConfig
+from harness.core.config import HarnessConfig, PipelineConfig
 from harness.core.llm import LLM
 from harness.pipeline.health import HealthMonitor
 from harness.pipeline.memory import MemoryStore
@@ -37,6 +38,20 @@ _FLATLINE_WARN_STREAK: int = 4
 
 # Matches the "**Best**: 7.5" line written by PhaseRunner._write_phase_summary.
 _BEST_SCORE_RE = re.compile(r"^\*\*Best\*\*:\s*(\d+(?:\.\d+)?)", re.MULTILINE)
+
+# System prompt for the LLM that rewrites phase prompts during auto-update.
+# Kept as a module constant so it is easy to tune and visible in tests.
+_PROMPT_REWRITE_SYSTEM = """\
+You are a prompt engineer improving an LLM system prompt based on concrete feedback.
+
+RULES:
+1. Make TARGETED edits only — fix what the feedback identifies, leave everything else unchanged.
+2. Preserve ALL $variable placeholders (e.g. $file_context, $task) exactly as-is.
+3. Keep the same overall structure: headings, bullet lists, numbered steps.
+4. Do NOT add disclaimers, explanations, or meta-commentary.
+5. Do NOT shorten the prompt significantly — if the feedback is minor, the new prompt should be nearly the same length.
+6. Output ONLY the improved prompt text, nothing else.\
+"""
 
 
 def _read_best_score_from_summary(summary_text: str) -> float | None:
@@ -74,7 +89,12 @@ class PipelineLoop:
     This is the alternative to ``HarnessLoop`` for complex multi-phase workflows.
     """
 
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(self, config: PipelineConfig | HarnessConfig) -> None:
+        # Accept a bare HarnessConfig for convenience (e.g. in tests) by
+        # wrapping it in a default PipelineConfig.
+        _original_config = config
+        if isinstance(config, HarnessConfig):
+            config = PipelineConfig(harness=config)
         self.config = config
         config.harness.apply_log_level()
         log.info(config.harness.startup_banner())
@@ -103,7 +123,9 @@ class PipelineLoop:
         )
         
         # Health monitoring for production quality
-        self.health_monitor = HealthMonitor(config)
+        # Pass the original config (which may be a HarnessConfig if supplied
+        # directly) so that health_monitor.config matches the caller's object.
+        self.health_monitor = HealthMonitor(_original_config)
 
         # Graceful shutdown
         self._shutdown_requested: bool = False
@@ -119,6 +141,12 @@ class PipelineLoop:
         self.score_history: list[float] = []  # Track scores for trend detection
         self.score_trend_warnings: list[dict] = []  # Track score trend warnings
         self.phase_score_history: list[dict] = []  # Track phase-level scores with metadata
+        # Latest intelligence-probe result (Phase 1: evaluator discrimination).
+        # None until the first probe runs successfully. Surfaced in summary.json
+        # and injected into framework_improvement prompts by PhaseRunner via
+        # intel_metrics.format_trajectory.
+        self._latest_intel_probe: dict | None = None
+        self._intel_probe_pipeline_cfg_path: str | None = None
 
     def _build_phases(self) -> list[PhaseConfig]:
         """Build PhaseConfig list from raw config dicts."""
@@ -228,13 +256,19 @@ class PipelineLoop:
         system = self.config.meta_review_system or META_REVIEW_SYSTEM
 
         log.info("Running meta-review for rounds %d–%d…", start_round + 1, outer + 1)
-        response = await self.llm.call(
-            messages=[{"role": "user", "content": user_prompt}],
-            system=system,
-        )
+        try:
+            response = await self.llm.call(
+                messages=[{"role": "user", "content": user_prompt}],
+                system=system,
+            )
+        except Exception as exc:
+            log.warning("Meta-review LLM call failed (non-fatal, skipping): %s", exc)
+            return ""
+
+        text = response.text
 
         # Write artifact and checkpoint
-        self.artifacts.write(response, f"round_{outer + 1}", "meta_review.md")
+        self.artifacts.write(text, f"round_{outer + 1}", "meta_review.md")
         self.checkpoint.mark_meta_review_done(outer)
 
         # Update review hash
@@ -242,8 +276,8 @@ class PipelineLoop:
         if current_hash:
             self.checkpoint.write_last_review_hash(current_hash)
 
-        log.info("Meta-review complete (%d chars)", len(response))
-        return response
+        log.info("Meta-review complete (%d chars)", len(text))
+        return text
 
     async def _get_git_delta(self) -> str:
         """Get git changes since last meta-review hash."""
@@ -366,9 +400,6 @@ class PipelineLoop:
         outer: int,
     ) -> list[PhaseConfig]:
         """Use LLM to rewrite phase prompts based on meta-review suggestions."""
-        from string import Template
-        import copy
-
         updated: list[PhaseConfig] = []
         version = (outer + 1) // max(self.config.meta_review_interval, 1)
 
@@ -389,7 +420,7 @@ class PipelineLoop:
             try:
                 new_prompt = await self.llm.call(
                     messages=[{"role": "user", "content": prompt}],
-                    system="You rewrite prompts. Output only the new prompt.",
+                    system=_PROMPT_REWRITE_SYSTEM,
                 )
             except Exception as exc:
                 log.warning(
@@ -399,15 +430,25 @@ class PipelineLoop:
                 continue
 
             # Validate: all $variables from original must be in new
-            import re as _re
-            orig_vars = set(_re.findall(r"\$\w+", phase.system_prompt))
-            new_vars = set(_re.findall(r"\$\w+", new_prompt))
+            orig_vars = set(re.findall(r"\$\w+", phase.system_prompt))
+            new_vars = set(re.findall(r"\$\w+", new_prompt))
             missing = orig_vars - new_vars
             if missing:
                 log.warning(
                     "auto_update_prompts: phase %s — new prompt missing variables %s, "
                     "keeping original",
                     phase.label, missing,
+                )
+                updated.append(phase)
+                continue
+
+            # Truncation guard: if new prompt is <40% of original length the LLM
+            # probably truncated its output rather than producing a full rewrite.
+            if len(new_prompt) < 0.4 * len(phase.system_prompt):
+                log.warning(
+                    "auto_update_prompts: phase %s — new prompt suspiciously short "
+                    "(%d vs %d chars), keeping original",
+                    phase.label, len(new_prompt), len(phase.system_prompt),
                 )
                 updated.append(phase)
                 continue
@@ -586,6 +627,29 @@ class PipelineLoop:
             # --- Priority 1: Per-round structured metrics.json ---
             self._write_round_metrics_json(outer, all_round_results[-1], round_score, round_elapsed)
 
+            # --- Intelligence probe: evaluator discrimination (rho) ---
+            # Observation-only in Phase 1: records rho and trajectory but does
+            # not gate commits or alter phase scoring. Failures are non-fatal
+            # (probe subprocess can't break the pipeline). Result is stashed
+            # on self for next round's framework_improvement prompt to read.
+            try:
+                from harness.pipeline import intel_metrics as _im
+                probe_result = await _im.run_eval_probe(
+                    self.config.harness,
+                    pipeline_config_path=self._intel_probe_pipeline_cfg_path,
+                )
+                if probe_result is not None:
+                    self._latest_intel_probe = probe_result
+                    log.info(
+                        "intel_probe: rho=%.4f (basic=%.4f diffusion=%.4f) n=%d elapsed=%.1fs",
+                        probe_result.get("rho", 0.0),
+                        probe_result.get("rho_basic", 0.0),
+                        probe_result.get("rho_diffusion", 0.0),
+                        probe_result.get("n", 0),
+                        probe_result.get("elapsed_s", 0.0),
+                    )
+            except Exception as _probe_exc:
+                log.warning("intel_probe: unexpected error: %s", _probe_exc)
             # Accumulate run-level tool call counts from the round's inner results
             for _pr in all_round_results[-1]:
                 for _ir in _pr.inner_results:
@@ -932,10 +996,10 @@ class PipelineLoop:
                 "best_score": round(r.best_score, 2),
                 "inner_rounds": len(r.inner_results),
                 "tool_calls": total_tool_calls,
-                "tool_error_calls": error_tool_calls,
+                "error_tool_calls": error_tool_calls,
             })
         total_round_calls = sum(p["tool_calls"] for p in phases_data)
-        total_round_errors = sum(p["tool_error_calls"] for p in phases_data)
+        total_round_errors = sum(p["error_tool_calls"] for p in phases_data)
         payload = {
             "round": outer + 1,
             "score": round(round_score, 2),
@@ -978,6 +1042,25 @@ class PipelineLoop:
             round_num += 1
         
         return score_history
+
+    def _compute_config_hash(self) -> str:
+        """Return a short deterministic hash of key config fields for run tracing.
+
+        The hash captures the most change-sensitive parts of HarnessConfig so
+        that two runs with different parameters can be distinguished in summary.json.
+        """
+        import hashlib
+        import json as _json
+
+        harness_cfg = self.config.harness
+        relevant = {
+            "model": harness_cfg.model,
+            "workspace": harness_cfg.workspace,
+            "run_id": getattr(self.config, "run_id", None),
+            "max_rounds": getattr(self.config, "max_rounds", None),
+        }
+        raw = _json.dumps(relevant, sort_keys=True, default=str).encode()
+        return hashlib.sha256(raw).hexdigest()[:12]
 
     def _write_run_summary(
         self,
@@ -1039,6 +1122,7 @@ class PipelineLoop:
             "score_trend_warnings": self.score_trend_warnings,
             "tool_error_rate": tool_error_rate,
             "total_tool_calls": total_tool_calls,
+            "total_tool_errors": total_tool_errors,
             "elapsed_total_s": round(total_elapsed, 2),
             "start_time": datetime.datetime.fromtimestamp(self.start_time, datetime.timezone.utc).isoformat(),
             "end_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1050,6 +1134,16 @@ class PipelineLoop:
             "round_metrics": round_metrics,
         }
         payload["metrics_tool_turns"] = self._metrics_collector.total_tool_turns
+        # Intelligence metric: latest evaluator-discrimination probe (may be
+        # None if the benchmark isn't installed or probe failed this round).
+        if self._latest_intel_probe is not None:
+            payload["intel_metrics"] = {
+                "evaluator_rho": self._latest_intel_probe.get("rho"),
+                "evaluator_rho_basic": self._latest_intel_probe.get("rho_basic"),
+                "evaluator_rho_diffusion": self._latest_intel_probe.get("rho_diffusion"),
+                "probe_n": self._latest_intel_probe.get("n"),
+                "probe_elapsed_s": self._latest_intel_probe.get("elapsed_s"),
+            }
         try:
             self.artifacts.write(json.dumps(payload, indent=2), "summary.json")
             log.info(

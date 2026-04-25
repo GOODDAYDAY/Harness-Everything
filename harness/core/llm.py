@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -75,12 +76,87 @@ _CONV_PRUNE_TARGET_CHARS: int = 200_000      # prune down to this target
 # tool output it just received; only older outputs are compressed.
 _CONV_PRUNE_KEEP_RECENT_PAIRS: int = 3
 
+# Tools whose outputs are predominantly navigational / exploratory and carry
+# low signal for future reasoning.  When pruning is triggered, these are
+# stubbed even when their output is only modestly long (> 200 chars), whereas
+# all other tools use a more generous threshold (> 500 chars).
+_LOW_SIGNAL_PRUNE_TOOLS: frozenset[str] = frozenset({
+    "grep_search",
+    "glob_search",
+    "todo_scan",
+    "list_directory",
+    "tree",
+    "tool_discovery",
+    "git_log",
+    "git_status",
+    "git_diff",
+})
+
+# Tools whose outputs are always high-signal and should be preserved with a
+# much more generous stub threshold.  These include test runners (whose pass/
+# fail output is critical for planning the next step), Python evaluation
+# (whose return values and tracebacks are decisive), and lint checks (whose
+# error lists drive immediate follow-up edits).  They get a 2 000-char
+# threshold — only compacted if truly enormous.
+# NOTE: "bash" is deliberately excluded: bash is also used to read files (cat,
+# head, etc.) which produces low-value output, so it stays at the 500-char
+# default and relies on the _HIGH_SIGNAL_PATTERNS filter to preserve key lines.
+_HIGH_SIGNAL_TOOLS: frozenset[str] = frozenset({
+    "test_runner",
+    "python_eval",
+    "lint_check",
+})
+
+# Medium-signal tools produce output (shell commands, code reading, compilation
+# runs) that is worth preserving longer than the 500-char default before
+# compaction / reactive pruning.  lint_check and test_runner are already in
+# _HIGH_SIGNAL_TOOLS so they are excluded here.
+_MEDIUM_SIGNAL_TOOLS: frozenset[str] = frozenset({
+    "bash",
+    # Code-reading tools produce function bodies and structural analysis that
+    # agents need to recall when making edits.  500-char default threshold
+    # compacts a 30-line function body; 1500-char threshold keeps most of them
+    # intact across multiple turns, reducing forced re-reads.
+    "symbol_extractor",
+    "code_analysis",
+    "cross_reference",
+    "call_graph",
+    "data_flow",
+    # Import-graph output is used to reason about circular dependencies and
+    # module structure when reorganising imports; worth preserving longer than
+    # the 500-char default.
+    "dependency_analyzer",
+    # diff_files produces unified diffs of file changes (before/after).  These
+    # are used to verify edits and plan follow-up fixes, so they are worth
+    # preserving longer than the 500-char default.
+    "diff_files",
+    # feature_search and project_map produce structured code-search results;
+    # they are frequently consulted when planning edits so they warrant the
+    # same 1 500-char threshold as other code-reading tools.
+    "feature_search",
+    "project_map",
+})
+
 # Minimum character count for a non-tool-call LLM response to be considered
 # plausible.  Responses shorter than this with no tool calls almost always
 # indicate truncation, a stop-sequence mis-fire, or a context-overflow
 # condition — not a valid empty answer.  A warning is logged so operators can
 # diagnose silent failures before they corrupt scores or produce empty output.
 _SHORT_RESPONSE_CHARS: int = 50
+
+# ---------------------------------------------------------------------------
+# execution_log memory cap
+# ---------------------------------------------------------------------------
+# Each tool call's output is stored in execution_log for artifact writing
+# (tool_log.json).  Large file reads can produce 50 KB+ per entry; with 200+
+# calls per cycle, the list alone can consume 10+ MB.  Cap per-entry output
+# to keep peak memory bounded.  Full content is already in the conversation
+# (with its own pruning) — tool_log.json is a debugging aid, not an archive.
+_EXEC_LOG_MAX_OUTPUT_CHARS: int = 4000
+
+# Maximum scratchpad notes kept in memory.  Older notes are evicted when
+# this cap is reached; the most recent entries are retained.
+_SCRATCHPAD_MAX_NOTES: int = 30
 
 
 async def _call_with_retry(coro_factory, *, max_retries: int = _MAX_RETRIES) -> Any:
@@ -227,6 +303,21 @@ def _prune_conversation_tool_outputs(
     # The most recent `keep_recent_pairs` entries are protected.
     protected_indices: set[int] = set(tool_result_indices[-keep_recent_pairs:])
 
+    # Build a mapping from tool_use_id → tool_name by scanning all assistant
+    # messages.  This lets us apply tool-specific pruning thresholds and
+    # produce better stubs via _make_compact_stub.
+    tool_id_to_name: dict[str, str] = {}
+    for msg in conversation:
+        if msg.get("role") != "assistant":
+            continue
+        for block in msg.get("content", []):
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            bid = block.get("id", "")
+            bname = block.get("name", "")
+            if bid and bname:
+                tool_id_to_name[bid] = bname
+
     msgs_pruned = 0
     chars_removed = 0
 
@@ -241,6 +332,22 @@ def _prune_conversation_tool_outputs(
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
+            # Look up tool name; fall back to generic label if unknown.
+            tool_use_id = block.get("tool_use_id", "")
+            tool_name = tool_id_to_name.get(tool_use_id, "tool")
+            # Low-signal navigational tools (grep, glob, list, etc.) are stubbed
+            # aggressively; medium-signal tools (bash, symbol_extractor, …) get
+            # a moderately generous threshold; high-signal tools (test_runner,
+            # python_eval, lint_check) get the most generous threshold so the
+            # model retains critical context (test failures, eval errors, etc.).
+            if tool_name in _HIGH_SIGNAL_TOOLS:
+                threshold = 2_000
+            elif tool_name in _MEDIUM_SIGNAL_TOOLS:
+                threshold = 1_500
+            elif tool_name in _LOW_SIGNAL_PRUNE_TOOLS:
+                threshold = 200
+            else:
+                threshold = 500
             sub_content = block.get("content", [])
             if not isinstance(sub_content, list):
                 continue
@@ -249,9 +356,45 @@ def _prune_conversation_tool_outputs(
                     continue
                 original_text = sub.get("text", "")
                 original_len = len(original_text)
-                if original_len <= 200:
-                    continue  # already tiny — not worth truncating
-                stub = f"[pruned — {original_len} chars, turn index {idx}]"
+                # Content-aware override: a bash output that looks like a test
+                # or compile run is treated as high-signal (threshold 2000)
+                # even though bash is normally medium-signal (1500).
+                effective_threshold = threshold
+                if (
+                    tool_name == "bash"
+                    and threshold < 2_000
+                    and _bash_is_test_output(original_text)
+                ):
+                    effective_threshold = 2_000
+                if original_len <= effective_threshold:
+                    continue  # already small enough
+                # Use the same compact-stub logic as proactive compaction so
+                # the LLM sees a consistent, signal-preserving summary format.
+                # Pass tool-specific max_signal_lines/max_line_chars to match
+                # the behaviour of _compact_old_tool_results (previously the
+                # default values were used, giving fewer signal lines for
+                # high-signal tools than the proactive path did).
+                _is_high = (
+                    tool_name in _HIGH_SIGNAL_TOOLS
+                    or (tool_name == "bash" and _bash_is_test_output(original_text))
+                )
+                if _is_high:
+                    _max_sig, _max_line = 15, 300
+                elif tool_name in _MEDIUM_SIGNAL_TOOLS:
+                    _max_sig, _max_line = 12, 250
+                elif tool_name in _LOW_SIGNAL_PRUNE_TOOLS:
+                    # Aggressively compact: file-lists and search results are
+                    # rarely re-read in full; 5 signal lines is plenty.
+                    _max_sig, _max_line = 5, 120
+                else:
+                    _max_sig, _max_line = 8, 200
+                stub = _make_compact_stub(
+                    tool_name, original_text,
+                    max_signal_lines=_max_sig,
+                    max_line_chars=_max_line,
+                )
+                if len(stub) >= original_len:
+                    continue  # no space saving — leave original
                 sub["text"] = stub
                 chars_removed += original_len - len(stub)
                 msgs_pruned += 1
@@ -291,13 +434,12 @@ _READ_ONLY_TOOL_NAMES = frozenset({
     "data_flow", "call_graph", "dependency_analyzer",
     # misc read/transform
     "json_transform", "tool_discovery", "scratchpad",
+    # new analysis tools (no side effects)
+    "file_info", "lint_check", "project_map", "context_budget",
 })
 
 
-# extract_written_paths lives in harness/tools/path_utils for reuse across
-# the executor, phase_runner, and agent loop. Imported here for cache
-# invalidation in _CachedToolRegistry.
-from harness.tools.path_utils import extract_written_paths
+from harness.tools.path_utils import extract_written_paths  # noqa: E402  (after TYPE_CHECKING guard)
 
 
 class _CachedToolRegistry:
@@ -317,9 +459,11 @@ class _CachedToolRegistry:
         self._cache: dict[tuple[str, int, int], ToolResult] = {}
         # Paths invalidated by a write; next read from disk re-hydrates.
         self._dirty_paths: set[str] = set()
-        # Per-turn "already seen" path set used by batch_read to skip
-        # re-fetching paths the agent has already pulled into context.
-        self._read_seen: set[str] = set()
+        # Per-turn "already seen" path map used by batch_read to skip
+        # re-fetching paths (with the same offset/limit) the agent has
+        # already pulled into context.  Keyed by path; value is the set
+        # of (offset, limit) pairs that have been fetched.
+        self._read_seen: dict[str, set[tuple[int, int]]] = {}
 
     @property
     def _tools(self) -> dict:          # forward for to_api_schema()
@@ -340,7 +484,7 @@ class _CachedToolRegistry:
         if name in _WRITE_TOOLS:
             for path_str in extract_written_paths(name, params):
                 self._dirty_paths.add(path_str)
-                self._read_seen.discard(path_str)
+                self._read_seen.pop(path_str, None)
 
         if name == "read_file":
             path_str = str(params.get("path", ""))
@@ -353,7 +497,7 @@ class _CachedToolRegistry:
             result = await self._inner.execute(name, config, params)
             if not result.is_error:
                 self._cache[key] = result
-                self._read_seen.add(path_str)
+                self._read_seen.setdefault(path_str, set()).add((offset, limit))
                 # If the path was dirty, a fresh read clears the dirty flag
                 self._dirty_paths.discard(path_str)
             return result
@@ -361,15 +505,18 @@ class _CachedToolRegistry:
         if name == "batch_read":
             raw_paths = params.get("paths") or []
             if isinstance(raw_paths, list) and raw_paths:
+                b_offset = int(params.get("offset", 1))
+                b_limit = int(params.get("limit", 2000))
                 already = [
                     p for p in raw_paths
                     if isinstance(p, str)
-                    and p in self._read_seen
+                    and (b_offset, b_limit) in self._read_seen.get(p, set())
                     and p not in self._dirty_paths
                 ]
                 to_fetch = [
                     p for p in raw_paths
-                    if isinstance(p, str) and p not in self._read_seen
+                    if isinstance(p, str)
+                    and (b_offset, b_limit) not in self._read_seen.get(p, set())
                 ]
                 # All paths already seen — short-circuit with a hint so
                 # the LLM's context isn't re-filled with content it already
@@ -379,7 +526,9 @@ class _CachedToolRegistry:
                         f"[batch_read cache] All {len(already)} path(s) were "
                         "already read earlier in this turn. Review your "
                         "earlier tool results or scratchpad notes — do NOT "
-                        "re-read files to recall content.\n"
+                        "re-read files to recall content. "
+                        "To read a DIFFERENT section of the same file, use a "
+                        "different offset or limit.\n"
                         f"Paths: {', '.join(already)}"
                     )
                     return ToolResult(output=hint, metadata={"cache_hit_all": True})
@@ -390,7 +539,7 @@ class _CachedToolRegistry:
                     result = await self._inner.execute(name, config, fetch_params)
                     if not result.is_error:
                         for p in to_fetch:
-                            self._read_seen.add(p)
+                            self._read_seen.setdefault(p, set()).add((b_offset, b_limit))
                             self._dirty_paths.discard(p)
                         note = (
                             f"[Note] {len(already)} path(s) omitted (already "
@@ -405,7 +554,7 @@ class _CachedToolRegistry:
                 result = await self._inner.execute(name, config, params)
                 if not result.is_error:
                     for p in to_fetch:
-                        self._read_seen.add(p)
+                        self._read_seen.setdefault(p, set()).add((b_offset, b_limit))
                         self._dirty_paths.discard(p)
                 return result
             # Malformed paths — let the tool report the error.
@@ -426,10 +575,192 @@ class _CachedToolRegistry:
 _COMPACT_MIN_TURNS: int = 6       # keep first N turns fully intact
 _COMPACT_KEEP_RECENT: int = 3     # always keep last N assistant+user pairs
 _COMPACT_MIN_TEXT_LEN: int = 500  # only compact results above this size
+_COMPACT_PREVIEW_CHARS: int = 300  # chars of preview to keep in compact stub
+
+# Tools whose output is pure listings (file paths, tree nodes, log lines).
+# For these, showing a 300-char preview adds zero signal — the LLM already
+# knows what it searched for from the tool call.  Instead we show a
+# count of non-blank lines (≈ number of matches / files) as a 1-line summary.
+_LIST_OUTPUT_TOOLS: frozenset[str] = frozenset({
+    "glob_search",
+    "list_directory",
+    "tree",
+    "git_log",
+})
+
+# These tools have useful context at the top of their output (search term,
+# diff headers, etc.) but don't need 300 chars.  Use a shorter preview.
+_SHORT_PREVIEW_CHARS: int = 100
+_SHORT_PREVIEW_TOOLS: frozenset[str] = frozenset({
+    "grep_search",
+    "git_status",
+    "git_diff",
+    "tool_discovery",
+    "todo_scan",
+    "feature_search",
+})
+
+# Keywords that indicate high-signal output; their lines are preserved.
+# All patterns must be lowercase — they are matched against text.lower().
+# Chosen to match real test/evaluation output without over-matching prose.
+# - Avoid "result" (too broad: matches "tool_result", "result_dict", etc.).
+# - Avoid bare "pass" (matches "password", "bypass"); use "passed" instead.
+# - "score" alone matches docstrings; keep it since evaluator output says "score N"
+#   and matching is substring-based so it’s hard to avoid without regex.
+_HIGH_SIGNAL_PATTERNS = (
+    # Test / CI output (lowercase; matching is case-insensitive via .lower())
+    "passed", "failed", "error",
+    "warning",
+    # Exception / stack traces
+    "exception", "traceback", "assertionerror", "typeerror", "valueerror",
+    # Additional Python runtime/import errors (common in bash compile-check output)
+    "nameerror", "attributeerror", "syntaxerror", "importerror",
+    "modulenotfounderror", "keyerror", "indexerror", "runtimeerror",
+    "filenotfounderror",
+    # Evaluation / scoring markers
+    "score", "verdict",
+    # Assertion keywords
+    "assert ", "assert:",
+    # Severity / status words
+    "critical", "fatal",
+    # Unicode pass/fail indicators (not lowercased — symbols; test has exemption)
+    "✓", "✗", "✘",
+)
+
+# Patterns that indicate a bash output is from a test/compile run and should be
+# treated as high-signal (same retention threshold as test_runner / lint_check).
+# Checked case-insensitively on the combined text.
+_BASH_TEST_PATTERNS = (
+    "passed",       # pytest: "3 passed", "all 7 passed"
+    "failed",       # pytest: "1 failed"
+    "::test_",      # pytest test IDs
+    "====",         # pytest section separator (===== FAILURES =====)
+    "----",         # pytest section separator (----- traceback -----)
+    "short test summary",  # pytest -q summary line
+    "syntaxerror",  # Python compilation error
+    "traceback (",  # Python traceback header
+    "exit code:",   # [exit code: N] markers
+    "ruff check",   # ruff linter invocation
+    " error[",      # ruff/mypy error format: "error[E302]"
+    "warning[",     # ruff/mypy warning format
+    "import error", # import failures
+    ".pyc",         # compiled Python
+)
+
+# Regex for pytest / test_runner summary lines such as:
+#   "42 passed in 1.30s"  "3 failed, 1 error"  "1 passed, 2 warnings"
+# Used by _make_compact_stub to surface the verdict at the top of the stub.
+_PYTEST_SUMMARY_RE = re.compile(r"\d+\s+(?:passed|failed|error)", re.IGNORECASE)
+
+
+def _bash_is_test_output(text: str) -> bool:
+    """Return True when a bash tool output looks like a test/compile/lint run.
+
+    When True, callers should treat the output as high-signal and use the same
+    retention threshold as test_runner / lint_check (2000 chars) rather than
+    the default medium-signal bash threshold (1500 chars).
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    return any(pat in lower for pat in _BASH_TEST_PATTERNS)
+
+
+def _make_compact_stub(
+    tool_name: str,
+    text: str,
+    max_signal_lines: int = 8,
+    max_line_chars: int = 200,
+) -> str:
+    """Return a compact, information-preserving stub for a large tool result.
+
+    The stub always includes:
+    - The original character count so the LLM knows how much was dropped.
+    - A preview of the first *_COMPACT_PREVIEW_CHARS* characters (truncated at
+      a newline boundary where possible) so the LLM can recall the context.
+    - Any high-signal lines (errors, scores, verdicts, pass/fail indicators)
+      found anywhere in the full text, deduplicated and capped at *max_signal_lines*.
+
+    Callers may pass higher *max_signal_lines* for tools that are expected to
+    produce many independent error/signal entries (e.g. bash running a test suite).
+
+    This is much more useful than a blank ``[tool: N chars, compacted]`` stub
+    because the LLM can see *what* the result was about and whether it
+    succeeded, without having to re-read the full output.
+    """
+    n = len(text)
+    lines_all = text.splitlines()
+
+    # --- Determine preview strategy based on tool type ---
+    # List-output tools (glob_search, list_directory, tree, git_log) produce
+    # pure file-path / log-line listings.  Their first 300 chars are noise;
+    # a simple non-blank-line count is far more useful.
+    # Short-preview tools have useful context at the top but don't need 300 chars.
+    if tool_name in _LIST_OUTPUT_TOOLS:
+        preview = ""
+        non_blank = sum(1 for ln in lines_all if ln.strip())
+        count_label = {
+            "glob_search": "files",
+            "list_directory": "entries",
+            "tree": "nodes",
+            "git_log": "commits",
+        }.get(tool_name, "lines")
+        count_line = f"{non_blank} {count_label} listed"
+    else:
+        count_line = ""
+        preview_chars = _SHORT_PREVIEW_CHARS if tool_name in _SHORT_PREVIEW_TOOLS else _COMPACT_PREVIEW_CHARS
+        preview_raw = text[:preview_chars]
+        last_nl = preview_raw.rfind("\n")
+        if last_nl > 20:
+            preview = preview_raw[:last_nl].rstrip()
+        else:
+            preview = preview_raw.rstrip()
+
+    # --- High-signal lines: any line containing a keyword (case-insensitive) ---
+    signal_lines: list[str] = []
+    seen: set[str] = set()
+    for line in lines_all:
+        stripped = line.strip()
+        if not stripped or stripped in seen:
+            continue
+        lower_line = stripped.lower()
+        if any(kw in lower_line for kw in _HIGH_SIGNAL_PATTERNS):
+            # Skip lines that are part of the preview (avoid duplication).
+            # Truncate very long lines so a single verbose line can't bloat
+            # the stub (e.g. one-liner output with 3000 chars on a single line).
+            truncated = stripped[:max_line_chars]
+            if truncated not in preview:
+                signal_lines.append(truncated)
+                seen.add(truncated)
+            if len(signal_lines) >= max_signal_lines:
+                break
+
+    # --- test_runner / pytest: extract the final summary line prominently ---
+    # Pytest summary looks like "3 passed, 1 failed in 0.12s" or "42 passed in 1.3s"
+    # or "5 failed, 2 errors".  Placing it at the top of the stub makes the
+    # verdict instantly visible without reading through the signal lines.
+    summary_line: str = ""
+    if tool_name in ("test_runner", "bash"):
+        for line in reversed(lines_all):
+            stripped_l = line.strip()
+            if _PYTEST_SUMMARY_RE.search(stripped_l):
+                summary_line = stripped_l[:max_line_chars]
+                break
+
+    parts = [f"[{tool_name}: {n} chars, compacted]"]
+    if summary_line:
+        parts.append(f"summary: {summary_line}")
+    if count_line:
+        parts.append(count_line)
+    if preview:
+        parts.append(f"preview: {preview}")
+    if signal_lines:
+        parts.append("signal: " + " | ".join(signal_lines))
+    return "\n".join(parts)
 
 
 def _compact_old_tool_results(conversation: list[dict[str, Any]]) -> int:
-    """Replace old tool-result text with one-line summaries.
+    """Replace old tool-result text with compact, signal-preserving stubs.
 
     Returns the number of blocks compacted.
     """
@@ -473,13 +804,55 @@ def _compact_old_tool_results(conversation: list[dict[str, Any]]) -> int:
                 if not isinstance(sub, dict) or sub.get("type") != "text":
                     continue
                 text = sub.get("text", "")
-                if len(text) < _COMPACT_MIN_TEXT_LEN:
-                    continue
-                # Build a compact summary
                 tool_id = block.get("tool_use_id", "")
                 tool_name = tool_names.get(tool_id, "tool")
-                sub["text"] = f"[{tool_name}: {len(text)} chars, compacted]"
-                compacted += 1
+
+                # Choose compaction threshold by tool type:
+                # - High-signal tools (test_runner, python_eval): larger threshold,
+                #   more signal lines — their output is worth keeping longer.
+                # - Medium-signal tools (bash, lint_check): higher threshold than
+                #   default because they often contain compilation/test output.
+                # - Low-signal tools (grep, glob, etc.): aggressively compact.
+                # - Default: _COMPACT_MIN_TEXT_LEN (500).
+                # Content-aware override: bash outputs that look like test/compile
+                # runs get the same high-signal treatment as test_runner.
+                _treat_as_high = (
+                    tool_name in _HIGH_SIGNAL_TOOLS
+                    or (tool_name == "bash" and _bash_is_test_output(text))
+                )
+                if _treat_as_high:
+                    min_len = 2000
+                    max_signal = 15
+                    max_line = 300
+                elif tool_name in _MEDIUM_SIGNAL_TOOLS:
+                    min_len = 1500
+                    max_signal = 12
+                    max_line = 250
+                elif tool_name in _LOW_SIGNAL_PRUNE_TOOLS:
+                    # Aggressively compact: file-lists and search results older
+                    # than _COMPACT_KEEP_RECENT turns are rarely re-read.
+                    # Threshold of 200 chars captures even modest outputs.
+                    min_len = 200
+                    max_signal = 5
+                    max_line = 120
+                else:
+                    min_len = _COMPACT_MIN_TEXT_LEN  # 500 default
+                    max_signal = 8
+                    max_line = 200
+
+                if len(text) < min_len:
+                    continue
+                # Build a compact, signal-preserving summary.
+                # Only replace if the stub is actually shorter than the original;
+                # header overhead can make stubs larger for very short inputs.
+                stub = _make_compact_stub(
+                    tool_name, text,
+                    max_signal_lines=max_signal,
+                    max_line_chars=max_line,
+                )
+                if len(stub) < len(text):
+                    sub["text"] = stub
+                    compacted += 1
 
     return compacted
 
@@ -721,6 +1094,9 @@ class LLM:
                 if _u is not None:
                     total_in_tokens += getattr(_u, "input_tokens", 0) or 0
                     total_out_tokens += getattr(_u, "output_tokens", 0) or 0
+                # Release the full Anthropic Message object — usage has been
+                # extracted and nothing else needs the raw response.
+                resp.raw = None
 
             log.debug(
                 "tool_loop turn=%d stop=%s calls=%d total_tools=%d "
@@ -829,6 +1205,8 @@ class LLM:
                         if len(note) > cap:
                             note = note[:cap] + "… [truncated]"
                         scratchpad_notes.append(note)
+                        if len(scratchpad_notes) > _SCRATCHPAD_MAX_NOTES:
+                            scratchpad_notes = scratchpad_notes[-_SCRATCHPAD_MAX_NOTES:]
                         result = ToolResult(
                             output=(
                                 f"[scratchpad] saved ({len(note)} chars). "
@@ -837,6 +1215,31 @@ class LLM:
                             ),
                             metadata={"note": note},
                         )
+                    results_by_index[idx] = (result, tc)
+                elif name == "context_budget":
+                    # Handle inline — inject live loop stats.
+                    pct_turns = (
+                        f"{turn + 1}/{max_turns} ({100 * (turn + 1) // max_turns}%)"
+                        if max_turns > 0 else f"{turn + 1}/?"
+                    )
+                    budget_lines = [
+                        f"Turn: {pct_turns}",
+                        f"Input tokens used:  {total_in_tokens:,}",
+                        f"Output tokens used: {total_out_tokens:,}",
+                        f"Total tool calls:   {len(execution_log)}",
+                        f"Scratchpad notes:   {len(scratchpad_notes)}",
+                    ]
+                    result = ToolResult(
+                        output="\n".join(budget_lines),
+                        metadata={
+                            "turn": turn + 1,
+                            "max_turns": max_turns,
+                            "input_tokens": total_in_tokens,
+                            "output_tokens": total_out_tokens,
+                            "tool_calls": len(execution_log),
+                            "scratchpad_notes": len(scratchpad_notes),
+                        },
+                    )
                     results_by_index[idx] = (result, tc)
                 elif name in _READ_ONLY_TOOL_NAMES:
                     read_only_tasks.append((idx, tc))
@@ -907,11 +1310,19 @@ class LLM:
                         tc["name"],
                         call_detail,
                     )
+                raw_output = result.output or result.error
+                if isinstance(raw_output, str) and len(raw_output) > _EXEC_LOG_MAX_OUTPUT_CHARS:
+                    half = _EXEC_LOG_MAX_OUTPUT_CHARS // 2
+                    raw_output = (
+                        raw_output[:half]
+                        + f"\n\n… [{len(raw_output) - _EXEC_LOG_MAX_OUTPUT_CHARS} chars truncated] …\n\n"
+                        + raw_output[-half:]
+                    )
                 execution_log.append(
                     {
                         "tool": tc["name"],
                         "input": tc["input"],
-                        "output": result.output or result.error,
+                        "output": raw_output,
                         "duration_ms": round(result.elapsed_s * 1000),
                         "is_error": result.is_error,
                     }

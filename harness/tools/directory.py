@@ -60,8 +60,10 @@ class CreateDirectoryTool(Tool):
         }
 
     async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
-        # Use atomic directory validation to prevent TOCTOU attacks
-        is_valid, validated = await self._validate_directory_atomic(config, path)
+        # Use atomic path validation; require_exists=False since we're creating the directory
+        is_valid, validated = await self._validate_atomic_path(
+            config, path, require_exists=False, directory=False
+        )
         if not is_valid:
             return validated  # This is a ToolResult error
         resolved = validated  # This is the validated path string
@@ -76,7 +78,7 @@ class TreeTool(Tool):
     name = "tree"
     description = (
         "Show directory structure as a tree. "
-        "max_depth controls how deep to recurse (default: 3)."
+        "You must specify max_depth — use 1-2 for overview, 3-4 for detail."
     )
     requires_path_check = True
     tags = frozenset({"file_read"})
@@ -88,7 +90,10 @@ class TreeTool(Tool):
                 "path": {"type": "string", "description": "Root directory"},
                 "max_depth": {
                     "type": "integer",
-                    "description": "Max recursion depth (default: 3)",
+                    "description": (
+                        "Max recursion depth (default 3). "
+                        "Use 1-2 for quick overview, 3-4 for detailed structure."
+                    ),
                     "default": 3,
                 },
             },

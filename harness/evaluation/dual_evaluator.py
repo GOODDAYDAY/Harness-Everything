@@ -12,7 +12,6 @@ import re
 from typing import Any, Literal
 
 from harness.core.llm import LLM
-from harness.evaluation.metrics import calculate_critical_range_discrimination
 from harness.pipeline.phase import DualScore, ScoreItem
 from harness.prompts import dual_evaluator as default_prompts
 
@@ -24,11 +23,14 @@ _SCORE_MAX: float = 10.0
 
 # Structured score patterns with improved validation
 # 1. Strict anchored: "SCORE: N" on its own line (preferred format)
-_STRICT_RE = re.compile(r"^\s*SCORE:\s*(\d+(?:\.\d+)?)(?:\s+.*)?$", re.MULTILINE)
+_STRICT_RE = re.compile(r"^\s*SCORE:\s+(\d+(?:\.\d+)?)(?:\s+.*)?$", re.MULTILINE)
 # 2. Strict unanchored: "SCORE: N" anywhere (case-insensitive)
-_STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+_STRICT_UNANCHORED_RE = re.compile(r"SCORE:\s+(\d+(?:\.\d+)?)", re.IGNORECASE)
 # 3. Loose pattern: "SCORE N" or "SCORE=N" variations
 _LOOSE_RE = re.compile(r"SCORE[:\s=]+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# Inline code spans that contain SCORE patterns — used to suppress false positives.
+# Only strips spans where a SCORE-like value appears inside the backticks.
+_INLINE_SCORE_RE = re.compile(r"`[^`\n]*\bSCORE[^`\n]*`", re.IGNORECASE)
 # 4. Enhanced pattern with score range validation: "SCORE: 7.5/10" or "SCORE: 8 (out of 10)"
 _ENHANCED_RE = re.compile(
     r"(?:SCORE|Score|score)[:\s=]+"
@@ -41,76 +43,24 @@ _FINAL_SCORE_RE = re.compile(r"FINAL\s+SCORE[:\s=]+(\d+(?:\.\d+)?)", re.IGNORECA
 
 # Mode header injected into the evaluation user message so evaluators know
 # whether they are reviewing a text proposal or an implement-mode code change.
+# Mode headers are prepended to every evaluator user message so the LLM knows
+# whether it is reviewing a text proposal (debate) or executed code (implement).
+# Keep these SHORT — calibration anchors, scoring guidance, and output format
+# requirements are already in the system prompt (BASIC_SYSTEM / DIFFUSION_SYSTEM).
 _MODE_HEADERS: dict[str, str] = {
     "debate": (
         "## EVALUATION MODE: DEBATE (TEXT PROPOSAL)\n"
-        "You are reviewing a **text proposal** (plan / recommendation).\n\n"
-        "KEY DIFFERENCES FROM IMPLEMENT MODE:\n"
-        "1. Evaluate the **reasoning quality**, not executed code\n"
-        "2. Assess **specificity** of proposed changes (file/function names)\n"
-        "3. Check **completeness** against the task requirements\n"
-        "4. Do NOT penalize for lack of tool calls or execution results\n"
-        "5. Focus on whether the plan would work IF implemented correctly\n\n"
-        "**CALIBRATION ANCHORS FOR DEBATE MODE:**\n"
-        "- 0-3: Proposal fundamentally misses the task or is completely vague\n"
-        "- 4-5: Proposal addresses task but lacks concrete file/function references\n"
-        "- 6-7: Proposal is specific but has logical gaps or incomplete reasoning\n"
-        "- 8-9: Proposal is specific, complete, and logically sound with minor improvements needed\n"
-        "- 10: Proposal is perfect - cites exact files/functions and addresses all requirements\n\n"
-        "**CRITICAL QUALITY SIGNALS:**\n"
-        "✓ MUST name concrete code entities (files, functions, classes) from source context\n"
-        "✓ MUST address the falsifiable criterion directly\n"
-        "✓ MUST provide numbered implementation steps with file paths\n"
-        "✗ Vague proposals without file/function references score ≤4 on Specificity\n"
-        "✗ Proposals that ignore the falsifiable criterion score ≤5 on Completeness\n\n"
-        "**STRUCTURED OUTPUT REQUIREMENTS:**\n"
-        "1. Use exact section headers from your system prompt\n"
-        "2. Place SCORE: X.X on its own line at the very end\n"
-        "3. Reference specific file::function in all findings\n"
-        "4. Provide numbered, actionable feedback items\n"
-        "5. Include concrete calibration anchors in your scoring\n"
-        "6. Use the DELTA VS PRIOR BEST header to compare with previous rounds\n\n"
-        "**SCORING GUIDANCE:**\n"
-        "- For debate mode, typical scores range 5-9 for meaningful proposals\n"
-        "- Score 10 only for proposals that are truly perfect and reference specific code\n"
-        "- Score ≤4 for proposals that are vague or miss the falsifiable criterion\n"
-        "- Use fractional scores (7.5, 8.2) to indicate nuanced assessment\n\n"
+        "You are reviewing a **text proposal** (plan / recommendation), NOT executed code.\n"
+        "- Evaluate reasoning quality and specificity of proposed changes\n"
+        "- Do NOT penalize for lack of tool calls or execution results\n"
+        "- Assess whether the plan names concrete files/functions and would work if implemented\n\n"
     ),
     "implement": (
         "## EVALUATION MODE: IMPLEMENT (EXECUTED CODE)\n"
-        "You are reviewing an **executed code change** (implement round).\n\n"
-        "KEY DIFFERENCES FROM DEBATE MODE:\n"
-        "1. Evaluate the **actual code state** after execution\n"
-        "2. Check **correctness of edits** (syntax, logic, test results)\n"
-        "3. Verify **tool call success/failure** from execution logs\n"
-        "4. The proposal text is for context only; CODE STATE is authoritative\n"
-        "5. Penalize missing tests, syntax errors, broken functionality\n\n"
-        "**CALIBRATION ANCHORS FOR IMPLEMENT MODE:**\n"
-        "- 0-3: Code is broken, tests fail, or change doesn't compile\n"
-        "- 4-5: Code works but has critical bugs or missing functionality\n"
-        "- 6-7: Code works with significant issues or missing edge cases\n"
-        "- 8-9: Code works well with minor improvements or test gaps\n"
-        "- 10: Perfect implementation - all tests pass, edge cases handled, code is clean\n\n"
-        "**CRITICAL QUALITY SIGNALS:**\n"
-        "✓ MUST verify actual code changes in files (not just proposal text)\n"
-        "✓ MUST check test results and syntax validity\n"
-        "✓ MUST assess error handling and edge cases\n"
-        "✗ Code with syntax errors or failing tests scores ≤5 on Correctness\n"
-        "✗ Implementations without tests for new functionality score ≤7\n\n"
-        "**STRUCTURED OUTPUT REQUIREMENTS:**\n"
-        "1. Use exact section headers from your system prompt\n"
-        "2. Place SCORE: X.X on its own line at the very end\n"
-        "3. Reference specific file::function in all findings\n"
-        "4. Provide numbered, actionable feedback items\n"
-        "5. Include concrete calibration anchors in your scoring\n"
-        "6. Focus on executed code, not the proposal text\n"
-        "7. Use the DELTA VS PRIOR BEST header to compare with previous rounds\n\n"
-        "**SCORING GUIDANCE:**\n"
-        "- For implement mode, typical scores range 6-9 for working implementations\n"
-        "- Score 10 only for flawless implementations with comprehensive tests\n"
-        "- Score ≤5 for code with critical bugs or failing tests\n"
-        "- Deduct points for missing error handling or edge cases\n"
-        "- Use fractional scores to reflect nuanced quality assessment\n\n"
+        "You are reviewing an **executed code change**, NOT a proposal.\n"
+        "- Evaluate the actual code state; the proposal text is context only\n"
+        "- Check correctness, syntax, test results, and tool call success/failure\n"
+        "- Penalize missing tests, syntax errors, and broken functionality\n\n"
     ),
 }
 
@@ -149,753 +99,209 @@ def format_critique_from_feedback(feedback_dict: dict[str, Any]) -> str:
     # Add defect if present
     defect = feedback_dict.get("defect")
     if defect:
-        parts.append(f"Critical defect: {defect.get('description', 'Unknown')}")
+        parts.append(f"Critical defect: {defect}")
     
     # Add analysis summary
     analysis = feedback_dict.get("analysis", {})
     if analysis:
         parts.append("Analysis:")
-        for dimension, details in analysis.items():
-            if isinstance(details, dict):
-                dim_score = details.get("score")
-                rationale = details.get("rationale", "")
-                if dim_score is not None:
-                    parts.append(f"  • {dimension}: {dim_score:.1f} - {rationale}")
+        for dimension, score_val in analysis.items():
+            parts.append(f"  • {dimension}: {float(score_val):.1f}")
     
     return "\n".join(parts)
 
 
 def extract_structured_feedback(text: str, evaluator_type: str = "basic", context: dict[str, Any] | None = None, mode: str | None = None) -> dict[str, Any]:
-    """Extract structured feedback from evaluator output text with enhanced parsing.
-    
+    """Extract structured feedback from evaluator output text.
+
     Returns a dict with keys:
         - "score": float or None
-        - "score_confidence": float 0-1 based on calibration anchors and structure
         - "delta": str or None
-        - "analysis": dict mapping dimension names to scores with rationale
-        - "defect": dict with structured defect/risk information
+        - "analysis": dict mapping dimension names to scores
+        - "defect": str or None — top defect/risk text
         - "feedback_items": list of actionable feedback strings
-        - "structured_feedback": dict with parsed structured feedback items
         - "improvement_suggestion": str or None
-        - "mode_adaptation_score": float 0-1 rating of mode-specific adaptation
         - "warnings": list of str from validate_score_calibration
-        - "calibration_anchors_used": bool indicating if calibration anchors were detected
-        - "critique_structure_score": float 0-1 rating of critique structure quality
+        - "calibration_anchors_used": bool — True if calibration phrases detected
         - "validation_errors": list of validation errors if any
     """
-    result = {
+    result: dict[str, Any] = {
         "score": None,
-        "score_confidence": 0.0,
-        "score_breakdown": {
-            "base_score": None,
-            "calibration_bonus": 0.0,
-            "structure_bonus": 0.0,
-            "mode_adaptation_bonus": 0.0,
-        },
+        "delta": None,
         "analysis": {},
         "defect": None,
         "feedback_items": [],
-        "structured_feedback": {},
         "improvement_suggestion": None,
-        "mode_adaptation_score": 0.0,
-        "mode_specific_insights": [],
         "warnings": [],
         "calibration_anchors_used": False,
-        "calibration_anchor_details": [],
-        "critique_structure_score": 0.0,
-        "critique_structure_breakdown": {
-            "analysis_structure": 0.0,
-            "defect_structure": 0.0,
-            "feedback_structure": 0.0,
-            "improvement_structure": 0.0,
-        },
         "validation_errors": [],
     }
-    
-    # Validate the output first
-    is_valid, issues = validate_evaluator_output(text, evaluator_type)
-    
-    # Separate warnings from errors
-    errors = [issue for issue in issues if not issue.startswith("WARNING:")]
-    warnings = [issue.replace("WARNING: ", "") for issue in issues if issue.startswith("WARNING:")]
-    
+
+    # Validate first; bail out on hard errors
+    _is_valid, issues = validate_evaluator_output(text, evaluator_type)
+    errors = [i for i in issues if not i.startswith("WARNING:")]
+    warnings = [i.replace("WARNING: ", "") for i in issues if i.startswith("WARNING:")]
     if errors:
         result["error"] = "Invalid evaluator output: " + "; ".join(errors)
         result["validation_errors"] = errors
         return result
-    
     if warnings:
         result["warnings"] = warnings
-    
-    # Enhanced calibration anchor detection with mode-specific anchors
-    calibration_phrases = [
-        # General calibration anchors
-        "SCORING CALIBRATION",
-        "0-10 scale",
-        "score ≤ 5",
-        "score ≥ 8",
-        "critical failure",
-        "perfect — no issues",
-        "core goal achieved",
-        "risk assessment",
-        # Mode-specific calibration anchors
-        "debate mode scoring",
-        "implement mode scoring",
-        "analysis phase scoring",
-        "improvement phase scoring",
-        "framework change scoring",
-        # Score range anchors
-        "score range 0-3",
-        "score range 4-6",
-        "score range 7-8",
-        "score range 9-10",
-        # Dimension-specific anchors
-        "correctness anchor",
-        "completeness anchor",
-        "clarity anchor",
-        "test coverage anchor",
-        "risk mitigation anchor",
-        # Context-aware anchors
-        "given the context",
-        "considering the phase",
-        "based on mode",
-        "relative to expectations"
-    ]
-    
-    # Enhanced detection with weighting
-    anchor_details = []
-    lines = text.split('\n')
-    for line in lines:
-        for phrase in calibration_phrases:
-            if phrase.lower() in line.lower():
-                anchor_details.append({
-                    "phrase": phrase,
-                    "context": line.strip(),
-                    "weight": 1.0 if phrase in ["SCORING CALIBRATION", "0-10 scale"] else 0.8
-                })
-                break  # Only count each line once
-    
-    anchor_count = len(anchor_details)
-    weighted_anchor_score = sum(detail["weight"] for detail in anchor_details)
-    
-    # Enhanced calibration anchor detection logic
-    result["calibration_anchors_used"] = weighted_anchor_score >= 1.5
-    result["calibration_anchor_details"] = anchor_details
-    result["calibration_anchor_score"] = min(weighted_anchor_score / 3.0, 1.0)  # Normalize to 0-1
-    
+
+    # Calibration anchor detection — simple presence check
+    _CALIBRATION_PHRASES = (
+        "SCORING CALIBRATION", "0-10 scale", "score ≤ 5", "score ≥ 8",
+        "critical failure", "core goal achieved", "risk assessment",
+    )
+    result["calibration_anchors_used"] = any(
+        phrase.lower() in text.lower() for phrase in _CALIBRATION_PHRASES
+    )
+
     # Extract delta text
     if "DELTA VS PRIOR BEST:" in text:
-        delta_section = text.split("DELTA VS PRIOR BEST:")[1].split("\n")[0].strip()
-        result["delta"] = delta_section
-        # Score delta header quality (0-1)
-        if len(delta_section) > 20 and "specific" in delta_section.lower():
-            result["critique_structure_score"] += 0.2
-    
+        result["delta"] = text.split("DELTA VS PRIOR BEST:")[1].split("\n")[0].strip()
+
     # Extract score
     score_match = _STRICT_RE.findall(text)
     if score_match:
         result["score"] = float(score_match[-1])
-        # Validate score calibration with context
         result["warnings"].extend(validate_score_calibration(result["score"], evaluator_type, context))
-    
-    # Extract analysis dimensions with improved parsing
+
+    # Extract analysis dimensions (use first pattern that produces results)
     if "ANALYSIS:" in text:
         analysis_section = text.split("ANALYSIS:")[1].split("\n\n")[0]
-        # Look for dimension scores with multiple formats
-        dimension_patterns = [
-            r"([A-D])\.\s+([^:]+):\s*(\d+(?:\.\d+)?)",  # A. Correctness: 8.5
-            r"([A-D])\.\s+([^:]+)\s+(\d+(?:\.\d+)?)",    # A. Correctness 8.5
-            r"([^:]+):\s*(\d+(?:\.\d+)?)",               # Correctness: 8.5
-            r"([^:]+)\s+(\d+(?:\.\d+)?)",                # Correctness 8.5
-        ]
-        
-        for pattern in dimension_patterns:
-            matches = re.findall(pattern, analysis_section)
-            for match in matches:
-                if len(match) == 3:  # Format with letter prefix
-                    letter, dimension, score = match
-                    result["analysis"][dimension.strip()] = float(score)
-                elif len(match) == 2:  # Format without letter
-                    dimension, score = match
-                    result["analysis"][dimension.strip()] = float(score)
-        
-        # Enhanced analysis structure scoring with mode-awareness
-        analysis_structure_score = 0.0
-        
-        # Dimension count scoring
-        dimension_count = len(result["analysis"])
-        if dimension_count >= 4:
-            analysis_structure_score += 0.4
-        elif dimension_count >= 3:
-            analysis_structure_score += 0.3
-        elif dimension_count >= 2:
-            analysis_structure_score += 0.2
-        elif dimension_count >= 1:
-            analysis_structure_score += 0.1
-        
-        # Score distribution quality
-        scores = list(result["analysis"].values())
-        if scores:
-            score_range = max(scores) - min(scores)
-            if score_range >= 2.0:  # Good discrimination between dimensions
-                analysis_structure_score += 0.2
-            elif score_range >= 1.0:
-                analysis_structure_score += 0.1
-            
-            # Check for critical dimension scoring (scores ≤ 5 indicate critical analysis)
-            if any(score <= 5.0 for score in scores):
-                analysis_structure_score += 0.2
-        
-        # Mode-specific analysis structure expectations
-        if mode == "debate":
-            # Debate mode should have strong reasoning dimensions
-            debate_dims = ["reasoning", "clarity", "specificity", "feasibility"]
-            debate_dim_count = sum(1 for dim in result["analysis"].keys() 
-                                  if any(debate_word in dim.lower() for debate_word in debate_dims))
-            if debate_dim_count >= 2:
-                analysis_structure_score += 0.2
-        
-        elif mode == "implement":
-            # Implement mode should have strong execution dimensions
-            implement_dims = ["correctness", "completeness", "test", "maintainability", "performance"]
-            implement_dim_count = sum(1 for dim in result["analysis"].keys() 
-                                     if any(impl_word in dim.lower() for impl_word in implement_dims))
-            if implement_dim_count >= 2:
-                analysis_structure_score += 0.2
-        
-        # Update critique structure breakdown
-        result["critique_structure_breakdown"]["analysis_structure"] = min(analysis_structure_score, 1.0)
-        result["critique_structure_score"] += min(analysis_structure_score, 1.0)
-    
-    # Extract defect/risk with structured parsing
+        # Try "A. Correctness: 8.5" format first, then plain "Correctness: 8.5"
+        for pattern in (
+            r"[A-D]\.\s+([^:—\n]+):\s*(\d+(?:\.\d+)?)",  # A. Correctness: 8.5
+            r"^([^:\n—]+):\s*(\d+(?:\.\d+)?)",            # Correctness: 8.5 (line start)
+        ):
+            for match in re.findall(pattern, analysis_section, re.MULTILINE):
+                dim, score = match
+                if dim.strip():
+                    result["analysis"][dim.strip()] = float(score)
+            if result["analysis"]:
+                break  # Stop after first pattern that produces results
+
+    # Extract defect/risk
     defect_key = "TOP DEFECT:" if evaluator_type == "basic" else "KEY RISK:"
     if defect_key in text:
-        defect_section = text.split(defect_key)[1].split("\n")[0].strip()
-        if defect_section.lower() != "none":
-            result["defect"] = defect_section
-            # Try to parse structured defect: "file.py::function — description"
-            if "::" in defect_section and "—" in defect_section:
-                file_part, rest = defect_section.split("::", 1)
-                if "—" in rest:
-                    func_part, desc = rest.split("—", 1)
-                    result["structured_feedback"]["defect"] = {
-                        "file": file_part.strip(),
-                        "function": func_part.strip(),
-                        "description": desc.strip()
-                    }
-    
-    # Extract feedback items with structured parsing
+        defect_text = text.split(defect_key)[1].split("\n")[0].strip()
+        if defect_text.lower() != "none":
+            result["defect"] = defect_text
+
+    # Extract feedback items
     feedback_section_name = "ACTIONABLE FEEDBACK:" if evaluator_type == "basic" else "ACTIONABLE MITIGATIONS:"
     if feedback_section_name in text:
-        # Get everything after the feedback section
         after_feedback = text.split(feedback_section_name)[1]
-        
-        # Find where the next section starts or end of text
-        next_sections = ["WHAT WOULD MAKE THIS 10/10:", "SCORE:", "FINAL SCORE:", "COMBINED_SCORE:"]
-        feedback_end = len(after_feedback)
-        for section in next_sections:
+        # Trim at next major section
+        for section in ("WHAT WOULD MAKE THIS 10/10:", "SCORE:", "FINAL SCORE:", "COMBINED_SCORE:"):
             idx = after_feedback.find(section)
-            if idx != -1 and idx < feedback_end:
-                feedback_end = idx
-        
-        feedback_section = after_feedback[:feedback_end].strip()
-        
-        # Extract numbered items with multiple formats
-        item_patterns = [
-            r"^\s*(\d+)\.\s+(.+)$",      # 1. item
-            r"^\s*(\d+)\)\s+(.+)$",      # 1) item
-            r"^\s*\((\d+)\)\s+(.+)$",    # (1) item
-            r"^\s*[-*•]\s+(.+)$",        # - item, * item, or • item
-        ]
-        
-        structured_feedback = []
-        for line in feedback_section.split('\n'):
+            if idx != -1:
+                after_feedback = after_feedback[:idx]
+        for line in after_feedback.splitlines():
             line = line.strip()
             if not line:
                 continue
-                
-            priority = None
-            feedback_text = line
-            
-            # Try numbered formats
-            numbered_match = None
-            for pattern in [r"^\s*(\d+)\.\s+(.+)$", r"^\s*(\d+)\)\s+(.+)$", r"^\s*\((\d+)\)\s+(.+)$"]:
-                numbered_match = re.match(pattern, line)
-                if numbered_match:
+            # Strip leading numbering or bullets
+            for pat in (r"^\s*\d+[.)]\s+", r"^\s*[-*•]\s+"):
+                m = re.match(pat, line)
+                if m:
+                    line = line[m.end():]
                     break
-            
-            if numbered_match:
-                priority = int(numbered_match.group(1))
-                feedback_text = numbered_match.group(2)
-            else:
-                # Try bullet format
-                bullet_match = re.match(r"^\s*[-*•]\s+(.+)$", line)
-                if bullet_match:
-                    feedback_text = bullet_match.group(1)
-            
-            # Parse file::function — change pattern
-            file = None
-            function = None
-            change = feedback_text
-            
-            if "::" in feedback_text and "—" in feedback_text:
-                file_part, rest = feedback_text.split("::", 1)
-                if "—" in rest:
-                    func_part, change_part = rest.split("—", 1)
-                    file = file_part.strip()
-                    function = func_part.strip()
-                    change = change_part.strip()
-                    structured_feedback.append({
-                        "priority": priority,
-                        "file": file,
-                        "function": function,
-                        "change": change
-                    })
-            
-            result["feedback_items"].append(feedback_text)
-        
-        if structured_feedback:
-            result["structured_feedback"]["actionable_items"] = structured_feedback
-        
-        # Score actionable feedback quality (0-1)
-        if len(result["feedback_items"]) >= 2:
-            result["critique_structure_score"] += 0.2
-        if any("::" in item and "—" in item for item in result["feedback_items"]):
-            result["critique_structure_score"] += 0.3
-    
+            result["feedback_items"].append(line)
+
     # Extract improvement suggestion
     if "WHAT WOULD MAKE THIS 10/10:" in text:
         improvement = text.split("WHAT WOULD MAKE THIS 10/10:")[1].split("\n")[0].strip()
         if improvement.lower() != "already perfect":
             result["improvement_suggestion"] = improvement
-    
-    # Normalize critique structure score to 0-1 range
-    result["critique_structure_score"] = min(1.0, result["critique_structure_score"])
-    
+
     return result
 
 
 def validate_score_calibration(score: float, evaluator_type: str = "basic", context: dict[str, Any] | None = None) -> list[str]:
-    """Validate that a score is properly calibrated for the evaluator type.
-    
-    Returns a list of warnings if the score seems miscalibrated.
-    
-    Args:
-        score: The score to validate (0-10)
-        evaluator_type: "basic" or "diffusion"
-        context: Optional context dict with keys:
-            - "mode": "debate" or "implement" (affects expected score ranges)
-            - "has_critical_issues": bool indicating if critical issues were found
-            - "has_tests": bool indicating if tests were added/modified
-            - "file_count": int number of files changed
-            - "line_count": int number of lines changed
-            - "phase_name": str name of the current phase
-            - "has_syntax_errors": bool indicating if syntax errors were found
-            - "has_test_failures": bool indicating if tests failed
-            - "has_import_errors": bool indicating if import errors occurred
-            - "has_structure_issues": bool indicating if output structure issues were found
-            - "has_calibration_anchors": bool indicating if calibration anchors were used
-            - "critique_structure_score": float 0-1 rating of critique structure quality
-    
-    Returns:
-        List of warning messages if score appears miscalibrated
+    """Return a short list of targeted calibration warnings for the given score.
+
+    Deliberately lean: at most 3 warnings.  Verbose checklists and mode-specific
+    rubrics already live in the system prompt (BASIC_SYSTEM / DIFFUSION_SYSTEM),
+    so repeating them here only adds noise to the LLM's context window.
     """
-    warnings = []
-    
-    # Basic sanity checks
-    if score < 0.0 or score > 10.0:
-        warnings.append(f"Score {score} is outside valid range [0, 10]")
+    warnings: list[str] = []
+    ctx = context or {}
+
+    # 1. Out-of-range: always worth flagging, likely a parse error.
+    if not (0.0 <= score <= 10.0):
+        warnings.append(f"Score {score} is outside the 0-10 range; check for parsing error.")
         return warnings
-    
-    # Extract context information with defaults
-    mode = context.get("mode") if context else None
-    has_critical_issues = context.get("has_critical_issues", False) if context else False
-    has_tests = context.get("has_tests", False) if context else False
-    file_count = context.get("file_count", 0) if context else 0
-    line_count = context.get("line_count", 0) if context else 0
-    phase_name = context.get("phase_name", "") if context else ""
-    has_syntax_errors = context.get("has_syntax_errors", False) if context else False
-    has_test_failures = context.get("has_test_failures", False) if context else False
-    has_import_errors = context.get("has_import_errors", False) if context else False
-    has_structure_issues = context.get("has_structure_issues", False) if context else False
-    has_calibration_anchors = context.get("has_calibration_anchors", False) if context else False
-    critique_structure_score = context.get("critique_structure_score", 0.0) if context else 0.0
-    has_balanced_risk_assessment = context.get("has_balanced_risk_assessment", False) if context else False
-    
-    # Score calibration anchors based on phase mode and context
-    if evaluator_type == "basic":
-        # Basic evaluator calibration rules with phase-mode adaptation
-        
-        # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
-        # Clear, simple criteria that guide discrimination without overwhelming
-        if 4.0 <= score <= 7.0:
-            # Simplified discrimination guidance with clear thresholds
-            if score < 5.0:
-                warnings.append(f"Score {score} (<5.0): Generic approach - lacks specific implementation details")
-                if score >= 4.5:
-                    warnings.append(f"  → For 4.5+: Must mention SOME specific elements (files/functions)")
-            elif score < 6.0:
-                warnings.append(f"Score {score} (5.0-5.9): Specific but incomplete - names concrete files/functions")
-                if score >= 5.5:
-                    warnings.append(f"  → For 5.5+: Must address SOME edge cases beyond basic implementation")
-            elif score < 7.0:
-                warnings.append(f"Score {score} (6.0-6.9): Mostly complete - addresses main requirements")
-                if score >= 6.5:
-                    warnings.append(f"  → For 6.5+: Must show testability evidence and handle SOME edge cases")
-            else:  # score == 7.0
-                warnings.append(f"Score {score} (7.0): Complete with minor issues - full requirement coverage")
 
-            # Simplified fractional score guidance
-            if score % 1 != 0:  # Fractional score
-                fractional_part = score - int(score)
-                # Encourage .5 increments for better discrimination
-                if fractional_part not in [0.0, 0.5]:
-                    warnings.append(f"Score {score}: Use .5 increments (4.5, 5.5, 6.5) for clearer discrimination")
-                elif fractional_part == 0.5:
-                    base = int(score)
-                    if base == 4:
-                        warnings.append(f"Score 4.5: Generic with SOME specificity - between generic (4) and specific (5)")
-                    elif base == 5:
-                        warnings.append(f"Score 5.5: Specific with SOME completeness - between specific (5) and mostly complete (6)")
-                    elif base == 6:
-                        warnings.append(f"Score 6.5: Mostly complete with SOME edge cases - between mostly complete (6) and complete (7)")
-        if mode == "debate":
-            # SIMPLIFIED debate mode validation
-            # Debate mode: evaluating text proposals with clear discrimination
-            if score < 4.0 and not has_critical_issues:
-                warnings.append(f"Score {score} too low for debate mode without critical issues - typical range 5-9")
-            elif score > 9.0 and file_count == 0:
-                warnings.append(f"Score {score} too high for debate-only proposal - debate proposals rarely score >9")
-            
-            # Debate mode requires strong reasoning structure
-            if score >= 7.0 and critique_structure_score < 0.6:
-                warnings.append(f"Score {score} has weak critique structure - debate mode requires well-structured reasoning")
-            elif score >= 6.0 and critique_structure_score < 0.4:
-                warnings.append(f"Score {score} has insufficient structure - debate evaluations need clear argument analysis")
+    mode = ctx.get("mode", "")
 
-            # Phase-specific calibration anchors with enhanced discrimination
-            if "analysis" in phase_name.lower():
-                # Analysis phases should have more nuanced scoring with strict discrimination
-                if score > 8.5 and not has_tests:
-                    warnings.append(f"Score {score} seems high for analysis phase without test considerations - analysis phases focus on reasoning quality")
-                # Analysis phases should have strong structure with mode-specific expectations
-                if score > 7.0 and critique_structure_score < 0.7:
-                    warnings.append(f"Score {score} for analysis phase has weak structure - analysis requires clear dimension scoring and rationale")
-                # Analysis phases should show dimension discrimination
-                if score > 6.0 and critique_structure_score < 0.5:
-                    warnings.append(f"Score {score} for analysis phase lacks dimension discrimination - analysis should show clear scoring differences")
+    # 2. Mode–score mismatch: specific, actionable signal the system prompt cannot provide
+    #    because it doesn't know the runtime score yet.
+    if mode == "debate" and score >= 9.5:
+        warnings.append(
+            f"Score {score} is very high for a debate (text-only) round. "
+            "Reserve 9.5+ for proposals that cite exact file::function paths and cover all edge cases."
+        )
+    elif mode == "implement" and score <= 3.0:
+        warnings.append(
+            f"Score {score} is very low for implement mode — confirm that the code is truly broken "
+            "or tests are failing, not just incomplete."
+        )
 
-            # Debate mode specific: Check for reasoning depth indicators
-            if score >= 8.0 and line_count == 0:
-                warnings.append(f"Score {score} for debate mode with no code changes - verify reasoning depth and argument quality")
-
-        elif mode == "implement":
-            # SIMPLIFIED implement mode validation
-            # Implement mode: evaluating executed code with clear discrimination
-            if score < 5.0 and not has_critical_issues:
-                warnings.append(f"Score {score} too low for implement mode without critical issues - working implementations typically ≥6")
-            elif score > 9.5 and not has_tests:
-                warnings.append(f"Score {score} too high without test coverage - scores >9.5 require comprehensive testing")
-            
-            # Implement mode requires strong code analysis
-            if score >= 7.0 and critique_structure_score < 0.7:
-                warnings.append(f"Score {score} has weak critique structure - implement evaluations require detailed code analysis")
-            elif score >= 6.0 and critique_structure_score < 0.5:
-                warnings.append(f"Score {score} has insufficient structure - implement evaluations need clear code analysis")
-
-            # Phase-specific implement mode calibration with enhanced discrimination
-            if "improvement" in phase_name.lower():
-                # Improvement phases should have stricter scoring with enhanced discrimination
-                if score > 8.0 and not has_tests:
-                    warnings.append(f"Score {score} seems high for improvement phase without test coverage - improvements require validation")
-                if score > 9.0 and has_syntax_errors:
-                    warnings.append(f"Score {score} seems too high for improvement phase with syntax errors - syntax errors are critical failures")
-                # Improvement phases need strong structure with mode-specific expectations
-                if score > 7.0 and critique_structure_score < 0.8:
-                    warnings.append(f"Score {score} for improvement phase has weak structure - improvements require clear before/after analysis")
-                # Improvement phases should show measurable impact
-                if score > 8.0 and line_count < 10:
-                    warnings.append(f"Score {score} for improvement phase with minimal changes - verify impact and justification")
-
-            elif "framework" in phase_name.lower():
-                # Framework changes need careful evaluation with enhanced discrimination
-                if score > 8.5 and file_count > 2:
-                    warnings.append(f"Score {score} for framework change affecting {file_count} files - verify backward compatibility and impact analysis")
-                # Framework changes require excellent structure with mode-specific expectations
-                if score > 7.0 and critique_structure_score < 0.9:
-                    warnings.append(f"Score {score} for framework change has weak structure - framework evaluations require comprehensive impact analysis")
-                # Framework changes should have architectural analysis
-                if score > 8.0 and critique_structure_score < 0.8:
-                    warnings.append(f"Score {score} for framework change lacks architectural analysis - framework changes require impact assessment")
-
-            # Implementations with many changes but perfect score are suspicious
-            if score == 10.0 and line_count > 50:
-                warnings.append(f"Perfect score {score} for large change ({line_count} lines) - verify no edge cases missed and all tests pass")
-
-            # Perfect scores require perfect structure with mode-specific expectations
-            if score == 10.0 and critique_structure_score < 0.95:
-                warnings.append(f"Perfect score {score} has imperfect structure (score={critique_structure_score:.1f}) - perfect scores require flawless critique structure")
-            # Perfect implement scores require comprehensive testing
-            if score == 10.0 and not has_tests:
-                warnings.append(f"Perfect score {score} without test coverage - perfect implement scores require comprehensive testing")
-
-            # Critical issues should significantly lower scores with enhanced discrimination
-            if score > 7.0 and has_critical_issues:
-                warnings.append(f"Score {score} seems high despite critical issues - critical issues should reduce scores to ≤6")
-            # Critical issues in implement mode are severe
-            if score > 6.0 and has_critical_issues:
-                warnings.append(f"Score {score} seems high with critical issues - implement mode critical issues typically reduce scores to ≤5")
-
-            # Import errors should severely impact scores with enhanced discrimination
-            if score > 6.0 and has_import_errors:
-                warnings.append(f"Score {score} seems high with import errors - import errors typically reduce scores to ≤5")
-            # Import errors in implement mode are critical
-            if score > 5.0 and has_import_errors:
-                warnings.append(f"Score {score} seems high with import errors - implement mode import errors are critical failures")
-
-            # Test failures should impact scores with enhanced discrimination
-            if score > 8.0 and has_test_failures:
-                warnings.append(f"Score {score} seems high with test failures - test failures typically reduce scores to ≤7")
-            # Test failures in implement mode are significant
-            if score > 7.0 and has_test_failures:
-                warnings.append(f"Score {score} seems high with test failures - implement mode test failures indicate functional issues")
-
-            # Structure issues should impact scores with enhanced discrimination
-            if score > 8.0 and has_structure_issues:
-                warnings.append(f"Score {score} seems high with structure issues - output structure problems indicate evaluation quality issues")
-            # Structure issues in implement mode affect reliability
-            if score > 7.0 and has_structure_issues:
-                warnings.append(f"Score {score} seems high with structure issues - implement mode structure issues affect code reliability")
-
-        else:
-            # Generic basic evaluator rules with enhanced discrimination
-            if score < 3.0 and not has_critical_issues:
-                warnings.append(f"Score {score} seems too low for basic evaluator without critical issues - typical minimum for functional proposals is 4")
-            elif score > 9.5:
-                warnings.append(f"Score {score} seems too high for basic evaluator - check for score inflation and verify calibration anchors")
-
-            # SIMPLIFIED calibration anchor validation
-            # Focus on high scores where anchors are most important
-            if score >= 8.0 and not has_calibration_anchors:
-                warnings.append(f"High score {score} without calibration anchors - scores ≥8 require explicit justification")
-            elif score >= 7.0 and not has_calibration_anchors:
-                warnings.append(f"Score {score} without calibration anchors - reference calibration criteria for consistency")
-
-    else:  # diffusion evaluator
-        # Diffusion evaluator focuses on risk assessment with enhanced discrimination
-        # Adjusted calibration to improve discrimination (Spearman ρ) - align with basic evaluator while maintaining risk focus
-        if score < 3.0 and not has_critical_issues:
-            warnings.append(f"Score {score} seems too low for diffusion evaluator without critical issues - minimal risk changes typically score ≥4")
-        elif score > 9.5:
-            warnings.append(f"Score {score} seems too high for diffusion evaluator - risk assessment may be too optimistic, verify mitigation analysis")
-
-        # SIMPLIFIED calibration anchor validation for diffusion evaluator
-        # Aligned with basic evaluator for consistency
-        if score >= 8.0 and not has_calibration_anchors:
-            warnings.append(f"High risk score {score} without calibration anchors - scores ≥8 require explicit risk criteria")
-        elif score >= 7.0 and not has_calibration_anchors:
-            warnings.append(f"Score {score} without calibration anchors - high risk assessments should reference risk criteria")
-
-        # Enhanced discrimination: Check critique structure quality with mode-specific expectations
-        # Aligned structure requirements with basic evaluator for better discrimination
-        if score >= 7.0 and critique_structure_score < 0.7:
-            warnings.append(f"Score {score} has weak critique structure (score={critique_structure_score:.1f}) - risk assessments require detailed impact analysis")
-        # Diffusion evaluator needs strong risk analysis structure (aligned with basic implement mode)
-        if score >= 6.0 and critique_structure_score < 0.5:
-            warnings.append(f"Score {score} for diffusion evaluator has insufficient structure - risk assessments require clear impact analysis")
-        # Very high scores need excellent structure (aligned with basic evaluator)
-        if score >= 8.0 and critique_structure_score < 0.8:
-            warnings.append(f"Score {score} has insufficient structure for high risk assessment (score={critique_structure_score:.1f}) - detailed risk analysis required")
-
-        # Diffusion evaluator should penalize risky changes with enhanced discrimination
-        # Adjusted thresholds to improve discrimination while maintaining risk focus
-        if score > 8.0 and file_count > 3 and line_count > 100:
-            warnings.append(f"Score {score} seems high for large, complex change in diffusion evaluation - complex changes typically have higher risk scores (≥8 requires exceptional justification)")
-        # Large changes in diffusion evaluation need careful assessment
-        if score > 7.0 and file_count > 2 and line_count > 50:
-            warnings.append(f"Score {score} for moderate change in diffusion evaluation - verify risk assessment accounts for complexity (consider lowering to 6-7 range)")
-        # Small changes should have appropriate risk scores (not necessarily lower)
-        if score > 9.0 and file_count <= 1 and line_count <= 20:
-            warnings.append(f"Score {score} seems high for trivial change in diffusion evaluation - trivial changes rarely have significant second-order effects")
-
-        # Perfect diffusion scores are extremely rare with enhanced discrimination
-        if score == 10.0:
-            warnings.append(f"Perfect diffusion score {score} is extremely rare - verify no second-order effects and trivial rollback (requires explicit justification)")
-        # High diffusion scores need justification (aligned with basic evaluator threshold)
-        if score >= 9.0:
-            warnings.append(f"Very high diffusion score {score} - verify comprehensive risk mitigation analysis (should include specific mitigation steps)")
-        # Moderate scores should show balanced risk assessment
-        if 5.0 <= score <= 7.0 and not has_balanced_risk_assessment:
-            warnings.append(f"Score {score} in moderate range - verify risk assessment shows balanced view of pros/cons, not just one-sided analysis")
-
-    # Check for suspicious patterns with enhanced discrimination
-    if score == 0.0 or score == 10.0:
-        warnings.append(f"Extreme score {score} - verify calibration anchors were used and justification is explicit")
-        if score == 10.0 and not has_calibration_anchors:
-            warnings.append(f"Perfect score {score} without calibration anchors - perfect scores require explicit reference to calibration criteria")
-        # Extreme scores need strong justification
-        if score == 0.0 and not has_critical_issues:
-            warnings.append(f"Zero score {score} without critical issues - verify justification for complete failure assessment")
-
-    # Round number scores (5.0, 6.0, etc.) might indicate lazy scoring with enhanced discrimination
-    if score % 1.0 == 0.0 and 3.0 <= score <= 8.0:
-        warnings.append(f"Round number score {score} - check if proper calibration anchors were used and fractional scoring considered")
-        # Enhanced: Check if this is in a range where fractional scores are expected
-        if 5.0 <= score <= 7.0:
-            warnings.append(f"Score {score} in middle range where fractional scores (5.5, 6.5, etc.) provide better discrimination")
-        # Round scores in critical ranges need verification
-        if score == 5.0 or score == 6.0:
-            warnings.append(f"Round score {score} at decision boundary - verify calibration anchors support this exact score")
-
-    # Enhanced discrimination: Check score distribution patterns with mode awareness
-    if 4.0 <= score <= 6.0 and not has_critical_issues:
-        # Middle scores without critical issues should have clear rationale
-        warnings.append(f"Middle score {score} without critical issues - ensure dimension scores justify this middle-ground assessment")
-        # Middle scores should show dimension discrimination
-        if mode == "debate" and score >= 5.0:
-            warnings.append(f"Middle debate score {score} - verify reasoning quality and argument structure")
-        elif mode == "implement" and score >= 5.0:
-            warnings.append(f"Middle implement score {score} - verify code quality and execution correctness")
-    
-    # Validate dimension score consistency with overall score (NEW: improves discrimination)
-    if context and "analysis" in context:
-        analysis = context.get("analysis", {})
-        if analysis and isinstance(analysis, dict):
-            # Calculate average dimension score
-            dimension_scores = [v for v in analysis.values() if isinstance(v, (int, float))]
-            if dimension_scores:
-                avg_dimension_score = sum(dimension_scores) / len(dimension_scores)
-                # Check for significant inconsistencies
-                score_diff = abs(score - avg_dimension_score)
-                
-                # Critical range (4-7) requires tighter consistency
-                if 4.0 <= score <= 7.0:
-                    if score_diff > 1.5:
-                        warnings.append(f"Score inconsistency: overall score {score} differs significantly from average dimension score {avg_dimension_score:.1f} (Δ={score_diff:.1f}) - verify calibration")
-                    elif score_diff > 1.0:
-                        warnings.append(f"Score inconsistency: overall score {score} differs from average dimension score {avg_dimension_score:.1f} (Δ={score_diff:.1f}) - check dimension weighting")
-                else:
-                    # Outside critical range, allow slightly more variance
-                    if score_diff > 2.0:
-                        warnings.append(f"Score inconsistency: overall score {score} differs significantly from average dimension score {avg_dimension_score:.1f} (Δ={score_diff:.1f}) - verify calibration")
-                
-                # Check for dimension scores that contradict overall score direction
-                # If overall score is high (>7) but any dimension score is low (<4), flag it
-                if score > 7.0:
-                    low_dimensions = [dim for dim, dim_score in analysis.items() 
-                                    if isinstance(dim_score, (int, float)) and dim_score < 4.0]
-                    if low_dimensions:
-                        warnings.append(f"High overall score {score} but low dimension scores for {', '.join(low_dimensions)} - verify consistency")
-                
-                # If overall score is low (<4) but any dimension score is high (>7), flag it
-                if score < 4.0:
-                    high_dimensions = [dim for dim, dim_score in analysis.items() 
-                                     if isinstance(dim_score, (int, float)) and dim_score > 7.0]
-                    if high_dimensions:
-                        warnings.append(f"Low overall score {score} but high dimension scores for {', '.join(high_dimensions)} - verify consistency")
-    
-    # FOCUSED discrimination guidance for critical 4-7 range (Spearman ρ optimization)
-    # Simplified, consistent criteria that guide discrimination effectively
-    if 4.0 <= score <= 7.0:
-        # Clear discrimination thresholds
-        if score < 5.0:
-            # Generic approach range
-            if mode == "implement" and file_count > 0:
-                warnings.append(f"Score {score} in implement mode with file changes - generic scores (<5) inappropriate for concrete implementation")
-        elif score < 6.0:
-            # Specific but incomplete range
-            if mode == "debate" and critique_structure_score < 0.4:
-                warnings.append(f"Score {score} in debate mode - requires clear argument structure for specific scores")
-            if mode == "implement" and file_count == 0:
-                warnings.append(f"Score {score} in implement mode - requires concrete file references for specific scores (≥5)")
-        elif score < 7.0:
-            # Mostly complete range
-            if mode == "implement" and not has_tests:
-                warnings.append(f"Score {score} in implement mode - requires test evidence for mostly complete scores (≥6)")
-            if mode == "debate" and score >= 6.0 and line_count == 0:
-                warnings.append(f"Score {score} in debate mode - high scores require substantive argumentation")
-        else:  # score == 7.0
-            # Complete with minor issues
-            if mode == "debate" and critique_structure_score < 0.6:
-                warnings.append(f"Score {score} in debate mode - complete reasoning requires strong structure")
-            if mode == "implement" and line_count > 100:
-                warnings.append(f"Score {score} in implement mode - large changes require exceptional justification")
-
-    # Mode-specific score distribution validation
-    if mode == "debate" and score > 8.0:
-        # High debate scores need strong reasoning justification
-        warnings.append(f"High debate score {score} - verify reasoning depth and argument quality")
-    elif mode == "implement" and score > 8.0:
-        # High implement scores need comprehensive validation
-        warnings.append(f"High implement score {score} - verify comprehensive testing and code quality")
+    # 3. Extreme scores need a check regardless of mode — flag once, concisely.
+    if score == 10.0:
+        warnings.append("Score 10 claimed — confirm every criterion is fully satisfied with no improvements possible.")
+    elif score == 0.0:
+        warnings.append("Score 0 claimed — confirm the response is entirely absent or meaningless, not just poor.")
 
     return warnings
 
 
 def _score_is_in_code_block(text: str, score_line_start: int) -> bool:
     """Check if a SCORE: line starting at score_line_start is inside a markdown code block.
-    
-    Uses a state machine to track:
-    - in_code_block: whether we're currently inside a code block
-    - backtick_count: consecutive backticks seen on current line
-    - block_start_char: the character that started the current code block (for nested blocks)
-    - same_line_backticks: whether backticks are on the same line as the score
-    
+
+    Tracks two mutually exclusive states:
+    - in_fenced: inside a triple-backtick fenced block (``` ... ```)
+    - in_inline: inside a single-backtick inline code span (` ... `)
+
+    A run of 3+ consecutive backticks toggles the fenced state (when not in inline code).
+    A single backtick toggles the inline state (when not in a fenced block).
+
     Args:
         text: The full text to analyze
         score_line_start: The character index where the SCORE: line starts
-        
+
     Returns:
         True if the SCORE: line is inside a code block, False otherwise
     """
-    # State machine variables
-    in_code_block = False
-    backtick_count = 0
-    block_start_char = None  # '`' for inline code, None for no block
+    in_fenced = False  # inside a triple-backtick fenced block
+    in_inline = False  # inside a single-backtick inline code span
     i = 0
-    
+
     while i < score_line_start and i < len(text):
-        char = text[i]
-        
-        # Count consecutive backticks
-        if char == '`':
-            backtick_count += 1
+        if text[i] == "`":
+            # Count the run of consecutive backticks
+            j = i + 1
+            while j < score_line_start and j < len(text) and text[j] == "`":
+                j += 1
+            count = j - i
+
+            if count >= 3:
+                # Triple+ backticks toggle the fenced-block state
+                if not in_inline:
+                    in_fenced = not in_fenced
+            elif count == 1:
+                # Single backtick toggles inline-code state
+                if not in_fenced:
+                    in_inline = not in_inline
+            # count == 2: double backticks are ambiguous; treat as no effect
+
+            i = j  # skip past the entire backtick run
         else:
-            # Not a backtick - process any pending backtick sequence
-            if backtick_count > 0:
-                if backtick_count >= 3:
-                    # Triple+ backticks toggle code block state
-                    in_code_block = not in_code_block
-                    if in_code_block:
-                        block_start_char = '`'
-                    else:
-                        block_start_char = None
-                elif backtick_count == 1 and not in_code_block:
-                    # Single backtick starts inline code
-                    block_start_char = '`'
-                elif backtick_count == 1 and in_code_block and block_start_char == '`':
-                    # Single backtick inside a code block - ignore (part of content)
-                    pass
-                # Reset backtick count
-                backtick_count = 0
-            else:
-                # Check for end of inline code
-                if block_start_char == '`' and char == '`':
-                    # Found closing backtick for inline code
-                    block_start_char = None
-                    # Skip the closing backtick
-                    i += 1
-                    continue
-        
-        i += 1
-    
-    # Process any trailing backticks at the boundary
-    if backtick_count > 0:
-        if backtick_count >= 3:
-            # If we have triple backticks at the boundary, toggle state
-            in_code_block = not in_code_block
-    
-    return in_code_block
+            i += 1
+
+    return in_fenced or in_inline
 
 
 def validate_calibration_anchors(
@@ -1041,12 +447,12 @@ def validate_calibration_anchors(
         # Count words in analysis (excluding section header)
         analysis_words = len(analysis_section.replace("ANALYSIS:", "").split())
         
-        # Extreme scores require more detailed justification
+        # Extreme scores require more detailed justification — advisory warnings, not hard errors
         if is_low_extreme or is_high_extreme:
             if analysis_words < 15:
                 issues.append(
-                    f"Extreme score {score} has insufficient justification "
-                    f"({analysis_words} words). Extreme scores require at least 15 words "
+                    f"WARNING: Extreme score {score} has brief justification "
+                    f"({analysis_words} words). Extreme scores benefit from ≥15 words "
                     f"of detailed analysis referencing calibration anchors."
                 )
             
@@ -1056,15 +462,15 @@ def validate_calibration_anchors(
             
             if not has_justification and analysis_words < 25:
                 issues.append(
-                    f"Extreme score {score} lacks explicit justification connectors "
-                    f"('because', 'since', 'due to', etc.). Extreme scores require "
+                    f"WARNING: Extreme score {score} lacks explicit justification connectors "
+                    f"('because', 'since', 'due to', etc.). Extreme scores benefit from "
                     f"clear causal reasoning."
                 )
     
     if not found_anchor:
         score_range = "low" if is_low_extreme else "high"
         issues.append(
-            f"Extreme {score_range} score ({score}) without reference to calibration anchors. "
+            f"WARNING: Extreme {score_range} score ({score}) without reference to calibration anchors. "
             f"When scoring {score_range} extremes, the analysis should reference the "
             f"calibration anchor language (e.g., '{anchor_keywords[0]}', '{anchor_keywords[1]}')."
         )
@@ -1113,12 +519,10 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
     # Check for required sections based on evaluator type
     if evaluator_type == "basic":
         required_sections = ["ANALYSIS:", "TOP DEFECT:", "SCORE:"]
-        optional_sections = ["DELTA VS PRIOR BEST:", "ACTIONABLE FEEDBACK:", "WHAT WOULD MAKE THIS 10/10:"]
         defect_section = "TOP DEFECT:"
         feedback_section = "ACTIONABLE FEEDBACK:"
     else:  # diffusion
         required_sections = ["ANALYSIS:", "KEY RISK:", "SCORE:"]
-        optional_sections = ["DELTA VS PRIOR BEST:", "ACTIONABLE MITIGATIONS:", "WHAT WOULD MAKE THIS 10/10:"]
         defect_section = "KEY RISK:"
         feedback_section = "ACTIONABLE MITIGATIONS:"
     
@@ -1129,12 +533,15 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
             delta_line = delta_lines[0]
             delta_text = delta_line.split("DELTA VS PRIOR BEST:")[1].strip()
             if not delta_text or len(delta_text) < 5:
-                issues.append("'DELTA VS PRIOR BEST:' must have descriptive text (minimum 5 characters)")
+                issues.append("WARNING: 'DELTA VS PRIOR BEST:' has very short text — add descriptive comparison")
     
-    # Check for required sections
+    # Check for required sections — SCORE: is a hard error; others are advisory warnings
     for section in required_sections:
         if section not in text:
-            issues.append(f"Missing required section: {section}")
+            if section == "SCORE:":
+                issues.append(f"Missing required section: {section}")
+            else:
+                issues.append(f"WARNING: Missing section: {section} — include for complete evaluation")
     
     # SECURITY GUARD: Check if SCORE: line is inside a markdown code block using state machine
     lines = text.split('\n')
@@ -1150,23 +557,25 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
                 issues.append(f"SCORE: found inside markdown code block at line {line_num}")
                 # Don't break - continue checking all lines to report all violations
     
-    # Check for SCORE format - can have trailing text after the score
+    # Check for SCORE format - prefer score at line start, but accept embedded SCORE: as warning
     score_lines = [line for line in text.split('\n') if line.strip().startswith('SCORE:')]
+    any_score_match = _STRICT_UNANCHORED_RE.search(text)  # SCORE: anywhere in text
+    
     if score_lines:
         score_line = score_lines[-1].strip()
         # Check for proper SCORE: X.X format (allows trailing text)
-        if not re.match(r'^SCORE:\s*\d+(?:\.\d+)?\b', score_line):
+        if not re.match(r'^SCORE:\s+\d+(?:\.\d+)?\b', score_line):
             issues.append(f"SCORE line malformed: '{score_line}' - expected 'SCORE: X.X' with optional trailing text")
         # Check that score is the last thing in the output (most reliable)
         # Allow for trailing whitespace after the score line
         text_stripped = text.strip()
         score_line_stripped = score_line.strip()
         if not text_stripped.endswith(score_line_stripped) and not text_stripped.endswith(score_line_stripped + '\n'):
-            issues.append("SCORE should be the last line of the output for reliable parsing")
+            issues.append("WARNING: SCORE should be the last line of the output for reliable parsing")
         
         # Extract and validate score calibration
         try:
-            score_match = re.search(r'SCORE:\s*(\d+(?:\.\d+)?)', score_line)
+            score_match = re.search(r'SCORE:\s+(\d+(?:\.\d+)?)', score_line)
             if score_match:
                 score = float(score_match.group(1))
                 calibration_warnings = validate_score_calibration(score, evaluator_type, mode)
@@ -1174,6 +583,9 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
                     issues.append(f"WARNING: {warning}")
         except (ValueError, AttributeError):
             pass  # Already caught by format check above
+    elif any_score_match:
+        # SCORE: exists but not at line start — advisory warning, not a hard failure
+        issues.append("WARNING: SCORE: found but not at line start — place 'SCORE: X.X' on its own line")
     else:
         issues.append("No SCORE line found")
     
@@ -1240,7 +652,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
                     break
             
             if not has_concrete_reference:
-                issues.append(f"{feedback_section} should contain at least one concrete file/function reference (e.g., 'file.py: function_name' or 'file::function')")
+                issues.append(f"WARNING: {feedback_section} lacks explicit file/function references (e.g., 'file.py: function_name' or 'file::function') — add for actionability")
     
     # Enhanced validation: Check for concrete references in critique/improvement content
     # Look for critique or improvement_suggestions patterns in the text
@@ -1282,7 +694,7 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
     
     # Mode-specific validation
     if mode and mode in _MODE_HEADERS:
-        mode_header = _MODE_HEADERS[mode]
+        mode_header = _MODE_HEADERS[mode]  # noqa: F841 — used in f-string below
         # Check for mode-appropriate content
         if mode == "debate":
             # Debate mode should mention text proposals or planning
@@ -1307,7 +719,9 @@ def validate_evaluator_output(text: str, evaluator_type: str = "basic", mode: st
     if len(text) > 8000:  # Rough estimate: ~2000 tokens
         issues.append("WARNING: Evaluator output may exceed token budget (consider truncation)")
     
-    is_valid = len(issues) == 0
+    # Only ERROR issues (no "WARNING:" prefix) make the output invalid.
+    # WARNING-only issues are advisory and do not fail validation.
+    is_valid = all(issue.startswith("WARNING:") for issue in issues)
     return is_valid, issues
 
 
@@ -1357,31 +771,50 @@ def parse_score(
                 cleaned_lines.append(line)
         
         clean_text = '\n'.join(cleaned_lines)
-    
-    # Three-tier extraction strategy
-    
-    # 1. Strict anchored pattern (anchored to line boundaries)
-    strict_anchored = _STRICT_RE.findall(clean_text)
-    if strict_anchored:
-        raw = float(strict_anchored[-1])
-        log.debug("parse_score: found strict anchored SCORE: %.2f", raw)
+
+    # Strip inline code spans that contain SCORE patterns, so scores appearing
+    # inside backtick-quoted code examples are not extracted as real scores.
+    # We only strip spans that contain SCORE to avoid changing line-anchor status
+    # for lines where inline code precedes a real (post-backtick) SCORE value.
+    clean_text = _INLINE_SCORE_RE.sub("", clean_text)
+
+    # Two-tier score extraction strategy:
+    # 1. Prefer the LAST occurrence of SCORE: that appears at the START of its line
+    #    (possibly preceded by whitespace).  Within a single line, the LAST SCORE:
+    #    token on that line wins over earlier tokens on the same line.
+    # 2. Fall back to the last unanchored SCORE: occurrence if no line-start match.
+    # 3. Final fallback: loose pattern.
+
+    anchored_values: list[float] = []  # SCORE: that starts its line (last per line)
+    last_per_line: list[float] = []    # last SCORE: per line, any position
+    _anchor_re = re.compile(r'^\s*SCORE:\s+', re.IGNORECASE)
+
+    for line in clean_text.splitlines():
+        line_matches = list(_STRICT_UNANCHORED_RE.finditer(line))
+        if not line_matches:
+            continue
+        last_val = float(line_matches[-1].group(1))
+        last_per_line.append(last_val)
+        if _anchor_re.match(line):
+            anchored_values.append(last_val)
+
+    if anchored_values:
+        raw = anchored_values[-1]
+        log.debug("parse_score: found line-anchored SCORE: %.2f", raw)
+    elif last_per_line:
+        raw = last_per_line[-1]
+        log.debug("parse_score: found unanchored SCORE: %.2f", raw)
     else:
-        # 2. Strict unanchored pattern (not anchored)
-        strict_unanchored = _STRICT_UNANCHORED_RE.findall(clean_text)
-        if strict_unanchored:
-            raw = float(strict_unanchored[-1])
-            log.debug("parse_score: found strict unanchored SCORE: %.2f", raw)
-        else:
-            # 3. Loose fallback pattern
-            loose = re.findall(pattern, clean_text, re.IGNORECASE)
-            if not loose:
-                log.warning(
-                    "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
-                    clean_text,
-                )
-                return 0.0
-            raw = float(loose[-1])
-            log.debug("parse_score: found loose SCORE: %.2f", raw)
+        # Loose fallback pattern
+        loose = re.findall(pattern, clean_text, re.IGNORECASE)
+        if not loose:
+            log.warning(
+                "parse_score: no score token found in evaluator output (first 500 chars):\n%.500s",
+                clean_text,
+            )
+            return 0.0
+        raw = float(loose[-1])
+        log.debug("parse_score: found loose SCORE: %.2f", raw)
 
     clamped = max(_SCORE_MIN, min(_SCORE_MAX, raw))
     if clamped != raw:

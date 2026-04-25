@@ -8,8 +8,12 @@ from harness.core.config import HarnessConfig
 
 def test_symbol_extractor_cross_references_field(tmp_path):
     """Test that symbol_extractor includes cross_references field when requested."""
-    # Create a simple Python file with a function
-    test_file = tmp_path / "test_module.py"
+    # Create workspace directory first so we can put the test file inside it.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    # Create a simple Python file *inside* the workspace so path validation passes.
+    test_file = workspace / "test_module.py"
     test_file.write_text("""
 def my_function():
     '''A test function.'''
@@ -19,11 +23,7 @@ class MyClass:
     def method(self):
         return "hello"
 """)
-    
-    # Create workspace directory
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    
+
     # Create config
     config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
     
@@ -103,8 +103,12 @@ def test_symbol_extractor_tool_initialization():
 
 def test_symbol_extractor_finds_symbols(tmp_path):
     """Test that symbol_extractor can find symbols in a file."""
-    # Create a simple Python file with multiple symbols
-    test_file = tmp_path / "test_module.py"
+    # Create workspace directory first so test file lives inside it.
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    # Create a simple Python file *inside* the workspace.
+    test_file = workspace / "test_module.py"
     test_file.write_text("""
 def public_function():
     '''Public function.'''
@@ -122,11 +126,7 @@ class MyClass:
     def class_method(cls):
         return "class_method"
 """)
-    
-    # Create workspace directory
-    workspace = tmp_path / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    
+
     # Create config
     config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
     

@@ -19,6 +19,7 @@ agent_*.json
 # Harness run output and metrics
 harness_output*/
 .harness_metrics.json
+.harness.pause
 CHANGELOG_AUTO.md
 
 # IDE

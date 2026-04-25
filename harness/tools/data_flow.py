@@ -21,9 +21,15 @@ class DataFlowTool(Tool):
     name = "data_flow"
     description = (
         "Trace how a symbol (function, class, or attribute) is used across "
-        "the workspace. Modes: 'reads' finds attribute reads "
-        "(e.g. config.max_tool_turns); 'callers' finds direct call sites; "
-        "'call_chain' returns callers-of-callers up to depth 2. "
+        "the workspace. Choose mode based on what you need: "
+        "'callers' — which functions directly call this function (use for: "
+        "impact analysis before refactoring, finding all callers of a helper); "
+        "'reads' — where is this attribute read (e.g. obj.max_tool_turns) (use for: "
+        "config field usage, attribute access patterns — symbol must be 'obj.attr' form); "
+        "'call_chain' — callers-of-callers, depth 1 or 2 (use for: understanding "
+        "how deeply a function is embedded). "
+        "Prefer cross_reference when you need definition + call sites + test files "
+        "in one call; use data_flow when you only need one of reads/callers/call_chain. "
         "Uses AST analysis — no external dependencies."
     )
     requires_path_check = False  # manual allowed_paths enforcement via _check_dir_root
@@ -43,7 +49,12 @@ class DataFlowTool(Tool):
                 "mode": {
                     "type": "string",
                     "enum": ["reads", "callers", "call_chain"],
-                    "description": "Trace mode (default: callers).",
+                    "description": (
+                        "Trace mode (default: callers). "
+                        "'callers': direct callers of a function/method — symbol is a bare name like 'my_func'. "
+                        "'reads': attribute read sites — symbol MUST be 'obj.attr' (e.g. 'config.workspace'). "
+                        "'call_chain': callers of callers — depth=1 gives same as callers, depth=2 adds grandcallers."
+                    ),
                     "default": "callers",
                 },
                 "root": {
@@ -53,18 +64,23 @@ class DataFlowTool(Tool):
                 },
                 "depth": {
                     "type": "integer",
-                    "description": "call_chain depth: 1 or 2 (default: 1).",
-                    "default": 1,
+                    "description": (
+                        "Required — no default. "
+                        "Only used by 'call_chain' mode; ignored by 'reads' and 'callers'. "
+                        "Use 1 for direct callers only; 2 to also include callers-of-callers. "
+                        "Capped at 2 to avoid O(n³) cost on large codebases. "
+                        "For reads/callers modes, pass 1 (it is required by the schema but unused)."
+                    ),
                 },
             },
-            "required": ["symbol"],
+            "required": ["symbol", "depth"],
         }
 
     async def execute(self, config: HarnessConfig, **kwargs: Any) -> ToolResult:
         symbol: str = kwargs.get("symbol", "").strip()
         mode: str = kwargs.get("mode", "callers")
         root: str = kwargs.get("root", "")
-        depth: int = min(int(kwargs.get("depth", 1)), 2)  # cap at 2
+        depth: int = min(int(kwargs["depth"]), 2)  # cap at 2
 
         if not symbol:
             return ToolResult(error="'symbol' is required", is_error=True)
@@ -78,7 +94,7 @@ class DataFlowTool(Tool):
         # Parse all files once
         parsed: dict[Path, ast.Module] = {}
         for f in py_files:
-            tree = parse_module(f)
+            tree, _err = parse_module(f)
             if tree is not None:
                 parsed[f] = tree
 

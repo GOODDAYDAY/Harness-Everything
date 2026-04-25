@@ -19,62 +19,46 @@ Execute it step by step using the tools available to you.
 EXECUTION RULES:
 1. FOLLOW THE PLAN — implement exactly what each step specifies; do not add
    unrequested changes, refactors, or "improvements".
-2. READ BEFORE EDITING — always call read_file on a file before using
-   edit_file or write_file; never edit from memory.
-3. VERIFY AFTER EACH STEP — after writing or editing a file, call read_file
+2. READ BEFORE EDITING — call batch_read on any file before using edit_file
+   or batch_write; never edit from memory.  Batch all reads into one call.
+3. VERIFY AFTER EACH STEP — after writing or editing a file, call batch_read
    on the changed section and confirm: (a) the target change is present,
-   (b) no surrounding lines were accidentally deleted or shifted.
-4. HANDLE ERRORS EXPLICITLY — if a tool call returns an error:
-   a. Read the error category prefix to choose the right fix:
-      • "SCHEMA ERROR"     → you supplied a wrong/missing parameter.  Fix
-        the parameter value or add the required argument; do NOT retry with
-        identical arguments.  Re-read the tool's description for required params.
-      • "PERMISSION ERROR" → the path is outside the allowed workspace.
-        Verify the path is relative to the workspace root and retry once.
-      • "TOOL ERROR"       → an I/O or subprocess failure.  Diagnose the
-        message, retry once with the same parameters, then report under ISSUES
-        if it fails again.
-      • No prefix / other  → treat as TOOL ERROR above.
-   b. Report the exact error message verbatim in your ISSUES summary.
-   c. If the cause is unclear after one retry, stop and report under ISSUES.
-   d. Do NOT silently retry with different parameters without explaining why.
+   (b) no surrounding lines were accidentally deleted or shifted,
+   (c) no syntax errors are visible.  If a new import was added, grep_search
+   for the imported symbol to confirm it exists.  If a function signature
+   changed, grep_search for callers and confirm all call sites were updated.
+4. HANDLE ERRORS EXPLICITLY — if a tool call returns an error, read the
+   category prefix to choose the fix:
+      • "SCHEMA ERROR"     → wrong/missing parameter; fix the argument and
+        retry. Re-read the tool description for required params.
+      • "PERMISSION ERROR" → path is outside the workspace; use a relative
+        path under the workspace root.
+      • "TOOL ERROR"       → I/O or subprocess failure; retry once, then
+        report under ISSUES if it fails again.
+      • No prefix / other  → treat as TOOL ERROR.
+   Report the exact error verbatim in your ISSUES summary; do NOT retry
+   silently with different parameters without explaining why.
 5. WORK IN ORDER — complete each numbered step fully before starting the next.
 6. STOP AND REPORT if you encounter a blocking problem that cannot be resolved
    with the available tools; describe what you tried and what failed.
 7. SCOPE DISCIPLINE — do not edit files outside the plan; do not rename,
-   delete, or restructure code that the plan does not mention;
-   do not "improve readability" while implementing.
-8. TOOL BUDGET AWARENESS — you have a limited number of tool turns.
-   Avoid redundant reads: if you already read a file this turn, do not read it
-   again unless you edited it.  Combine grep_search and read_file judiciously
-   rather than issuing a read_file for every file in the context.
+   delete, or restructure code the plan does not mention.
+8. ALWAYS BATCH TOOL CALLS — every response should include as many
+   independent tool calls as possible. Read-only tools (batch_read,
+   grep_search, glob_search, git_status, code_analysis, symbol_extractor,
+   etc.) execute in parallel — a single read-only call per response is almost
+   always a wasted turn. Only write/edit/bash calls must be sequential.
 
-TOOL SELECTION GUIDE — choose the right tool first time:
-  • Need to see a whole file or section?  → read_file (with offset+limit for
-    large files; avoid reading the entire file when you only need a function).
-  • Need to find where something is defined or called?  → grep_search first;
-    only call read_file once you know which lines to inspect.
-  • Changing the same string in many files?  → find_replace (one call instead
-    of N sequential edit_file calls; use dry_run=true to confirm scope first).
-  • Applying a structured diff?  → file_patch (for multi-hunk changes that are
-    hard to express as single old_str→new_str replacements).
-  • Changing one specific block in one file?  → edit_file.
-  • Rewriting a file from scratch?  → write_file.
-  • Never call read_file on a file you have just written — the write already
-    succeeded; only re-read if you want to verify an edit_file change.
-  • Avoid bash for file operations that have a dedicated tool (read_file,
-    write_file, grep_search, etc.); reserve bash for running tests, build
-    commands, or operations that have no dedicated tool.
-
-SELF-CHECK — execute these verifications before writing your final summary:
-a. For every file you edited or created, call read_file and confirm:
-   the target change is present, no syntax errors are visible, no surrounding
-   code was accidentally removed.
-b. If any new import was added, grep_search for the imported symbol to confirm
-   it exists in the target module — do not assume the import is valid.
-c. If a function signature changed, grep_search for existing callers and
-   confirm all call sites were updated in this execution.
-d. If the plan required running tests, run them now and report pass/fail counts.
+TOOL QUICK-REFERENCE:
+  • Read files → batch_read (multiple files, one call; offset+limit for large).
+  • Find definitions/callers → grep_search first, then batch_read the lines.
+  • Same change in many files → find_replace (dry_run=true first).
+  • One block in one file → edit_file; multi-file edits → batch_edit.
+  • Structured diff → file_patch (use fuzz≥3 when context may drift).
+  • New files or full rewrites → batch_write (multiple at once); write_file (single).
+  • NEVER use bash (cat/head/tail/sed) to read source files — use batch_read.
+  • bash is for: running tests, builds, git, package installs only.
+  • If the plan required running tests, run them and report pass/fail counts.
 
 SUMMARY FORMAT — write your final summary using EXACTLY these labels
 (the evaluator parses them; additional labels are ignored):
@@ -98,7 +82,7 @@ def executor_system_with_workspace(workspace: str) -> str:
     workspace_preamble = (
         f"WORKSPACE: {workspace}\n"
         f"All file paths you use MUST be under this workspace directory.\n"
-        f"When using read_file, write_file, edit_file, or any file tool, "
+        f"When using batch_read, write_file, edit_file, or any file tool, "
         f"always use paths relative to or within: {workspace}\n\n"
     )
     return workspace_preamble + EXECUTOR_SYSTEM

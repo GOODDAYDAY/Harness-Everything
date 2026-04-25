@@ -132,19 +132,18 @@ class DiffFilesTool(Tool):
                 "context": {
                     "type": "integer",
                     "description": (
-                        "Number of unchanged context lines around each hunk "
-                        "(default: 3, same as 'diff -u'). "
+                        "Required — no default. "
+                        "Use 2-3 for local context, 5+ for broader view. "
                         "Set to 0 to show only changed lines."
                     ),
-                    "default": _DEFAULT_CONTEXT,
                 },
                 "max_lines": {
                     "type": "integer",
                     "description": (
-                        "Maximum output lines before truncation (default: 500). "
-                        "Increase for large files; decrease to keep context tight."
+                        "Required — no default. "
+                        "Use 100-200 for quick diff, 500+ for full comparison. "
+                        "Maximum output lines before truncation."
                     ),
-                    "default": _DEFAULT_MAX_LINES,
                 },
                 "label_a": {
                     "type": "string",
@@ -163,7 +162,7 @@ class DiffFilesTool(Tool):
                     "default": "",
                 },
             },
-            "required": ["path_a"],
+            "required": ["path_a", "context", "max_lines"],
         }
 
     async def execute(
@@ -171,11 +170,11 @@ class DiffFilesTool(Tool):
         config: HarnessConfig,
         *,
         path_a: str,
+        context: int,
+        max_lines: int,
         path_b: str = "",
         text_b: str = "",
         mode: str = "file_vs_text",
-        context: int = _DEFAULT_CONTEXT,
-        max_lines: int = _DEFAULT_MAX_LINES,
         label_a: str = "",
         label_b: str = "",
     ) -> ToolResult:
@@ -207,9 +206,9 @@ class DiffFilesTool(Tool):
                     error="mode='file_vs_file' requires path_b to be supplied",
                     is_error=True,
                 )
-            resolved_b, err = self._resolve_and_check(config, path_b)
-            if err:
-                return err
+            resolved_b = self._check_path(config, path_b)
+            if isinstance(resolved_b, ToolResult):
+                return resolved_b
 
             p_b = Path(resolved_b)
             if not p_b.exists():

@@ -1,11 +1,9 @@
 """Tests for the code_analysis tool."""
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 import ast
 
 from harness.tools.code_analysis import CodeAnalysisTool, _analyse_source
-from harness.tools._ast_utils import dotted_name
 from harness.tools.base import ToolResult
 
 
@@ -205,14 +203,6 @@ class TestClass:
         tool = CodeAnalysisTool()
         
         # We need a mock config for execution
-        from harness.core.config import HarnessConfig
-        config = HarnessConfig(
-            model="test-model",
-            max_tokens=1000,
-            workspace=str(tmp_path),
-            allowed_paths=[str(tmp_path)],
-        )
-        
         # Test execution (async would need to be handled differently in test)
         # For now, just verify the tool can be instantiated and has the right schema
         
@@ -239,20 +229,20 @@ class TestClass:
         assert "symbols" not in result or result.get("symbols") == [], \
             "Symbols list should be empty or missing for syntax errors"
     
-    def test_code_analysis_tool_execute_nonexistent_file(self):
+    def test_code_analysis_tool_execute_nonexistent_file(self, tmp_path):
         """Test that CodeAnalysisTool handles non-existent file paths."""
         tool = CodeAnalysisTool()
-        
+
         # We need a mock config for execution
         from harness.core.config import HarnessConfig
-        from unittest.mock import AsyncMock, patch
-        
-        # Create a mock config with a workspace
+        from unittest.mock import patch
+
+        # Create a mock config with a workspace that actually exists
         config = HarnessConfig(
             model="test-model",
             max_tokens=1000,
-            workspace="/tmp/test_workspace",
-            allowed_paths=["/tmp/test_workspace"],
+            workspace=str(tmp_path),
+            allowed_paths=[str(tmp_path)],
         )
         
         # Mock the _check_path method to return a ToolResult error
@@ -272,20 +262,20 @@ class TestClass:
             assert result.is_error is True, "Result should be an error for non-existent file"
             assert "File not found" in result.error, "Error message should indicate file not found"
     
-    def test_code_analysis_tool_execute_security_validation(self):
+    def test_code_analysis_tool_execute_security_validation(self, tmp_path):
         """Test that CodeAnalysisTool validates path security."""
         tool = CodeAnalysisTool()
-        
+
         # We need a mock config for execution
         from harness.core.config import HarnessConfig
         from unittest.mock import patch
-        
-        # Create a mock config with a workspace
+
+        # Create a mock config with a workspace that actually exists
         config = HarnessConfig(
             model="test-model",
             max_tokens=1000,
-            workspace="/tmp/test_workspace",
-            allowed_paths=["/tmp/test_workspace"],
+            workspace=str(tmp_path),
+            allowed_paths=[str(tmp_path)],
         )
         
         # Mock the _check_path method to return a security error

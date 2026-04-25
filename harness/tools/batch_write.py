@@ -43,18 +43,21 @@ class BatchWriteTool(Tool):
                 "files": {
                     "type": "array",
                     "description": (
-                        f"List of files to write (max {self.MAX_FILES})."
+                        f"List of files to write (max {self.MAX_FILES}). "
+                        "Each item must have: 'path' (destination file path) "
+                        "and 'content' (complete file content — replaces entire file). "
+                        "Partial failures are reported per-file; others still proceed."
                     ),
                     "items": {
                         "type": "object",
                         "properties": {
                             "path": {
                                 "type": "string",
-                                "description": "Destination path (created if missing, overwritten if present).",
+                                "description": "Destination file path (parent directories created automatically; existing file is overwritten in full).",
                             },
                             "content": {
                                 "type": "string",
-                                "description": "Full file content to write.",
+                                "description": "Complete file content to write. The entire file is replaced — do NOT omit unchanged sections.",
                             },
                         },
                         "required": ["path", "content"],

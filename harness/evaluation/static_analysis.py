@@ -61,7 +61,6 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -168,12 +167,13 @@ def _check_syntax(path: Path, rel: str) -> list[Finding]:
     except py_compile.PyCompileError as exc:
         # exc.msg includes "filename:lineno: SyntaxError: ..."
         msg = str(exc.msg).strip()
-        # Try to extract line number from the message
+        # Try to extract line number from the message.
+        # py_compile messages may use either "filename:lineno:" or ", line N"
         line = 0
-        m = re.search(r":(\d+):", msg)
+        m = re.search(r", line (\d+)", msg) or re.search(r":(\d+):", msg)
         if m:
             line = int(m.group(1))
-        return [Finding(level=_LEVEL_ERROR, file=rel, message=f"SyntaxError: {msg}", line=line)]
+        return [Finding(level=_LEVEL_ERROR, file=rel, message=f"syntax error: {msg}", line=line)]
     except Exception as exc:
         return [Finding(level=_LEVEL_WARN, file=rel, message=f"py_compile raised {type(exc).__name__}: {exc}")]
 

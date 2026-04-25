@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
-from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -15,8 +12,10 @@ from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, hand
 class EditFileTool(Tool):
     name = "edit_file"
     description = (
-        "Perform an exact string replacement in a file. "
-        "old_str must appear exactly once in the file (unless replace_all is true)."
+        "Surgical single-file search/replace. "
+        "old_str must match exactly once unless replace_all=true. "
+        "For changes spanning multiple files use batch_edit instead. "
+        "To preview without writing, set dry_run=true."
     )
     requires_path_check = True
     tags = frozenset({"file_write"})
@@ -25,9 +24,12 @@ class EditFileTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File path to edit"},
-                "old_str": {"type": "string", "description": "Exact text to find"},
-                "new_str": {"type": "string", "description": "Replacement text"},
+                "path": {"type": "string", "description": "File path to edit (must exist)"},
+                "old_str": {
+                    "type": "string",
+                    "description": "Exact text to replace — must match character-for-character including all whitespace and indentation. Must appear exactly once (raises error if 0 or 2+ matches). Use replace_all=true to replace every occurrence. Match failures are almost always whitespace/indentation differences; copy-paste from batch_read output.",
+                },
+                "new_str": {"type": "string", "description": "Replacement text that replaces old_str. Use empty string \"\" to delete old_str."},
                 "replace_all": {
                     "type": "boolean",
                     "description": "Replace all occurrences (default: false)",
@@ -135,6 +137,10 @@ class EditFileTool(Tool):
         text = result.metadata["text"]
         resolved = result.metadata["resolved_path"]
         
+        # Check phase scope (phase_edit_globs restriction)
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
+        
         # Calculate changes using helper method
         new_text, count, changes_preview = self._calculate_changes(
             text, old_str, new_str, replace_all
@@ -146,7 +152,13 @@ class EditFileTool(Tool):
                 # This is a valid no-op operation regardless of replace_all
                 pass
             else:
-                return ToolResult(error="old_str not found in file", is_error=True)
+                return ToolResult(
+                    error=(
+                        "old_str not found in file "
+                        "(check whitespace/indentation — use batch_read to copy exact text)"
+                    ),
+                    is_error=True,
+                )
         if count > 1 and not replace_all:
             # Find line numbers where old_str appears for better error messages
             lines = text.splitlines(keepends=True)
