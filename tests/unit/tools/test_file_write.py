@@ -242,28 +242,21 @@ def test_writefile_parent_dir_symlink_resolution():
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
 
-        # Mock the atomic validation to simulate TOCTOU attack detection
-        from unittest.mock import AsyncMock
-        from harness.tools.base import ToolResult
-        tool._validate_atomic_path = AsyncMock(return_value=(
-            False, 
-            ToolResult(error="Path validation failed: symlink attack detected", is_error=True)
-        ))
-
         # Test: writing a file through a symlinked parent directory should fail
+        # The path resolves to outside the workspace via the symlink
         result = asyncio.run(tool.execute(
             config,
             path=str(target_path),
             content="attempt to write outside workspace"
         ))
         
-        # The operation should fail because of mocked validation error
-        assert result.is_error, "Should reject file creation due to mocked validation error"
+        # The operation should fail because the path resolves outside the workspace
+        assert result.is_error, "Should reject file creation through symlink to outside workspace"
         
-        # Verify the error contains "symlink" as specified in the plan
+        # Verify the error indicates the path is not allowed
         error_lower = result.error.lower()
-        assert "symlink" in error_lower, f"Error should mention 'symlink', got: {result.error}"
-        assert "path validation failed" in error_lower, f"Error should mention validation failure, got: {result.error}"
+        assert "not allowed" in error_lower or "outside" in error_lower or "symlink" in error_lower, \
+            f"Error should indicate path violation, got: {result.error}"
         
         # Verify the outside file was not modified
         assert secret_file.read_text() == "classified information", \

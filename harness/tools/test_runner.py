@@ -50,7 +50,7 @@ from harness.tools.base import Tool, ToolResult
 
 # Compact per-line format from -v: "tests/test_foo.py::test_bar PASSED"
 _COMPACT_OUTCOME_RE = re.compile(
-    r"^(.+?)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\s*$"
+    r"^(.+?)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)(?:\s+\[[\d\s%]+\])?\s*$"
 )
 
 # Per-count summary extractors (used individually — avoids non-greedy multi-group issues)
@@ -352,9 +352,9 @@ class TestRunnerTool(Tool):
     ) -> ToolResult:
         # ---- path validation ----
         abs_test_path = str((Path(config.workspace) / test_path).resolve())
-        resolved, err = self._resolve_and_check(config, abs_test_path)
-        if err:
-            return err
+        resolved = self._check_path(config, abs_test_path)
+        if isinstance(resolved, ToolResult):
+            return resolved
 
         # ---- build command ----
         base_args: list[str] = [
@@ -450,6 +450,30 @@ class TestRunnerTool(Tool):
                         Path(json_report_file).unlink(missing_ok=True)
                     except Exception:
                         pass
+                # Re-run without --json-report so the output is actually usable.
+                cmd_plain = [
+                    "python", "-m", "pytest",
+                    test_path,
+                    "-v", "--tb=short", "--no-header",
+                ] + list(pytest_args or [])
+                try:
+                    proc2 = await asyncio.wait_for(
+                        asyncio.create_subprocess_exec(
+                            *cmd_plain,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=config.workspace,
+                        ),
+                        timeout=timeout,
+                    )
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                        proc2.communicate(), timeout=timeout
+                    )
+                    exit_code = proc2.returncode or 0
+                    stdout_text = stdout_bytes.decode(errors="replace")
+                    stderr_text = stderr_bytes.decode(errors="replace")
+                except Exception:
+                    pass  # keep the original (failed) output for best-effort parsing
             else:
                 TestRunnerTool._json_report_available = True
 

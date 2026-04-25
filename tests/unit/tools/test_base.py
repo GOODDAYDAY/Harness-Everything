@@ -3,7 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -187,7 +187,6 @@ def test_validate_atomic_path_detects_symlink_swap():
     Creates a symlink within a temp workspace, opens an FD to it, swaps the symlink target,
     and asserts that _validate_atomic_path returns (False, ToolResult) with a "TOCTOU" error.
     """
-    import errno
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -282,7 +281,6 @@ async def test_validate_atomic_path_detects_symlink_swap_async():
     Creates a symlink within a temp workspace, opens an FD to it, swaps the symlink target,
     and asserts that _validate_atomic_path returns (False, ToolResult) with a "TOCTOU" error.
     """
-    import errno
     
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -362,11 +360,13 @@ async def test_atomic_write_text_concurrent():
         exceptions = [r for r in results if isinstance(r, Exception)]
         assert len(exceptions) == 0, f"Got exceptions: {exceptions}"
         
-        # Verify the last write succeeded (file should exist with last content)
+        # Verify the file exists and has content from one of the concurrent writes
+        # (due to atomic writes, one of them wins but ordering is non-deterministic)
         assert os.path.exists(test_path)
         with open(test_path, 'r', encoding='utf-8') as f:
             final_content = f.read()
-        assert final_content == "test_4"  # Last write should be "test_4"
+        expected_values = {f"test_{i}" for i in range(5)}
+        assert final_content in expected_values, f"File content '{final_content}' should be one of {expected_values}"
 
 
 if __name__ == "__main__":

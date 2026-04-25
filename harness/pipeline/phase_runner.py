@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import re
 import time
 from pathlib import Path
@@ -75,6 +76,10 @@ _W_SIZE     = 0.15   # inverse-size signal (prefer smaller files when keywords e
 # recency; older files decay exponentially.  24 h is a good default for
 # active development workflows.
 _RECENCY_HALF_LIFE_SECS: float = 24 * 3600   # 24 hours
+
+# Read-only tool tags — always available to every agent (debate & implement).
+# These are side-effect-free, so safe for parallel debate rounds.
+_READ_ONLY_TAGS = frozenset({"file_read", "search", "git", "analysis"})
 
 
 def _tokenise_path(path_str: str) -> set[str]:
@@ -199,6 +204,13 @@ def _truncate_file_content(content: str, path_str: str) -> tuple[str, bool]:
     tail = lines[-_TAIL_LINES:] if len(lines) > _TAIL_LINES else lines
     tail_text = "".join(tail)
 
+    # Clamp tail to half the budget so there's always room for a head section.
+    # This prevents single-line or minified files from returning more than
+    # _FILE_CHAR_LIMIT chars.
+    half_budget = _FILE_CHAR_LIMIT // 2
+    if len(tail_text) > half_budget:
+        tail_text = tail_text[-half_budget:]
+
     # Fill remaining budget from the top
     budget = _FILE_CHAR_LIMIT - len(tail_text)
     if budget > 0:
@@ -206,7 +218,7 @@ def _truncate_file_content(content: str, path_str: str) -> tuple[str, bool]:
         # Don't cut in the middle of a line
         last_nl = head_text.rfind("\n")
         head_text = head_text[: last_nl + 1] if last_nl >= 0 else head_text
-        omitted = len(lines) - head_text.count("\n") - _TAIL_LINES
+        omitted = len(lines) - head_text.count("\n") - len(tail_text.splitlines())
         truncated = (
             head_text
             + f"\n... [{omitted} lines omitted — file truncated to fit context] ...\n\n"
@@ -349,6 +361,59 @@ def _read_source_files(
     return "".join(parts)
 
 
+def _read_source_manifest(
+    workspace: str,
+    glob_patterns: list[str],
+    keywords: set[str] | None = None,
+) -> str:
+    """Build a lightweight file listing (paths + sizes) instead of full content.
+
+    Used when the agent has tool access and can read files on demand,
+    so we don't need to burn 50K+ chars on passive file injection.
+    """
+    import glob as glob_mod
+
+    seen_resolved: set[str] = set()
+    file_entries: list[tuple[float, int, str]] = []
+    for pattern in glob_patterns:
+        for path_str in glob_mod.glob(pattern, recursive=True, root_dir=workspace):
+            full = Path(workspace) / path_str
+            if not full.is_file():
+                continue
+            resolved = str(full.resolve())
+            if resolved in seen_resolved:
+                continue
+            seen_resolved.add(resolved)
+            try:
+                st = full.stat()
+                file_entries.append((st.st_mtime, st.st_size, path_str))
+            except OSError:
+                continue
+
+    if not file_entries:
+        return "[No source files matched]\n"
+
+    if keywords:
+        now = time.time()
+        file_entries.sort(
+            key=lambda e: score_file_relevance(e[2], keywords, e[0], now, file_size=e[1]),
+            reverse=True,
+        )
+    else:
+        file_entries.sort(key=lambda e: e[0], reverse=True)
+
+    lines = []
+    for _mtime, size, path_str in file_entries[:100]:
+        lines.append(f"  {path_str}  ({size:,} bytes)")
+
+    header = f"## Available source files ({len(lines)} of {len(file_entries)} in workspace)\n"
+    hint = (
+        "\nYou have tool access — use batch_read to inspect files.\n"
+        "Use scratchpad to save important findings so they survive context pruning.\n"
+    )
+    return header + "\n".join(lines) + hint
+
+
 class PhaseRunner:
     """Executes a single phase: inner rounds + synthesis + verification hooks."""
 
@@ -376,6 +441,17 @@ class PhaseRunner:
         from harness.pipeline.planner import Planner
         self.planner = Planner(llm, self.harness)
 
+    def _build_active_registry(self, phase: PhaseConfig) -> ToolRegistry:
+        """Build the tool registry for a phase.
+
+        Always includes read-only tools. If phase.tool_tags is set,
+        also includes those additional tags (e.g. file_write, execution).
+        """
+        tags = set(_READ_ONLY_TAGS)
+        if phase.tool_tags:
+            tags.update(phase.tool_tags)
+        return self.registry.filter_by_tags(frozenset(tags))
+
     async def run_phase(
         self,
         outer: int,
@@ -399,10 +475,19 @@ class PhaseRunner:
             keywords=phase_keywords or None,
             total_char_limit=self.config.max_file_context_chars,
         )
+        # Lightweight manifest for tool-enabled agents (paths + sizes only).
+        # Agents can batch_read on demand instead of getting 50K+
+        # chars of passive code injection that bloats the initial prompt.
+        file_manifest = _read_source_manifest(
+            self.harness.workspace,
+            phase.glob_patterns,
+            keywords=phase_keywords or None,
+        )
         log.info(
-            "Phase %s: injected %d chars from source files  (keywords=%s)",
+            "Phase %s: injected %d chars from source files, manifest %d chars  (keywords=%s)",
             label,
             len(file_context),
+            len(file_manifest),
             sorted(phase_keywords)[:6] if phase_keywords else "[]",
         )
 
@@ -422,6 +507,7 @@ class PhaseRunner:
                     return r
                 r = await self._run_inner_round(
                     outer, phase, idx, file_context, prior_best, "",
+                    file_manifest=file_manifest,
                 )
                 self.checkpoint.mark_inner_done(outer, label, idx)
                 return r
@@ -433,6 +519,16 @@ class PhaseRunner:
         else:
             # Implement mode (or single inner round): stay sequential because
             # tool_use rounds mutate the workspace and would conflict.
+
+            # Determine effective early-exit threshold for this phase.
+            # Phase-level override takes precedence; 0.0 means disabled.
+            _phase_threshold = getattr(phase, "inner_early_exit_threshold", None)
+            _eet = (
+                _phase_threshold
+                if _phase_threshold is not None
+                else self.config.inner_early_exit_threshold
+            )
+
             for inner in range(n_inner):
                 if self.checkpoint.is_inner_done(outer, label, inner):
                     result = self._load_inner_result(outer, label, inner)
@@ -444,6 +540,7 @@ class PhaseRunner:
                     result = await self._run_inner_round(
                         outer, phase, inner, file_context,
                         current_prior, carry_syntax_errors,
+                        file_manifest=file_manifest,
                     )
                     self.checkpoint.mark_inner_done(outer, label, inner)
 
@@ -453,10 +550,27 @@ class PhaseRunner:
                 if best_result is None or result.combined_score > best_result.combined_score:
                     best_result = result
 
+                # Early exit: if the current best score meets the threshold,
+                # skip remaining inner rounds to save LLM calls.
+                if (
+                    _eet > 0.0
+                    and best_result is not None
+                    and best_result.combined_score >= _eet
+                    and inner < n_inner - 1
+                ):
+                    remaining = n_inner - inner - 1
+                    log.info(
+                        "Phase %s inner %d: early exit — combined_score %.1f >= threshold %.1f"
+                        " (skipping %d remaining inner round%s)",
+                        label, inner + 1, best_result.combined_score, _eet,
+                        remaining, "s" if remaining != 1 else "",
+                    )
+                    break
+
         # 3. Run verification hooks (implement mode only)
         if phase.mode == "implement":
             hooks = build_hooks(phase, pipeline_config=self.config)
-            # Build rich context for hooks (especially GitCommitHook).
+            # Build rich context for hooks.
             changes_summary = ""
             files_changed: list[str] = []
             basic_critique = ""
@@ -477,14 +591,13 @@ class PhaseRunner:
                     basic_critique = ds.basic.critique[:500] if ds.basic.critique else ""
                     diffusion_critique = ds.diffusion.critique[:500] if ds.diffusion.critique else ""
             # If any gating hook (e.g. SyntaxCheckHook, ImportSmokeHook) fails,
-            # skip the GitCommitHook so broken code does not land on main.
+            # skip ALL remaining hooks so broken code does not land on main.
             # Non-gating hooks (e.g. PytestHook) can fail without blocking the
             # commit — failing tests are allowed during test-writing phases.
-            from harness.pipeline.hooks import GitCommitHook
             gate_failed = False
             gate_failures: list[str] = []
             for hook in hooks:
-                if isinstance(hook, GitCommitHook) and gate_failed:
+                if gate_failed:
                     log.warning(
                         "Hook %s: skipped (gating hooks failed: %s)",
                         hook.name, ", ".join(gate_failures),
@@ -506,7 +619,7 @@ class PhaseRunner:
                 log.info("Hook %s: passed=%s", hook.name, hook_result.passed)
                 if not hook_result.passed and getattr(hook, "gates_commit", False):
                     gate_failed = True
-                    gate_failures.append(hook.name)
+                    gate_failures.append(str(hook.name))
                     if hook_result.errors:
                         log.warning(
                             "Hook %s errors (first 500 chars): %s",
@@ -539,13 +652,16 @@ class PhaseRunner:
         file_context: str,
         prior_best: str | None,
         syntax_errors: str,
+        file_manifest: str = "",
     ) -> InnerResult:
         """Execute one inner round — debate or implement based on phase.mode."""
         label = phase.label
         segs = self.artifacts.inner_dir(outer, label, inner)
 
-        # Build executor prompt
-        prompt = self._build_executor_prompt(phase, file_context, prior_best, syntax_errors)
+        # Build executor prompt.  When the agent has tool access, use the
+        # lightweight file manifest instead of full content to save context.
+        prompt_context = file_manifest if file_manifest else file_context
+        prompt = self._build_executor_prompt(phase, prompt_context, prior_best, syntax_errors)
         self.artifacts.write(prompt, *segs, "executor_prompt.txt")
 
         if phase.mode == "implement":
@@ -565,12 +681,7 @@ class PhaseRunner:
         file_context: str,
         segs: tuple[str, ...],
     ) -> InnerResult:
-        """Debate mode: text-only proposal, no tool_use."""
-        log.info(
-            "R%d/phase=%s/inner=%d: debating (prompt=%d chars)",
-            outer + 1, phase.label, inner + 1, len(prompt),
-        )
-
+        """Debate mode: proposal generation with read-only tools."""
         # Use the phase's own system_prompt as the debate system instruction when
         # it is a plain string (not a Template with $variables).  Fall back to
         # a sensible default when empty or contains un-substituted Template vars.
@@ -578,11 +689,25 @@ class PhaseRunner:
         if phase.system_prompt and "$" not in phase.system_prompt:
             _debate_system = phase.system_prompt
 
-        resp = await self.llm.call(
-            [{"role": "user", "content": prompt}],
-            system=_debate_system,
+        # All agents get read-only tools by default so they can actively
+        # explore the codebase.  Read-only tools are side-effect-free, so
+        # parallel debate rounds remain safe.
+        active_registry = self._build_active_registry(phase)
+        log.info(
+            "R%d/phase=%s/inner=%d: debating with tools (prompt=%d chars, tools=%d)",
+            outer + 1, phase.label, inner + 1, len(prompt),
+            len(active_registry.names),
         )
-        proposal = resp.text
+        # Cap tool turns for debate — exploration, not implementation.
+        debate_max_turns = min(self.harness.max_tool_turns, 30)
+        text, _exec_log = await self.llm.call_with_tools(
+            [{"role": "user", "content": prompt}],
+            active_registry,
+            system=_debate_system,
+            max_turns=debate_max_turns,
+        )
+        proposal = text
+
         self.artifacts.write(proposal, *segs, "proposal.txt")
 
         # Skip evaluation for short proposals (saves 2 API calls).
@@ -662,16 +787,14 @@ class PhaseRunner:
                     outer + 1, phase.label, inner + 1, _plan_exc,
                 )
 
-        # Dynamic tool filtering: if the phase specifies tool_tags, only
-        # expose matching tools to the executor LLM.
-        active_registry = self.registry
-        if phase.tool_tags:
-            active_registry = self.registry.filter_by_tags(frozenset(phase.tool_tags))
-            log.info(
-                "R%d/phase=%s/inner=%d: filtered tools by tags %s → %d tools",
-                outer + 1, phase.label, inner + 1,
-                phase.tool_tags, len(active_registry.names),
-            )
+        # All agents get read-only tools by default; phase.tool_tags adds
+        # extra capabilities (e.g. file_write, execution).
+        active_registry = self._build_active_registry(phase)
+        log.info(
+            "R%d/phase=%s/inner=%d: tools for implement (%d tools)",
+            outer + 1, phase.label, inner + 1,
+            len(active_registry.names),
+        )
 
         # Scope file-mutating tools to the phase's allowed_edit_globs for the
         # duration of the executor loop. The HarnessConfig object is shared
@@ -942,6 +1065,47 @@ class PhaseRunner:
                 "## PRIORITY FIX — Syntax errors must be fixed before new features\n\n"
                 f"```\n{syntax_errors}\n```\n\n"
             )
+        # Intelligence-metric block (Phase 1: evaluator discrimination rho).
+        # Injected only into framework_improvement to avoid flooding every
+        # phase with the same signal. Empty block when the probe has not yet
+        # run or produced no data.
+        intel_block = ""
+        if phase.name == "framework_improvement":
+            try:
+                from harness.pipeline import intel_metrics as _im
+                traj_path = os.path.join(
+                    str(self.harness.workspace),
+                    "benchmarks",
+                    "evaluator_calibration",
+                    "probe_results.jsonl",
+                )
+                traj = _im.format_trajectory(traj_path)
+                if traj.get("current") is not None:
+                    traj_str = ", ".join(f"{x:.3f}" for x in traj["trajectory"])
+                    delta = traj.get("delta")
+                    delta_str = (
+                        f"{delta:+.3f}" if isinstance(delta, (int, float)) else "n/a"
+                    )
+                    intel_block = (
+                        "## INTELLIGENCE METRIC — evaluator discrimination "
+                        "(Spearman \u03c1 on 20-proposal benchmark)\n\n"
+                        f"Round trajectory: [{traj_str}]  (higher is better; "
+                        "target \u2265 0.85)\n"
+                        f"Current: {traj['current']:.3f}    \u0394 vs prev: {delta_str}    "
+                        f"Regressions in last 5: {traj['regressions_in_last_5']}\n\n"
+                        "Your framework_improvement proposal SHOULD target "
+                        "evaluator quality \u2014 modifying one of:\n"
+                        "  \u2022 harness/evaluation/dual_evaluator.py\n"
+                        "  \u2022 harness/prompts/dual_evaluator.py\n"
+                        "  \u2022 harness/prompts/evaluator.py\n"
+                        "If your proposal does NOT touch these files AND "
+                        f"\u03c1 (currently {traj['current']:.3f}) is below 0.85, "
+                        "you lose 3 points on Architecture Fit. The probe "
+                        "runs automatically at round end \u2014 you will see the "
+                        "new \u03c1 next round.\n\n"
+                    )
+            except Exception as _exc:
+                log.debug("intel_block: skipped (%s)", _exc)
 
         template = phase.system_prompt
         if phase.glob_patterns and "$file_context" not in template:
@@ -959,6 +1123,7 @@ class PhaseRunner:
             prior_best=prior_section,
             syntax_errors=syntax_section,
             falsifiable_criterion=phase.falsifiable_criterion,
+            intel_metric_block=intel_block,
         )
 
         workspace_reminder = (

@@ -289,9 +289,9 @@ class FindReplaceTool(Tool):
         # 2. Resolve root directory
         # ------------------------------------------------------------------ #
         raw_root = str(Path(config.workspace) / path) if path else config.workspace
-        root_str, err = self._resolve_and_check(config, raw_root)
-        if err:
-            return err
+        root_str = self._check_path(config, raw_root)
+        if isinstance(root_str, ToolResult):
+            return root_str
         root = Path(root_str)
 
         if not root.is_dir():
@@ -331,8 +331,8 @@ class FindReplaceTool(Tool):
 
         for fpath in candidate_paths:
             # Per-file path check (catches symlinks pointing outside workspace)
-            resolved, err = self._resolve_and_check(config, str(fpath))
-            if err:
+            resolved = self._check_path(config, str(fpath))
+            if isinstance(resolved, ToolResult):
                 continue
             # Phase-scope check: skip files this phase is not allowed to edit.
             # Silent skip (not an error) — find_replace is a multi-file op, and
@@ -479,7 +479,7 @@ class FindReplaceTool(Tool):
         if len(output_lines) > _MAX_OUTPUT_LINES:
             output_lines = output_lines[:_MAX_OUTPUT_LINES]
             output_lines.append(
-                f"... [output truncated — more lines not shown]"
+"... [output truncated — more lines not shown]"
             )
 
         return ToolResult(output="\n".join(output_lines))

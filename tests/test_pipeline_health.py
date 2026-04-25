@@ -1,8 +1,7 @@
 """Tests for pipeline health monitoring functionality."""
 
 import json
-from unittest.mock import Mock, AsyncMock, patch
-import pytest
+from unittest.mock import Mock, patch, PropertyMock
 
 from harness.pipeline.pipeline_loop import PipelineLoop
 from harness.pipeline.health import HealthMonitor
@@ -46,7 +45,7 @@ class TestPipelineHealth:
         health_monitor = HealthMonitor(config)
         
         # Mock the metrics_dict property to return our expected metrics
-        with patch.object(health_monitor, 'metrics_dict', return_value=expected_metrics):
+        with patch.object(type(health_monitor), 'metrics_dict', new_callable=PropertyMock, return_value=expected_metrics):
             # Replace the health monitor on the pipeline instance
             pipeline.health_monitor = health_monitor
             
@@ -134,13 +133,13 @@ class TestPipelineHealth:
             # Verify health_metrics is None when monitor is missing
             assert payload["health_metrics"] is None
     
-    def test_health_monitor_initialization(self):
+    def test_health_monitor_initialization(self, tmp_path):
         """Test that health monitor is properly initialized in PipelineLoop."""
-        # Create a mock config
+        # Create a mock config using tmp_path for portability
         config = HarnessConfig(
             model="test-model",
             max_tokens=1000,
-            workspace="/tmp/test",
+            workspace=str(tmp_path),
         )
         
         # Create a PipelineLoop instance
@@ -175,7 +174,7 @@ class TestPipelineHealth:
         }
         
         # Mock the metrics_dict property to return our expected metrics
-        with patch.object(health_monitor, 'metrics_dict', return_value=expected_metrics):
+        with patch.object(type(health_monitor), 'metrics_dict', new_callable=PropertyMock, return_value=expected_metrics):
             # Create a PipelineLoop instance
             pipeline = PipelineLoop(config)
             

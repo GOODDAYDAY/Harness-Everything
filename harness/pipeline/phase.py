@@ -37,6 +37,11 @@ class PhaseConfig:
     # Inner rounds override (None = use pipeline default)
     inner_rounds: int | None = None
 
+    # Per-phase early-exit threshold override for implement mode.
+    # None = use PipelineConfig.inner_early_exit_threshold.
+    # Set to a float (0–10) to override for this phase only; 0.0 disables.
+    inner_early_exit_threshold: float | None = None
+
     # Tool filtering: if non-empty, only tools with at least one matching tag
     # are included.  Valid tags: "file_read", "file_write", "search", "git",
     # "analysis", "execution", "network", "testing".  Empty = all tools.
@@ -102,8 +107,7 @@ class PhaseConfig:
                 absolute path indicator ('/' on Unix or '[A-Z]:\\' on Windows).
         """
         import os
-        from pathlib import PurePath
-        
+
         for pattern in self.allowed_edit_globs:
             # Check for parent directory traversal
             if '..' in pattern:

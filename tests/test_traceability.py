@@ -1,13 +1,7 @@
 """Tests for traceability, run observability, and production quality features."""
 
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
-import pytest
-from datetime import datetime, timezone
 
-from harness.pipeline.pipeline_loop import PipelineLoop
 from harness.core.config import HarnessConfig, PipelineConfig
 
 
@@ -22,10 +16,7 @@ class TestTraceabilityFeatures:
             max_tokens=1000,
             workspace=str(tmp_path),
         )
-        config = PipelineConfig(harness=harness_config)
-        
-        # Create a PipelineLoop instance
-        pipeline = PipelineLoop(config)
+        _ = PipelineConfig(harness=harness_config)  # not used directly
         
         # Create a mock summary payload with all expected fields
         mock_summary = {
@@ -90,7 +81,6 @@ class TestTraceabilityFeatures:
     
     def test_score_trend_detection(self):
         """Test detection of 3 consecutive declining best_scores."""
-        from harness.pipeline.pipeline_loop import PipelineLoop
         
         # Test case 1: 3 consecutive declines
         score_history_1 = [
@@ -116,8 +106,6 @@ class TestTraceabilityFeatures:
         ]
         
         # Mock the _detect_score_trend_warnings method
-        pipeline = Mock(spec=PipelineLoop)
-        
         # We'll test the logic directly
         def detect_trend(history):
             """Simplified version of the trend detection logic."""

@@ -14,7 +14,9 @@ class GlobSearchTool(Tool):
     description = (
         "Search for files matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts'). "
         "Returns matching file paths (relative to the root) sorted by "
-        "modification time."
+        "modification time. Use this to find files by name or path pattern. "
+        "Prefer grep_search when you need to search inside file contents "
+        "rather than file names."
     )
     requires_path_check = True
     tags = frozenset({"search"})
@@ -39,11 +41,14 @@ class GlobSearchTool(Tool):
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max results to return (default: 200)",
-                    "default": 200,
+                    "description": (
+                        "Max results to return. Required — no default. "
+                        "Choose based on need: 20-50 for focused search, "
+                        "100-200 for broad exploration."
+                    ),
                 },
             },
-            "required": ["pattern"],
+            "required": ["pattern", "limit"],
         }
 
     async def execute(
@@ -51,8 +56,8 @@ class GlobSearchTool(Tool):
         config: HarnessConfig,
         *,
         pattern: str,
+        limit: int,
         path: str = "",
-        limit: int = 200,
     ) -> ToolResult:
         raw = path if path else config.workspace
         # _check_path: security-validated, symlink-resolved absolute path.

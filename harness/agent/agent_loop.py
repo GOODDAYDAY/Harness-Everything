@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import gc
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -50,6 +52,11 @@ from harness.pipeline.hooks import (
 )
 from harness.tools import build_registry
 from harness.tools.path_utils import collect_changed_paths
+from harness.agent.cycle_metrics import (
+    collect_cycle_metrics,
+    format_summary as format_metrics_summary,
+    persist_cycle_metrics,
+)
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +82,10 @@ class AgentConfig:
     # Hard cap on cycles. 999 is effectively "run until MISSION COMPLETE or
     # manual stop" — a 10-round pipeline chunk has no equivalent here.
     max_cycles: int = 999
+    # When True, the agent does not stop on "MISSION COMPLETE" — it keeps
+    # cycling until max_cycles or graceful shutdown.  Designed for standing
+    # maintenance missions where there is no logical endpoint.
+    continuous: bool = False
     # Number of most-recent cycle notes blocks to keep in the system-prompt
     # injection. The file on disk keeps everything; this only controls what
     # the LLM sees to avoid unbounded prompt growth.
@@ -109,6 +120,12 @@ class AgentConfig:
     auto_tag_interval: int = 0
     auto_tag_prefix: str = "harness-r"
     auto_tag_push: bool = True
+    # Pause file — when this file exists in the workspace, the agent
+    # finishes its current cycle and then sleeps until the file is removed.
+    # Usage: `touch .harness.pause` to pause, `rm .harness.pause` to resume.
+    pause_file: str = ".harness.pause"
+    # How often (seconds) to check whether the pause file has been removed.
+    pause_poll_interval: int = 30
     # Artifact root — a new run_id subdirectory is created under this.
     output_dir: str = "harness_output"
     run_id: str | None = None
@@ -161,20 +178,78 @@ only agent here — there is no orchestrator, no evaluator, no next phase.
 Guidelines:
   * Work against the MISSION stated below. Break it into tasks you pick
     yourself. Use the scratchpad tool to record findings that you'll
-    need after many turns — conversation history gets pruned, scratchpad
-    notes do not.
+    need after many turns — conversation history gets pruned, but
+    scratchpad notes survive compaction. Save key findings (function
+    signatures, constant values, architecture decisions) to scratchpad
+    IMMEDIATELY after reading, BEFORE making changes. Save at least 3-5
+    notes per cycle — if you haven't saved to scratchpad yet, do it now.
+  * ALWAYS BATCH TOOL CALLS. Every response must include as many
+    independent tool calls as possible — 5 files + 3 greps + git status
+    = ONE response with 9 calls, not 9 separate responses. Read-only
+    tools (batch_read, grep_search, glob_search, git_status, git_diff,
+    git_log, code_analysis, symbol_extractor, tree, etc.) run in
+    parallel. Only write/edit/bash calls must be sequential. A response
+    with a single read-only call is almost always a wasted turn.
   * Prefer batch_read / batch_edit / batch_write over single-file tools;
-    one LLM round-trip can do a lot.
+    symbol_extractor for function bodies, project_map for module overview,
+    cross_reference for callers, feature_search for concept-based lookup.
   * Before you write, read the relevant code. Before you change a
-    function signature, grep for callers.
-  * Verify each change: py_compile after edits, run tests when tests
-    exist. The post-cycle hook will catch syntax errors, but failing in
-    your own loop is faster.
+    function signature, use cross_reference to find all callers.
+  * Verify each change: lint_check (ruff) after edits, run tests when
+    tests exist (use test_runner tool, not bash). The post-cycle hook
+    will catch syntax errors, but failing in your own loop is faster.
   * Commit discipline: each cycle ends with a commit of everything in
     the workspace that changed (auto). Make your changes in the cycle
     coherent.
+  * Budget: you have ~50 tool turns per cycle. Aim for 20-35. At turn 40,
+    STOP starting new tasks and wrap up what you have. Use context_budget
+    to check remaining turns.
+  * ONE THING PER CYCLE. Pick a single focused task (e.g. "write tests for
+    batch_edit" or "tighten evaluator rubric"). Do NOT combine unrelated
+    changes in one cycle.
+  * Focus persistence: START each cycle by reading your previous cycle's
+    "Next high-value target" from your notes. Execute THAT target unless
+    you have a concrete reason not to. Do not switch axes mid-cycle.
+
+Anti-patterns — avoid these:
+  * NEVER use bash to read source files. Do NOT run
+    `python -c "import X; print(X.VAR)"` or `cat file.py` or
+    `head/tail/sed/grep`. ALWAYS use batch_read — it is faster, cheaper,
+    and the results appear in your tool history. This is the #1 source of
+    wasted tokens.
+    Wrong: `bash("cat file.py")` → Right: `batch_read(paths=[file], limit=200)`.
+    Wrong: `bash("grep -n def harness/core/llm.py")` → Right: `grep_search(...)`.
+    Wrong: `bash("sed -n '10,50p' foo.py")` → Right: `batch_read(offset=10, limit=40)`.
+    Wrong: `bash("wc -l file.py")` → Right: `file_info(paths=[file])`.
+    Wrong: `bash("ls harness/")` → Right: `list_directory(path="harness/")`.
+  * Re-reading the same file twice. Results from batch_read remain in
+    your conversation history — scratchpad them if you need them long-term.
+    For a specific function use symbol_extractor instead of a full file read.
+  * Do NOT re-read the same constants/variables repeatedly. If you need a
+    prompt constant from harness/prompts/*.py, read it ONCE with batch_read,
+    save the key parts to scratchpad, then reference scratchpad.
+  * Failing batch_edit with "match not found". This is almost always a
+    whitespace or indentation difference. Fix: use batch_read to see the
+    exact text first, then copy-paste into old_str verbatim.
+  * Single-tool-call responses. If you only have one tool call,
+    look for what else you can do in parallel.
+  * Leaving unused imports — ruff F401 will block your commit.
+  * Writing tests that only check types — test actual behaviour.
+  * Declaring done before running verification commands.
+  * Editing the same file 5 cycles in a row without a concrete reason.
+  * Cleaning up working code — focus on measurable improvements, not cosmetic reformatting.
+  * Do NOT revert intentional schema changes. If a tool's input_schema says
+    "Required — no default" or lacks a default value, that is INTENTIONAL —
+    it forces the LLM to think about what value to use. Never add defaults
+    back to make tools "easier" to call.
+  * Making changes to tool files that just reformat descriptions without
+    adding real value — changing "X" to "X (default: Y)" wastes a cycle.
 
 Signalling the end of the mission:
+{completion_rules}\
+"""
+
+_COMPLETION_RULES_ONESHOT = """\
   * Output "MISSION COMPLETE: <one-line summary>" when you believe the
     mission is done.
   * Output "MISSION BLOCKED: <what you need from a human>" when you hit
@@ -182,8 +257,16 @@ Signalling the end of the mission:
     external-system access, an architectural decision that requires a
     product call, etc.).
   * Otherwise, end your turn with a brief status update and the loop
-    will start a new cycle fresh.
-"""
+    will start a new cycle fresh."""
+
+_COMPLETION_RULES_CONTINUOUS = """\
+  * At the end of this cycle, summarise what you fixed and what remains.
+    The next cycle will continue automatically — focus on the highest-priority
+    remaining issue each time.
+  * Output "MISSION BLOCKED: <what you need from a human>" when you hit
+    something you cannot resolve autonomously.
+  * Otherwise, end your turn with a brief status update and the loop
+    will start a new cycle fresh."""
 
 
 class AgentLoop:
@@ -230,6 +313,38 @@ class AgentLoop:
     def _install_signal_handlers(self) -> None:
         install_shutdown_handlers(self._request_shutdown)
 
+    # ---- pause-file gate ----
+
+    def _pause_file_path(self) -> Path:
+        """Resolve the pause file path relative to workspace."""
+        p = self.config.pause_file
+        if os.path.isabs(p):
+            return Path(p)
+        return Path(self.config.harness.workspace) / p
+
+    async def _check_pause(self, cycle: int) -> None:
+        """Block until the pause file is removed (if it exists).
+
+        Called between cycles. While paused, checks every
+        ``pause_poll_interval`` seconds and honours shutdown signals.
+        """
+        pf = self._pause_file_path()
+        if not pf.exists():
+            return
+
+        log.info(
+            "Agent: pause file detected (%s) after cycle %d — pausing. "
+            "Remove the file to resume.",
+            pf, cycle + 1,
+        )
+        while pf.exists():
+            if self._shutdown_requested:
+                log.info("Agent: shutdown requested while paused — exiting.")
+                return
+            await asyncio.sleep(self.config.pause_poll_interval)
+
+        log.info("Agent: pause file removed — resuming from cycle %d.", cycle + 2)
+
     # ---- per-cycle prompt construction ----
 
     def _read_notes(self) -> str:
@@ -263,7 +378,12 @@ class AgentLoop:
             log.warning("Agent: failed to append notes: %s", exc)
 
     def _build_system(self, cycle: int) -> str:
-        parts = [_AGENT_BASE_SYSTEM]
+        completion_rules = (
+            _COMPLETION_RULES_CONTINUOUS if self.config.continuous
+            else _COMPLETION_RULES_ONESHOT
+        )
+        base = _AGENT_BASE_SYSTEM.format(completion_rules=completion_rules)
+        parts = [base]
         if self.config.mission:
             parts.append(f"\n## MISSION\n{self.config.mission}\n")
         notes = self._read_notes()
@@ -352,6 +472,11 @@ class AgentLoop:
         """
         workspace = Path(self.config.harness.workspace)
         summary_line = agent_text.strip().splitlines()[0][:80] if agent_text.strip() else ""
+        # When the tool loop was cut off, the summary is useless ("COMPLETED:
+        # unknown …").  Fall back to a `git diff --stat` summary so the commit
+        # message still describes what actually changed.
+        if "unknown (tool loop was cut off)" in summary_line:
+            summary_line = await self._diff_summary(workspace, changed_paths)
         msg = f"agent: cycle {cycle + 1}"
         if summary_line:
             msg += f" — {summary_line}"
@@ -397,6 +522,34 @@ class AgentLoop:
                     )
             except Exception as exc:
                 log.warning("Agent: commit error in %s: %s", repo, exc)
+
+    @staticmethod
+    async def _diff_summary(workspace: Path, changed_paths: list[str]) -> str:
+        """Generate a one-line commit summary from ``git diff --stat``."""
+        try:
+            diff = await asyncio.create_subprocess_exec(
+                "git", "diff", "--cached", "--stat",
+                cwd=str(workspace),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await diff.communicate()
+            lines = stdout.decode(errors="replace").strip().splitlines()
+            # Last line of --stat is like "5 files changed, 30 insertions(+), 10 deletions(-)"
+            if lines:
+                stat_line = lines[-1].strip()
+                # Collect changed file basenames for context
+                file_names = [
+                    Path(p).name for p in changed_paths[:5]
+                ] if changed_paths else []
+                parts = ", ".join(file_names)
+                if len(changed_paths) > 5:
+                    parts += f" +{len(changed_paths) - 5} more"
+                summary = f"{parts} ({stat_line})" if parts else stat_line
+                return summary[:80]
+        except Exception as exc:
+            log.debug("_diff_summary failed: %s", exc)
+        return f"{len(changed_paths)} file(s) changed"
 
     # ---- push / tag ----
 
@@ -568,13 +721,32 @@ class AgentLoop:
             # 5. persist cycle artifacts
             self._persist_cycle(cycle, text, exec_log, hook_failures)
 
+            # 5b. compute and persist cycle metrics
+            try:
+                cycle_m = collect_cycle_metrics(
+                    cycle=cycle + 1,
+                    exec_log=exec_log,
+                    changed_paths=changed_paths,
+                    hook_failures=hook_failures,
+                    elapsed_s=elapsed,
+                )
+                persist_cycle_metrics(
+                    cycle_m, self.artifacts.write, f"cycle_{cycle + 1}",
+                )
+                metrics_line = format_metrics_summary(cycle_m)
+            except Exception as exc:
+                log.warning("Agent: metrics collection failed cycle %d: %s", cycle + 1, exc)
+                metrics_line = ""
+
             # 6. compute cycle summary (notes) and append
             summary = self._extract_cycle_summary(text, exec_log, hook_failures)
+            if metrics_line:
+                summary = f"{metrics_line}\n{summary}"
             self._append_notes(cycle, summary)
 
             # 7. check for mission-status signals
             lowered = (text or "").lower()
-            if _MISSION_COMPLETE_MARKER in lowered:
+            if not self.config.continuous and _MISSION_COMPLETE_MARKER in lowered:
                 mission_status = "complete"
                 final_summary = text
                 log.info("Agent: MISSION COMPLETE signalled at cycle %d", cycle + 1)
@@ -590,6 +762,22 @@ class AgentLoop:
                 final_summary = text
                 log.info(
                     "Agent: graceful shutdown after cycle %d", cycle + 1,
+                )
+                break
+
+            # 8. release cycle memory before sleeping / next cycle
+            final_summary = text  # preserve for post-loop summary
+            del text, exec_log, hook_failures, changed_paths, summary
+            gc.collect()
+
+            # 9. pause gate — if the pause file exists, block until removed
+            await self._check_pause(cycle)
+            if self._shutdown_requested:
+                mission_status = "partial"
+                # `text` was deleted above; final_summary was already set
+                log.info(
+                    "Agent: shutdown requested during pause after cycle %d",
+                    cycle + 1,
                 )
                 break
 

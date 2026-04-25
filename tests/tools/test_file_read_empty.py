@@ -43,13 +43,13 @@ async def test_read_file_empty_file_offset_validation():
         
         # Test 2: offset=2 should fail with appropriate error
         result2 = await tool.execute(config, path=os.path.basename(temp_path), offset=2, limit=10)
-        assert result2.is_error, f"Expected error for offset=2"
+        assert result2.is_error, "Expected error for offset=2"
         assert "Offset 2 exceeds maximum allowed value (1) for empty file" in result2.error, f"Expected 'Offset 2 exceeds maximum allowed value (1) for empty file' in error, got: {result2.error}"
         assert "Valid offset is 1 (empty files have no lines to read)" in result2.error, f"Expected 'Valid offset is 1 (empty files have no lines to read)' in error, got: {result2.error}"
         
         # Test 3: offset=0 should fail with offset validation error
         result3 = await tool.execute(config, path=os.path.basename(temp_path), offset=0, limit=10)
-        assert result3.is_error, f"Expected error for offset=0"
+        assert result3.is_error, "Expected error for offset=0"
         assert "offset must be ≥ 1" in result3.error, f"Expected 'offset must be ≥ 1' in error, got: {result3.error}"
         
     finally:
@@ -154,7 +154,7 @@ async def test_read_file_offset_beyond_bounds_clear_error():
         result = await tool.execute(config, path=os.path.basename(temp_path), offset=5, limit=10)
         
         # Should error
-        assert result.is_error, f"Expected error for offset=5 (beyond bounds), got success"
+        assert result.is_error, "Expected error for offset=5 (beyond bounds), got success"
         
         # Error message should mention the valid offset range
         assert "Valid offset range is 1 to 3 (to read lines) or 4 (to create empty selection)" in result.error, \
@@ -166,7 +166,7 @@ async def test_read_file_offset_beyond_bounds_clear_error():
         
         # Test: offset=0 should still fail with offset validation error
         result2 = await tool.execute(config, path=os.path.basename(temp_path), offset=0, limit=10)
-        assert result2.is_error, f"Expected error for offset=0"
+        assert result2.is_error, "Expected error for offset=0"
         assert "offset must be ≥ 1" in result2.error, f"Expected 'offset must be ≥ 1' in error, got: {result2.error}"
         
         # Test: offset=4 (total_lines + 1) should succeed (empty selection)

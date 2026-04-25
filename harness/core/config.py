@@ -61,8 +61,9 @@ class HarnessConfig:
     # Example: {'\u2044': 'Fraction slash (looks like ASCII /)'}
 
     # --- tools ---
-    allowed_tools: list[str] = field(default_factory=list)
-    # If empty, all registered tools are available.
+    allowed_tools: list[str] | None = field(default_factory=list)
+    # If empty or None, all registered tools are available.
+    # None is an explicit "allow all" sentinel; [] (empty list) also allows all.
     extra_tools: list[str] = field(default_factory=list)
     # Names from OPTIONAL_TOOLS (e.g. ["web_search"]) to add on top of the
     # default registry.  These are NOT included by default to keep schema size
@@ -221,20 +222,23 @@ class HarnessConfig:
             )
 
         # --- validate allowed_tools entries are non-empty strings ---
-        bad_allowed = [t for t in self.allowed_tools if not isinstance(t, str) or not t.strip()]
-        if bad_allowed:
-            raise ValueError(
-                f"HarnessConfig.allowed_tools contains invalid entries: {bad_allowed!r}. "
-                "All entries must be non-empty strings (tool names)."
-            )
+        # None is a sentinel meaning "allow all tools" — skip validation.
+        if self.allowed_tools is not None:
+            bad_allowed = [t for t in self.allowed_tools if not isinstance(t, str) or not t.strip()]
+            if bad_allowed:
+                raise ValueError(
+                    f"HarnessConfig.allowed_tools contains invalid entries: {bad_allowed!r}. "
+                    "All entries must be non-empty strings (tool names)."
+                )
 
         # --- validate bash_command_denylist entries are non-empty strings ---
-        bad_deny = [t for t in self.bash_command_denylist if not isinstance(t, str) or not t.strip()]
-        if bad_deny:
-            raise ValueError(
-                f"HarnessConfig.bash_command_denylist contains invalid entries: {bad_deny!r}. "
-                "All entries must be non-empty strings (command names/prefixes)."
-            )
+        if self.bash_command_denylist is not None:
+            bad_deny = [t for t in self.bash_command_denylist if not isinstance(t, str) or not t.strip()]
+            if bad_deny:
+                raise ValueError(
+                    f"HarnessConfig.bash_command_denylist contains invalid entries: {bad_deny!r}. "
+                    "All entries must be non-empty strings (command names/prefixes)."
+                )
 
         # --- validate log_level ---
         _level_upper = self.log_level.upper().strip()
@@ -295,7 +299,6 @@ allowed_tools=all log_level=INFO
         the symlink-escape attack where a symlink inside an allowed path points
         to a target outside it.
         """
-        import os
         from harness.core.security import validate_path_security
         
         path_str = str(path)
@@ -405,6 +408,13 @@ class PipelineConfig:
     # Early stopping
     patience: int = 3  # 0 = disable
 
+    # Inner-round early exit for implement mode (sequential rounds only).
+    # If a completed inner round's combined_score (0–10) is >= this threshold,
+    # the remaining inner rounds are skipped — saves 2–4 LLM calls per phase.
+    # 0.0 = disabled (run all inner rounds); a typical useful value is 8.5
+    # (i.e. 85 % quality threshold), or 9.0 for a high-confidence exit.
+    inner_early_exit_threshold: float = 0.0  # 0.0 = disabled
+
     # Synthesis
     synthesis_system: str = ""
     min_synthesis_chars: int = 150
@@ -474,6 +484,11 @@ class PipelineConfig:
         if self.patience < 0:
             raise ValueError(
                 f"PipelineConfig.patience must be ≥ 0 (0 = disabled), got {self.patience}"
+            )
+        if self.inner_early_exit_threshold < 0.0 or self.inner_early_exit_threshold > 10.0:
+            raise ValueError(
+                "PipelineConfig.inner_early_exit_threshold must be in [0.0, 10.0] "
+                f"(0.0 = disabled), got {self.inner_early_exit_threshold}"
             )
         if self.min_synthesis_chars < 0:
             raise ValueError(

@@ -14,16 +14,29 @@ from pathlib import Path
 from harness.core.security import read_file_atomically
 
 
-def parse_module(path: Path | str) -> tuple[ast.Module | None, str | None]:
+def parse_module(
+    path: Path | str,
+    allowed_paths: list[Path] | None = None,
+) -> tuple[ast.Module | None, str | None]:
     """Read *path* and return a parsed ``ast.Module`` with error message.
 
     Returns (ast.Module, None) on success, (None, error_message) on failure.
     Handles ``SyntaxError`` (invalid Python), ``OSError`` (file not readable),
     ``MemoryError``, and ``RecursionError`` so callers can iterate a file list
     and log diagnostic information instead of silently skipping.
+
+    Args:
+        path: File to parse.
+        allowed_paths: Security allow-list passed to ``read_file_atomically``.
+            When *None* the file is read directly (caller must have already
+            validated the path).
     """
     try:
-        source = read_file_atomically(path)
+        if allowed_paths is not None:
+            source = read_file_atomically(Path(path), allowed_paths)
+        else:
+            # Caller already validated the path (e.g. via _rglob_safe).
+            source = Path(path).read_text(encoding="utf-8")
         if source is None:
             return None, f"OSError reading {path}: cannot read file securely"
         return ast.parse(source, filename=str(path)), None

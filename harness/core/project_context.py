@@ -240,22 +240,13 @@ class ProjectContextBuilder:
 
         parts: list[str] = []
 
-        # --- directory tree ---
-        if tree_lines:
-            root_name = Path(self._workspace).name or "workspace"
-            parts.append("### Project Structure")
-            parts.append(f"```\n{root_name}/")
-            parts.extend(tree_lines)
-            parts.append("```")
+        # High-priority sections first so they survive truncation.
+        # Git sections tell the planner *what just changed* — the most
+        # actionable signal.  File inventory is useful but expendable.
 
-        # --- file inventory ---
-        if inventory_lines:
-            parts.append("\n### File Inventory")
-            parts.extend(inventory_lines)
-
-        # --- git log ---
+        # --- git log (highest priority — most actionable recent history) ---
         if git_log.strip():
-            parts.append("\n### Recent Commits (newest first)")
+            parts.append("### Recent Commits (newest first)")
             parts.append("```")
             # Limit to _GIT_LOG_COUNT lines; git log already caps it
             parts.append(git_log.strip())
@@ -267,6 +258,19 @@ class ProjectContextBuilder:
             parts.append("```")
             parts.append(git_status.strip())
             parts.append("```")
+
+        # --- directory tree ---
+        if tree_lines:
+            root_name = Path(self._workspace).name or "workspace"
+            parts.append("\n### Project Structure")
+            parts.append(f"```\n{root_name}/")
+            parts.extend(tree_lines)
+            parts.append("```")
+
+        # --- file inventory (lowest priority — truncated first) ---
+        if inventory_lines:
+            parts.append("\n### File Inventory")
+            parts.extend(inventory_lines)
 
         if not parts:
             return ""

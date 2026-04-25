@@ -297,8 +297,10 @@ class CodeAnalysisTool(Tool):
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max number of files to analyse (default: 50)",
-                    "default": 50,
+                    "description": (
+                        "Required — no default. "
+                        "Use 10-20 for focused lookup, 50+ for broad scan."
+                    ),
                 },
             },
             "required": ["path"],
@@ -309,9 +311,9 @@ class CodeAnalysisTool(Tool):
         config: HarnessConfig,
         *,
         path: str,
+        limit: int = 50,
         file_glob: str = "**/*.py",
         format: str = "text",  # noqa: A002
-        limit: int = 50,
     ) -> ToolResult:
         path_result = self._check_path(config, path)
         if isinstance(path_result, ToolResult):

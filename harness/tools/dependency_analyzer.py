@@ -151,7 +151,7 @@ def _build_graph(
     graph: dict[str, list[str]] = {}
 
     for fpath in py_files:
-        tree = parse_module(fpath)
+        tree, _err = parse_module(fpath)
         if tree is None:
             continue
 
@@ -287,8 +287,11 @@ class DependencyAnalyzerTool(Tool):
         "Analyze Python import dependencies across a codebase. "
         "Extracts all import statements using AST parsing (no code execution), "
         "builds a module dependency graph, and detects circular imports. "
-        "Modes: 'graph' returns the full dependency graph; 'cycles' returns "
-        "only circular import chains; 'imports' returns per-file import lists. "
+        "Modes: 'graph' returns the full dependency graph (module → [deps]); "
+        "'cycles' returns only circular import chains — the primary use case for "
+        "import hygiene and CI checks (empty list = no cycles); "
+        "'imports' returns per-file import lists useful for auditing what each "
+        "module depends on. "
         "By default only workspace-local imports are included (stdlib excluded). "
         "No external dependencies — pure AST."
     )
@@ -308,11 +311,13 @@ class DependencyAnalyzerTool(Tool):
                     "type": "string",
                     "enum": ["graph", "cycles", "imports"],
                     "description": (
-                        "Output mode: "
-                        "'graph' = full module dependency graph (module → [deps]); "
-                        "'cycles' = only circular import chains; "
-                        "'imports' = per-file import lists. "
-                        "Default: 'graph'."
+                        "Output mode. Default: 'graph'. "
+                        "'graph': full dependency graph — use when you need to understand "
+                        "the overall import structure or find all dependents of a module. "
+                        "'cycles': circular import chains only — use to detect import cycles "
+                        "(returns empty list if none; best for CI/refactoring checks). "
+                        "'imports': per-file import list — use when you need to audit "
+                        "what a specific module or package imports."
                     ),
                     "default": "graph",
                 },
@@ -389,7 +394,7 @@ class DependencyAnalyzerTool(Tool):
                     continue
                 if module_filter and not file_mod.startswith(module_filter):
                     continue
-                tree = parse_module(fpath)
+                tree, _err = parse_module(fpath)
                 if tree is None:
                     continue
                 raw = _extract_imports(tree, file_mod)

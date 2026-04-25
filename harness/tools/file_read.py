@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import errno
 import os
 from typing import Any
 
@@ -15,8 +13,10 @@ from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, hand
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
-        "Read the contents of a file. Supports offset (line number to start from, "
-        "1-based) and limit (max lines to read) for large files."
+        "Read a single file. Consider using batch_read instead — it can read "
+        "one file just as easily, and if you need multiple files you save "
+        "round-trips. Use read_file only when you have exactly one file to "
+        "check and no upcoming reads in the same turn."
     )
     requires_path_check = True
     tags = frozenset({"file_read"})
@@ -36,17 +36,20 @@ class ReadFileTool(Tool):
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max number of lines to read. Default: 2000",
-                    "default": 2000,
+                    "description": (
+                        "Max number of lines to read. Required — no default. "
+                        "Choose based on what you need: 50-100 for a single function, "
+                        "200-300 for a module overview."
+                    ),
                 },
             },
-            "required": ["path"],
+            "required": ["path", "limit"],
         }
 
 
 
     async def execute(
-        self, config: HarnessConfig, *, path: str, offset: int = 1, limit: int = 2000
+        self, config: HarnessConfig, *, path: str, limit: int = 2000, offset: int = 1
     ) -> ToolResult:
         # The Anthropic API occasionally delivers JSON integers as strings when
         # the LLM emits a quoted value (e.g. offset="2").  Coerce defensively so
@@ -144,26 +147,15 @@ class ReadFileTool(Tool):
         selected = lines[start : start + limit]
         
         # Handle empty selection (when start >= total_lines for non-empty files, or empty file)
+        filename = os.path.basename(resolved)
         if not selected:
-            # Extract filename from resolved path
-            filename = os.path.basename(resolved)
             header = f"[{filename}] lines {offset}-{offset-1} of {total_lines}\n"
             numbered = ""
-            lines_metadata = []  # Empty selection: no lines returned
         else:
             numbered = "".join(
                 f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
             )
-            # Extract filename from resolved path
-            filename = os.path.basename(resolved)
             header = f"[{filename}] lines {start+1}-{min(start+limit, total_lines)} of {total_lines}\n"
-            
-            # Create structured metadata with line numbers and content
-            lines_metadata = [
-                (start + i + 1, line) for i, line in enumerate(selected)
-            ]
-        
-        return ToolResult(
-            output=header + numbered,
-            metadata={"lines": lines_metadata}
-        )
+
+        lines_meta = [(start + i + 1, line) for i, line in enumerate(selected)]
+        return ToolResult(output=header + numbered, metadata={"lines": lines_meta})

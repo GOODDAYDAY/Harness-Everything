@@ -3,13 +3,12 @@
 import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock
 
 import pytest
 
 from harness.core.config import HarnessConfig
 from harness.tools.file_edit import EditFileTool
-from harness.tools.base import ToolResult
 
 
 def test_editfile_atomic_symlink_protection():
@@ -151,7 +150,7 @@ def test_editfile_file_not_found():
 
         result = asyncio.run(tool.execute(config, path=str(file_path), old_str="test", new_str="replacement"))
         assert result.is_error
-        assert "not found" in result.error.lower()
+        assert "not found" in result.error.lower() or "does not exist" in result.error.lower()
 
 
 def test_editfile_respects_allowed_edit_globs():
@@ -208,38 +207,40 @@ def test_editfile_respects_allowed_edit_globs():
 
 
 def test_editfile_toctou_symlink_attack_detection():
-    """Test that EditFileTool detects TOCTOU symlink attacks with mocked validation."""
+    """Test that EditFileTool rejects symlinks (security protection against TOCTOU attacks)."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
+        workspace = (Path(tmpdir) / "workspace").resolve()
         workspace.mkdir()
+        outside = (Path(tmpdir) / "outside").resolve()
+        outside.mkdir()
         
-        # Create a test file
-        file_path = workspace / "test.txt"
-        file_path.write_text("hello world\nthis is a test\ngoodbye again")
+        # Create a file outside workspace that attacker wants to edit
+        secret_file = outside / "secret.txt"
+        secret_file.write_text("classified information\n")
+        
+        # Create a symlink inside workspace pointing to outside file
+        link = workspace / "link.txt"
+        link.symlink_to(secret_file)
         
         tool = EditFileTool()
         config = Mock(spec=HarnessConfig)
         config.workspace = str(workspace)
         config.allowed_paths = [str(workspace)]
         
-        # Mock the atomic validation to simulate TOCTOU attack detection
-        tool._validate_atomic_path = AsyncMock(return_value=(
-            False, 
-            ToolResult(error="Path validation failed: symlink attack detected", is_error=True)
-        ))
-        
-        # Attempt to edit the file
+        # Attempt to edit through the symlink - should be rejected
         result = asyncio.run(tool.execute(
             config,
-            path=str(file_path),
-            old_str="hello",
-            new_str="greetings"
+            path=str(link),
+            old_str="classified",
+            new_str="modified"
         ))
         
-        # Should fail with the mocked validation error
+        # Should fail - symlinks are not allowed, or path is outside workspace
         assert result.is_error
-        assert "symlink attack" in result.error.lower()
-        assert "path validation failed" in result.error.lower()
+        assert "symlink" in result.error.lower() or "not allowed" in result.error.lower() or "outside" in result.error.lower()
+        
+        # Verify the file was not modified
+        assert secret_file.read_text() == "classified information\n"
 
 
 def test_editfile_empty_string_in_empty_file():

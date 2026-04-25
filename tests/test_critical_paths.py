@@ -12,9 +12,6 @@ These cover previously untested code paths that are high-risk:
 from __future__ import annotations
 
 import asyncio
-import os
-import re
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -70,7 +67,7 @@ class TestToolRegistryExecute:
 
     def test_allowed_tools_blocks_unlisted_tool(self, tmp_path):
         """When allowed_tools is set, tools not in the list must be blocked."""
-        reg, cfg = _make_registry(str(tmp_path), allowed_tools=["read_file"])
+        reg, cfg = _make_registry(str(tmp_path), allowed_tools=["git_status"])
         result = _run(
             reg.execute("bash", cfg, {"command": "echo hi"})
         )
@@ -80,10 +77,12 @@ class TestToolRegistryExecute:
 
     def test_allowed_tools_permits_listed_tool(self, tmp_path):
         """A tool explicitly in allowed_tools must be permitted to execute."""
+        from harness.tools import build_registry
+        reg = build_registry(extra_tools=["read_file"])
+        cfg = _make_config(str(tmp_path), allowed_tools=["read_file"])
         # write a file so read_file has something to read
         test_file = tmp_path / "hello.txt"
         test_file.write_text("hello")
-        reg, cfg = _make_registry(str(tmp_path), allowed_tools=["read_file"])
         result = _run(
             reg.execute("read_file", cfg, {"path": str(test_file)})
         )
@@ -102,9 +101,11 @@ class TestToolRegistryExecute:
 
     def test_alias_normalisation_file_path_to_path(self, tmp_path):
         """'file_path' must be silently rewritten to 'path' before dispatch."""
+        from harness.tools import build_registry
         test_file = tmp_path / "alias_test.txt"
         test_file.write_text("alias content")
-        reg, cfg = _make_registry(str(tmp_path))
+        reg = build_registry(extra_tools=["read_file"])
+        cfg = _make_config(str(tmp_path))
         # Pass the aliased name; tool expects 'path'
         result = _run(
             reg.execute("read_file", cfg, {"file_path": str(test_file)})
@@ -114,7 +115,9 @@ class TestToolRegistryExecute:
 
     def test_alias_normalisation_text_to_content(self, tmp_path):
         """'text' must be silently rewritten to 'content' for write_file."""
-        reg, cfg = _make_registry(str(tmp_path))
+        from harness.tools import build_registry
+        reg = build_registry(extra_tools=["write_file"])
+        cfg = _make_config(str(tmp_path))
         out_path = str(tmp_path / "out.txt")
         result = _run(
             reg.execute("write_file", cfg, {"path": out_path, "text": "written via alias"})
@@ -124,7 +127,9 @@ class TestToolRegistryExecute:
 
     def test_schema_error_on_missing_required_param(self, tmp_path):
         """Omitting a required parameter must produce a SCHEMA ERROR, not a crash."""
-        reg, cfg = _make_registry(str(tmp_path))
+        from harness.tools import build_registry
+        reg = build_registry(extra_tools=["write_file"])
+        cfg = _make_config(str(tmp_path))
         # write_file requires 'path' and 'content'
         result = _run(
             reg.execute("write_file", cfg, {"path": str(tmp_path / "x.txt")})
@@ -135,9 +140,11 @@ class TestToolRegistryExecute:
 
     def test_unknown_param_returns_schema_error(self, tmp_path):
         """Passing a hallucinated parameter name must return a SCHEMA ERROR."""
+        from harness.tools import build_registry
         test_file = tmp_path / "hello.txt"
         test_file.write_text("hi")
-        reg, cfg = _make_registry(str(tmp_path))
+        reg = build_registry(extra_tools=["read_file"])
+        cfg = _make_config(str(tmp_path))
         result = _run(
             reg.execute(
                 "read_file",
@@ -539,6 +546,153 @@ class TestAutoUpdatePromptsGuard:
         # Exception must be handled gracefully; original prompt must survive
         assert updated[0].system_prompt == original_prompt
 
+    @pytest.mark.asyncio
+    async def test_truncation_guard_rejects_very_short_rewrite(self, tmp_path):
+        """A new prompt that is < 40% of the original length is rejected as truncated."""
+        from harness.pipeline.phase import PhaseConfig
+        from harness.pipeline.pipeline_loop import PipelineLoop
+        from harness.core.config import PipelineConfig
+        from harness.core.artifacts import ArtifactStore
+        from harness.core.llm import LLM
+
+        cfg_data = {
+            "outer_rounds": 1,
+            "inner_rounds": 1,
+            "phases": [],
+            "harness": {"workspace": str(tmp_path)},
+        }
+        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
+        loop = object.__new__(PipelineLoop)
+        loop.config = pipeline_cfg
+        loop._meta_review_context = ""
+        loop._shutdown_requested = False
+        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
+
+        # Original is 200 chars; new is only 20 chars (10% of original → truncated)
+        original_prompt = "A" * 200
+        truncated_prompt = "short"  # 5 chars — well below 40% of 200
+
+        mock_llm = AsyncMock(spec=LLM)
+        mock_llm.call = AsyncMock(return_value=truncated_prompt)
+        loop.llm = mock_llm
+
+        phase = PhaseConfig(
+            name="test",
+            index=0,
+            system_prompt=original_prompt,
+        )
+
+        updated = await loop._auto_update_prompts(
+            meta_review_text="Some review", phases=[phase], outer=0
+        )
+        # Truncation guard must reject the short rewrite and keep original
+        assert updated[0].system_prompt == original_prompt
+
+    @pytest.mark.asyncio
+    async def test_truncation_guard_accepts_rewrite_at_40_percent(self, tmp_path):
+        """A new prompt that is ≥ 40% of original length passes the truncation guard."""
+        from harness.pipeline.phase import PhaseConfig
+        from harness.pipeline.pipeline_loop import PipelineLoop
+        from harness.core.config import PipelineConfig
+        from harness.core.artifacts import ArtifactStore
+        from harness.core.llm import LLM
+
+        cfg_data = {
+            "outer_rounds": 1,
+            "inner_rounds": 1,
+            "phases": [],
+            "harness": {"workspace": str(tmp_path)},
+        }
+        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
+        loop = object.__new__(PipelineLoop)
+        loop.config = pipeline_cfg
+        loop._meta_review_context = ""
+        loop._shutdown_requested = False
+        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
+
+        # Original is 100 chars; new is exactly 40 chars (40% → acceptable)
+        original_prompt = "X" * 100
+        new_prompt = "Y" * 40  # exactly 40% of original
+
+        mock_llm = AsyncMock(spec=LLM)
+        mock_llm.call = AsyncMock(return_value=new_prompt)
+        loop.llm = mock_llm
+
+        phase = PhaseConfig(
+            name="test",
+            index=0,
+            system_prompt=original_prompt,
+        )
+
+        updated = await loop._auto_update_prompts(
+            meta_review_text="Some review", phases=[phase], outer=0
+        )
+        # At 40% threshold, the rewrite should be accepted
+        assert updated[0].system_prompt == new_prompt
+
+    def test_prompt_rewrite_system_constant_is_defined(self):
+        """_PROMPT_REWRITE_SYSTEM must be a non-empty string constant."""
+        from harness.pipeline.pipeline_loop import _PROMPT_REWRITE_SYSTEM
+        assert isinstance(_PROMPT_REWRITE_SYSTEM, str)
+        assert len(_PROMPT_REWRITE_SYSTEM) > 100
+
+    def test_prompt_rewrite_system_instructs_output_only(self):
+        """_PROMPT_REWRITE_SYSTEM must instruct the model to output only the prompt."""
+        from harness.pipeline.pipeline_loop import _PROMPT_REWRITE_SYSTEM
+        # Must say to output only the prompt (no meta-commentary)
+        lower = _PROMPT_REWRITE_SYSTEM.lower()
+        assert "only" in lower
+
+    def test_prompt_rewrite_system_mentions_variable_preservation(self):
+        """_PROMPT_REWRITE_SYSTEM must remind the model to preserve $variables."""
+        from harness.pipeline.pipeline_loop import _PROMPT_REWRITE_SYSTEM
+        # Must mention preserving template variables
+        assert "$" in _PROMPT_REWRITE_SYSTEM or "variable" in _PROMPT_REWRITE_SYSTEM.lower()
+
+    @pytest.mark.asyncio
+    async def test_prompt_rewrite_system_is_passed_to_llm(self, tmp_path):
+        """The _PROMPT_REWRITE_SYSTEM constant must be passed as the system= arg."""
+        from harness.pipeline.phase import PhaseConfig
+        from harness.pipeline.pipeline_loop import PipelineLoop, _PROMPT_REWRITE_SYSTEM
+        from harness.core.config import PipelineConfig
+        from harness.core.artifacts import ArtifactStore
+        from harness.core.llm import LLM
+
+        cfg_data = {
+            "outer_rounds": 1,
+            "inner_rounds": 1,
+            "phases": [],
+            "harness": {"workspace": str(tmp_path)},
+        }
+        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
+        loop = object.__new__(PipelineLoop)
+        loop.config = pipeline_cfg
+        loop._meta_review_context = ""
+        loop._shutdown_requested = False
+        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
+
+        original_prompt = "Do the thing with $task and $file_context."
+        new_prompt = "Do the improved thing with $task and $file_context."
+
+        mock_llm = AsyncMock(spec=LLM)
+        mock_llm.call = AsyncMock(return_value=new_prompt)
+        loop.llm = mock_llm
+
+        phase = PhaseConfig(name="test", index=0, system_prompt=original_prompt)
+        await loop._auto_update_prompts(
+            meta_review_text="Make it better", phases=[phase], outer=0
+        )
+
+        # Verify _PROMPT_REWRITE_SYSTEM was used as the system= kwarg
+        call_kwargs = mock_llm.call.call_args
+        assert call_kwargs is not None
+        # system= may be positional or keyword
+        passed_system = (
+            call_kwargs.kwargs.get("system")
+            or (call_kwargs.args[1] if len(call_kwargs.args) > 1 else None)
+        )
+        assert passed_system == _PROMPT_REWRITE_SYSTEM
+
 
 # ---------------------------------------------------------------------------
 # 6. parse_score — two-tier extraction (strict anchored vs loose fallback)
@@ -595,7 +749,7 @@ class TestASTUtils:
     def test_parent_class_nested(self):
         """Test parent_class function with nested class inheritance."""
         import ast
-        from harness.tools._ast_utils import parent_class, build_parent_map
+        from harness.tools._ast_utils import parent_class
         
         # Create AST for: class Outer: class Inner: pass
         source = """
@@ -613,9 +767,6 @@ class Outer:
                 break
         
         assert inner_class is not None, "Inner class not found in AST"
-        
-        # Get parent map
-        parent_map = build_parent_map(tree)
         
         # Test parent_class function
         result = parent_class(tree, inner_class)

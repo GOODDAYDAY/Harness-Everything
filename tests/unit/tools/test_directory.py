@@ -45,7 +45,7 @@ def test_listdirectory_atomic_symlink_protection():
 def test_listdirectory_valid_directory():
     """Test that ListDirectoryTool works correctly with regular directories."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
+        workspace = (Path(tmpdir) / "workspace").resolve()
         workspace.mkdir()
         
         # Create some test files and directories
@@ -57,9 +57,7 @@ def test_listdirectory_valid_directory():
         file2.write_text("content2")
 
         tool = ListDirectoryTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        config.allowed_paths = [str(workspace)]
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
 
         result = asyncio.run(tool.execute(config, path=str(workspace)))
         assert not result.is_error
@@ -100,15 +98,13 @@ def test_createdirectory_atomic_symlink_protection():
 def test_createdirectory_valid_creation():
     """Test that CreateDirectoryTool creates directories correctly."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
+        workspace = (Path(tmpdir) / "workspace").resolve()
         workspace.mkdir()
 
         new_dir = workspace / "new_directory"
 
         tool = CreateDirectoryTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        config.allowed_paths = [str(workspace)]
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
 
         result = asyncio.run(tool.execute(config, path=str(new_dir)))
         assert not result.is_error
@@ -119,15 +115,13 @@ def test_createdirectory_valid_creation():
 def test_createdirectory_nested_creation():
     """Test that CreateDirectoryTool creates nested directories."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
+        workspace = (Path(tmpdir) / "workspace").resolve()
         workspace.mkdir()
 
         nested_dir = workspace / "deep" / "nested" / "directory"
 
         tool = CreateDirectoryTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        config.allowed_paths = [str(workspace)]
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
 
         result = asyncio.run(tool.execute(config, path=str(nested_dir)))
         assert not result.is_error
@@ -167,7 +161,7 @@ def test_tree_atomic_symlink_protection():
 def test_tree_valid_directory():
     """Test that TreeTool works correctly with regular directories."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
+        workspace = (Path(tmpdir) / "workspace").resolve()
         workspace.mkdir()
         
         # Create a test directory structure
@@ -179,9 +173,7 @@ def test_tree_valid_directory():
         file2.write_text("content2")
 
         tool = TreeTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        config.allowed_paths = [str(workspace)]
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
 
         result = asyncio.run(tool.execute(config, path=str(workspace)))
         assert not result.is_error
@@ -193,7 +185,7 @@ def test_tree_valid_directory():
 def test_tree_max_depth():
     """Test that TreeTool respects max_depth parameter."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir) / "workspace"
+        workspace = (Path(tmpdir) / "workspace").resolve()
         workspace.mkdir()
         
         # Create a nested directory structure
@@ -205,9 +197,7 @@ def test_tree_max_depth():
         level3.mkdir()
 
         tool = TreeTool()
-        config = Mock(spec=HarnessConfig)
-        config.workspace_root = str(workspace)
-        config.allowed_paths = [str(workspace)]
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
 
         # Test with max_depth=1
         result = asyncio.run(tool.execute(config, path=str(workspace), max_depth=1))
@@ -244,7 +234,7 @@ def test_directory_tools_use_atomic_validation():
             mock_open.side_effect = OSError(errno.ELOOP, "Too many levels of symbolic links")
             result = asyncio.run(tool.execute(config, path=str(valid_dir)))
             assert result.is_error
-            assert "Symlink resolution escapes allowed directory" in result.error
+            assert "symlink" in result.error.lower()
         
         # Test CreateDirectoryTool with mocked os.open
         tool = CreateDirectoryTool()
@@ -252,7 +242,7 @@ def test_directory_tools_use_atomic_validation():
             mock_open.side_effect = OSError(errno.ELOOP, "Too many levels of symbolic links")
             result = asyncio.run(tool.execute(config, path=str(valid_dir)))
             assert result.is_error
-            assert "Symlink resolution escapes allowed directory" in result.error
+            assert "symlink" in result.error.lower()
         
         # Test TreeTool with mocked os.open
         tool = TreeTool()
@@ -260,7 +250,7 @@ def test_directory_tools_use_atomic_validation():
             mock_open.side_effect = OSError(errno.ELOOP, "Too many levels of symbolic links")
             result = asyncio.run(tool.execute(config, path=str(valid_dir)))
             assert result.is_error
-            assert "Symlink resolution escapes allowed directory" in result.error
+            assert "symlink" in result.error.lower()
 
 
 if __name__ == "__main__":

@@ -46,7 +46,12 @@ class BatchEditTool(Tool):
                 "edits": {
                     "type": "array",
                     "description": (
-                        f"List of edit operations (max {self.MAX_EDITS})."
+                        f"List of edit operations (max {self.MAX_EDITS}). "
+                        "Each item requires: 'path' (file to edit), 'old_str' "
+                        "(exact text to find — must be unique in the file), "
+                        "'new_str' (replacement text). Optional: 'replace_all' "
+                        "(bool, default false — set true to replace every occurrence). "
+                        "Partial failures are reported per-edit without aborting the batch."
                     ),
                     "items": {
                         "type": "object",
@@ -58,8 +63,12 @@ class BatchEditTool(Tool):
                             "old_str": {
                                 "type": "string",
                                 "description": (
-                                    "Exact text to find. Must match exactly once "
-                                    "unless replace_all=true. Empty string not allowed."
+                                    "Exact text to find — must match character-for-character "
+                                    "including all whitespace and indentation. Must appear "
+                                    "exactly once unless replace_all=true. Empty string not "
+                                    "allowed. Match failures are almost always due to "
+                                    "whitespace/indentation differences; copy-paste from "
+                                    "batch_read output to guarantee an exact match."
                                 ),
                             },
                             "new_str": {
@@ -110,7 +119,14 @@ class BatchEditTool(Tool):
 
         count = text.count(old_str)
         if count == 0:
-            return False, f"{label} {path}: ERROR: old_str not found", ""
+            return (
+                False,
+                (
+                    f"{label} {path}: ERROR: old_str not found "
+                    "(check whitespace/indentation — use batch_read to copy exact text)"
+                ),
+                "",
+            )
         if count > 1 and not replace_all:
             return (
                 False,

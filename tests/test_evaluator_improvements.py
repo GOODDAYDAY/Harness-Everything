@@ -51,73 +51,75 @@ def test_evaluator_mode_headers():
 
 
 def test_fractional_score_discrimination():
-    """Test that fractional scores in critical range (4-7) are properly handled."""
-    from harness.evaluation.dual_evaluator import validate_score_calibration
-    
-    # Test fractional score validation
-    warnings = validate_score_calibration(4.5, "basic", {"evaluator_output": "Score 4.5: Generic with some specifics"})
-    assert any("fractional score" in w.lower() for w in warnings) or len(warnings) == 0
-    
-    warnings = validate_score_calibration(5.5, "basic", {"evaluator_output": "Score 5.5: Specific but incomplete"})
-    assert any("fractional score" in w.lower() for w in warnings) or len(warnings) == 0
-    
-    warnings = validate_score_calibration(6.5, "basic", {"evaluator_output": "Score 6.5: Mostly complete with gaps"})
-    assert any("fractional score" in w.lower() for w in warnings) or len(warnings) == 0
-    
-    # Test that non-standard fractional increments generate warnings
-    warnings = validate_score_calibration(4.3, "basic", {"evaluator_output": "Score 4.3"})
-    assert any("should use .25, .5, or .75 increments" in w for w in warnings)
-    
-    # Check implement mode mentions executed code
+    """Test that validate_score_calibration is lean: no noise for common mid-range scores."""
+    from harness.evaluation.dual_evaluator import validate_score_calibration, _MODE_HEADERS
+
+    # Common mid-range scores should produce ZERO warnings — they are not edge cases.
+    for score in [4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5]:
+        warnings = validate_score_calibration(score, "basic", {"mode": "debate"})
+        assert len(warnings) == 0, (
+            f"Score {score} should produce 0 warnings (not noise), got: {warnings}"
+        )
+
+    # Out-of-range scores are the only mandatory warning.
+    warnings = validate_score_calibration(11.0, "basic", {})
+    assert len(warnings) == 1 and "outside" in warnings[0].lower()
+
+    # Mode-header content: implement mode must identify itself as reviewing executed code.
     assert "executed code change" in _MODE_HEADERS["implement"].lower()
     assert "code state" in _MODE_HEADERS["implement"].lower()
-    
-    # Check enhanced mode headers have calibration anchors
-    assert "calibration anchors" in _MODE_HEADERS["debate"].lower()
-    assert "calibration anchors" in _MODE_HEADERS["implement"].lower()
-    
-    # Check scoring guidance is present
-    assert "scoring guidance" in _MODE_HEADERS["debate"].lower()
-    assert "scoring guidance" in _MODE_HEADERS["implement"].lower()
-    
-    # Check critical quality signals
-    assert "critical quality signals" in _MODE_HEADERS["debate"].lower()
-    assert "critical quality signals" in _MODE_HEADERS["implement"].lower()
+
+    # Debate header must identify itself as reviewing a text proposal.
+    assert "text proposal" in _MODE_HEADERS["debate"].lower()
+
+    # Headers must be SHORT — calibration anchors and scoring guidance live in the
+    # system prompt, not here.  350 chars (≈88 tokens) is plenty for a mode label.
+    assert len(_MODE_HEADERS["debate"]) <= 350, (
+        f"Debate header too long ({len(_MODE_HEADERS['debate'])} chars); keep calibration in system prompt"
+    )
+    assert len(_MODE_HEADERS["implement"]) <= 350, (
+        f"Implement header too long ({len(_MODE_HEADERS['implement'])} chars); keep calibration in system prompt"
+    )
 
 
 def test_enhanced_discrimination_guidance():
-    """Test enhanced discrimination guidance for critical 4-7 range (Spearman ρ optimization)."""
+    """validate_score_calibration returns targeted warnings only for genuinely edge scores.
+
+    Calibration rubrics (4-7 range checklists, mode-specific guidance, etc.) already
+    live in the system prompts (BASIC_SYSTEM / DIFFUSION_SYSTEM) and must NOT be
+    duplicated here as per-call warnings — that would inject hundreds of tokens of
+    redundant noise into every LLM context window.
+    """
     from harness.evaluation.dual_evaluator import validate_score_calibration
-    
-    # Test discrimination guidance for each score level in critical range
-    test_cases = [
-        (4.0, "Score 4.0 (Correct but generic): Verify proposal identifies correct area but lacks ANY specific implementation details. NO concrete file/function references."),
-        (4.5, "Score 4.5: Between generic and specific - MUST explain which specific elements push it above 4, AND what's missing for 5. Mode-specific validation applies."),
-        (5.0, "Score 5.0 (Correct and specific but incomplete): Verify proposal names concrete files/functions but has MAJOR gaps. MUST cite specific evidence."),
-        (5.5, "Score 5.5: Between specific and mostly complete - MUST explain which edge cases are addressed (pushing toward 6) AND what major gaps remain (keeping at 5). Mode-specific validation applies."),
-        (6.0, "Score 6.0 (Correct + specific + mostly complete): Verify proposal has specific implementation, addresses main requirements, and shows testability evidence."),
-        (6.5, "Score 6.5: Between mostly complete and complete - MUST explain which testability elements are present (pushing toward 7) AND what edge cases are missing (keeping at 6). Mode-specific validation applies."),
-        (7.0, "Score 7.0 (Complete with minor issues): Verify proposal demonstrates FULL requirement coverage with only edge cases missing. MUST show execution validation."),
-    ]
-    
-    for score, expected_guidance in test_cases:
-        warnings = validate_score_calibration(score, "basic", {"evaluator_output": f"Score {score}: Test output"})
-        # Check that the enhanced guidance is present in warnings
-        guidance_found = any(expected_guidance in w for w in warnings)
-        assert guidance_found, f"Expected discrimination guidance for score {score} not found in warnings: {warnings}"
-        
-        # Check discrimination checklist for scores >= 5.0
-        if score >= 5.0:
-            checklist_found = any("Discrimination checklist" in w for w in warnings)
-            assert checklist_found, f"Expected discrimination checklist for score {score} not found in warnings: {warnings}"
-            
-            # Verify specific checklist items based on score
-            if score >= 5.0:
-                assert any("SPECIFIC files/functions" in w for w in warnings), f"Missing specific files/functions checklist for score {score}"
-            if score >= 6.0:
-                assert any("MAIN requirement COMPLETELY" in w for w in warnings), f"Missing main requirement checklist for score {score}"
-            if score >= 7.0:
-                assert any("EDGE CASES" in w for w in warnings), f"Missing edge cases checklist for score {score}"
+
+    # Normal mid-range debate scores produce no warnings.
+    for score in [4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0]:
+        warnings = validate_score_calibration(score, "basic", {"mode": "debate"})
+        assert warnings == [], (
+            f"Score {score} (debate) should produce 0 warnings, got: {warnings}"
+        )
+
+    # Extreme debate score ≥ 9.5 gets a targeted reminder.
+    warnings = validate_score_calibration(9.7, "basic", {"mode": "debate"})
+    assert len(warnings) == 1
+    assert "debate" in warnings[0].lower() or "high" in warnings[0].lower()
+
+    # Very low implement score ≤ 3.0 gets a targeted reminder.
+    warnings = validate_score_calibration(2.0, "basic", {"mode": "implement"})
+    assert len(warnings) == 1
+    assert "implement" in warnings[0].lower()
+
+    # Out-of-range immediately returns with one warning, no extras.
+    warnings = validate_score_calibration(-1.0, "basic", {})
+    assert len(warnings) == 1 and "outside" in warnings[0].lower()
+
+    # Perfect score claims a single concise sanity check.
+    warnings = validate_score_calibration(10.0, "basic", {"mode": "implement"})
+    assert len(warnings) == 1 and "10" in warnings[0]
+
+    # Zero score claims a single concise sanity check.
+    warnings = validate_score_calibration(0.0, "basic", {"mode": "debate"})
+    assert len(warnings) == 1 and "0" in warnings[0]
 
 
 def test_structured_output_format():
@@ -520,18 +522,14 @@ def test_syntax_error_triggers_fail_with_context():
     """
     import tempfile
     from pathlib import Path
-    from harness.evaluation.evaluator import Evaluator
-    
+
     # Create a temporary Python file with invalid syntax
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
         f.write("def invalid:\n    pass  # Missing parentheses after function name\n")
         temp_path = Path(f.name)
     
     try:
-        # Create a mock evaluator context with the invalid file
-        evaluator = Evaluator(llm=None, config=None)  # We'll mock the LLM
-        
-        # Mock the changed_files to include our invalid file
+        # Run static checks on the file with a syntax error
         changed_files = [str(temp_path)]
         
         # Check if syntax error detection is already implemented
@@ -594,5 +592,220 @@ def test_score_regex_allows_trailing_text():
         assert match is None, f"Regex should NOT match: {test_str}"
 
 
+class TestPromptConsistency:
+    """Validate structural consistency of evaluator prompt constants."""
+
+    def test_conservative_decision_tree_gate1_threshold(self):
+        """CONSERVATIVE_SYSTEM gate 1 must use score 4.0/4.5 to match BASIC_SYSTEM."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        # Gate 1 must use 4.0/4.5, not the old 4.5/5.0
+        assert "score ≤ 4.0" in CONSERVATIVE_SYSTEM, "Gate 1 lower bound must be 4.0"
+        assert "score ≥ 4.5" in CONSERVATIVE_SYSTEM, "Gate 1 upper bound must be 4.5"
+
+    def test_conservative_decision_tree_no_old_thresholds(self):
+        """CONSERVATIVE_SYSTEM must not use the old misaligned gate thresholds."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        # The old thresholds 4.5/5.0 must no longer appear in decision tree section
+        # (they may appear in calibration anchors as score 4.5 examples, but not in gate format)
+        import re
+        # Look for the old gate format: "NO → Score ≤ 4.5, YES → Score ≥ 5.0"
+        old_gate = re.search(r"NO\s*[→→]\s*Score\s*[≤<=]\s*4\.5", CONSERVATIVE_SYSTEM)
+        assert old_gate is None, "Old misaligned gate threshold (≤4.5) must be removed"
+
+    def test_basic_system_no_mode_aware_discrimination(self):
+        """BASIC_SYSTEM must not contain the removed MODE-AWARE DISCRIMINATION section."""
+        from harness.prompts.dual_evaluator import BASIC_SYSTEM
+        assert "MODE-AWARE DISCRIMINATION" not in BASIC_SYSTEM, (
+            "Vague MODE-AWARE DISCRIMINATION section should be removed from BASIC_SYSTEM"
+        )
+
+    def test_basic_system_gate1_threshold(self):
+        """BASIC_SYSTEM gate 1 must use score 4.0/4.5 (canonical thresholds)."""
+        from harness.prompts.dual_evaluator import BASIC_SYSTEM
+        assert "score ≤ 4.0" in BASIC_SYSTEM, "Gate 1 lower bound must be 4.0"
+        assert "score ≥ 4.5" in BASIC_SYSTEM, "Gate 1 upper bound must be 4.5"
+
+    def test_both_systems_gate3_testability(self):
+        """Both CONSERVATIVE_SYSTEM and BASIC_SYSTEM gate 3 must mention testability evidence."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        from harness.prompts.dual_evaluator import BASIC_SYSTEM
+        assert "testability evidence" in CONSERVATIVE_SYSTEM, (
+            "CONSERVATIVE_SYSTEM gate 3 must mention testability evidence"
+        )
+        assert "testability evidence" in BASIC_SYSTEM, (
+            "BASIC_SYSTEM gate 3 must mention testability evidence"
+        )
+
+    def test_conservative_verdict_rules_no_redundant_parenthetical(self):
+        """CONSERVATIVE_SYSTEM verdict rules must not repeat the threshold explanation."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        assert "score of 7 is a FAIL — the threshold is strictly 8" not in CONSERVATIVE_SYSTEM, (
+            "Redundant parenthetical in VERDICT RULES must be removed"
+        )
+        # But the key rule must still be there
+        assert "pass threshold is strictly 8" in CONSERVATIVE_SYSTEM, (
+            "VERDICT RULES must still state the pass threshold is 8"
+        )
+
+    def test_conservative_decision_tree_gate3_same_as_basic(self):
+        """Both conservative and basic decision tree gate 3 must be functionally identical."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        from harness.prompts.dual_evaluator import BASIC_SYSTEM
+        # Both must have: gate 3 with 6.5 and 7.0 thresholds
+        assert "6.5" in CONSERVATIVE_SYSTEM
+        assert "7.0" in CONSERVATIVE_SYSTEM
+        assert "6.5" in BASIC_SYSTEM
+        assert "7.0" in BASIC_SYSTEM
+
+    def test_conservative_fractional_scores_improved(self):
+        """CONSERVATIVE_SYSTEM must describe 5.5 as relating to major functionality present."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        # The SCORING GUIDE must describe 5.5 with "major functionality present"
+        # (case-insensitive: could be "Major functionality present" in the guide)
+        assert "ajor functionality present" in CONSERVATIVE_SYSTEM, (
+            "5.5 fractional score must reference 'major functionality present'"
+        )
+
+    def test_diffusion_system_has_decision_tree_or_calibration(self):
+        """DIFFUSION_SYSTEM must have a scoring guide but not require a decision tree."""
+        from harness.prompts.dual_evaluator import DIFFUSION_SYSTEM
+        assert "SCORING GUIDE" in DIFFUSION_SYSTEM, (
+            "DIFFUSION_SYSTEM must have a SCORING GUIDE section"
+        )
+        # DIFFUSION evaluates second-order effects, so a code-specific decision tree is not required
+
+    def test_conservative_completeness_references_falsifiable_criterion(self):
+        """COMPLETENESS checklist item must reference 'falsifiable criterion', not generic sub-requirements."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        assert "falsifiable criterion" in CONSERVATIVE_SYSTEM, (
+            "COMPLETENESS item must anchor evaluation to the task's falsifiable criterion"
+        )
+        # Must NOT still say "sub-requirement" in the completeness context
+        assert "sub-requirement of the task" not in CONSERVATIVE_SYSTEM, (
+            "Old 'sub-requirement' phrasing should be replaced with 'falsifiable criterion'"
+        )
+
+    def test_aggressive_evaluation_approach_references_falsifiable_criterion(self):
+        """AGGRESSIVE EVALUATION APPROACH step 1 must reference 'falsifiable criterion'."""
+        from harness.prompts.evaluator import AGGRESSIVE_SYSTEM
+        assert "falsifiable criterion" in AGGRESSIVE_SYSTEM, (
+            "EVALUATION APPROACH step 1 must anchor to the task's falsifiable criterion"
+        )
+
+    def test_conservative_prior_round_delta_no_redundant_inline_example(self):
+        """CONSERVATIVE PRIOR ROUND DELTA must not repeat the Δ format inline (it's in OUTPUT)."""
+        from harness.prompts.evaluator import CONSERVATIVE_SYSTEM
+        # The inline example 'Δ Completeness: IMPROVED/REGRESSED/UNCHANGED — <one-line reason>'
+        # is redundant with the OUTPUT template and should be removed
+        assert "State this explicitly as:" not in CONSERVATIVE_SYSTEM, (
+            "Redundant 'State this explicitly as:' with inline Δ example must be removed"
+        )
+        assert "This delta analysis must precede" not in CONSERVATIVE_SYSTEM, (
+            "Redundant sentence about ordering should be removed (OUTPUT position implies it)"
+        )
+
+    def test_aggressive_prior_round_delta_no_redundant_inline_example(self):
+        """AGGRESSIVE PRIOR ROUND DELTA must not repeat the Δ format inline (it's in OUTPUT)."""
+        from harness.prompts.evaluator import AGGRESSIVE_SYSTEM
+        assert "State explicitly whether each" not in AGGRESSIVE_SYSTEM, (
+            "Redundant 'State explicitly whether' with inline Δ example must be removed"
+        )
+        assert "This delta analysis must precede" not in AGGRESSIVE_SYSTEM, (
+            "Redundant sentence about ordering must be removed"
+        )
+
+    def test_basic_system_prior_round_delta_no_redundant_inline_example(self):
+        """BASIC_SYSTEM PRIOR ROUND DELTA must not repeat the Δ format inline (it's in OUTPUT)."""
+        from harness.prompts.dual_evaluator import BASIC_SYSTEM
+        assert "State this explicitly as:" not in BASIC_SYSTEM, (
+            "Redundant 'State this explicitly as:' must be removed from BASIC_SYSTEM"
+        )
+        assert "This delta analysis must precede" not in BASIC_SYSTEM, (
+            "Redundant ordering sentence must be removed from BASIC_SYSTEM"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestPromptWhitespaceQuality:
+    """Verify that prompt strings don't have unintended mid-sentence extra spaces
+    (which would result from Python backslash line-continuation with indentation).
+    """
+
+    PROMPT_NAMES = [
+        ("harness.prompts.evaluator", "CONSERVATIVE_SYSTEM"),
+        ("harness.prompts.evaluator", "AGGRESSIVE_SYSTEM"),
+        ("harness.prompts.evaluator", "MERGE_SYSTEM"),
+        ("harness.prompts.dual_evaluator", "BASIC_SYSTEM"),
+        ("harness.prompts.dual_evaluator", "DIFFUSION_SYSTEM"),
+        ("harness.prompts.planner", "CONSERVATIVE_SYSTEM"),
+        ("harness.prompts.planner", "AGGRESSIVE_SYSTEM"),
+        ("harness.prompts.planner", "MERGE_SYSTEM"),
+        ("harness.prompts.synthesis", "SYNTHESIS_SYSTEM"),
+        ("harness.prompts.meta_review", "META_REVIEW_SYSTEM"),
+    ]
+
+    def _get_prompt(self, module_name: str, attr_name: str) -> str:
+        import importlib
+        mod = importlib.import_module(module_name)
+        return getattr(mod, attr_name)
+
+    def test_no_mid_sentence_triple_spaces(self):
+        """No prompt should contain 3+ consecutive spaces that are NOT at the start of a line.
+
+        Line-start indentation (e.g., ``\\n      sub-item``) is fine.
+        Mid-sentence extra spaces (e.g., ``citing   file``) indicate a Python backslash
+        line-continuation was used with an indented continuation, which embeds unwanted
+        whitespace into the LLM-facing prompt text.
+        """
+        import re
+
+        def _find_mid_sentence_extra_spaces(text: str) -> list[tuple[int, str]]:
+            """Return (pos, context) for 3+ spaces not at the start of a line."""
+            results = []
+            for m in re.finditer(r" {3,}", text):
+                pos = m.start()
+                # Walk back to find the last newline
+                last_nl = text.rfind("\n", 0, pos)
+                # Check if everything between the newline and this space sequence is spaces
+                between = text[last_nl + 1 : pos] if last_nl != -1 else text[:pos]
+                if all(c == " " for c in between):
+                    continue  # Start-of-line indentation — intentional
+                results.append((pos, text[max(0, pos - 30) : m.end() + 30]))
+            return results
+
+        for module_name, attr_name in self.PROMPT_NAMES:
+            text = self._get_prompt(module_name, attr_name)
+            bad = _find_mid_sentence_extra_spaces(text)
+            for pos, ctx in bad:
+                assert False, (
+                    f"{module_name}.{attr_name} has mid-sentence extra spaces "
+                    f"at position {pos}: {ctx!r}\n"
+                    "This is likely from a Python backslash line-continuation with indentation. "
+                    "Fix: remove the backslash and join the lines with a single space."
+                )
+
+    def test_no_backslash_continuations_in_source(self):
+        """Prompt source files should not use backslash line-continuation inside string literals
+        (it creates extra whitespace in the LLM-facing prompt text).
+        """
+        prompt_files = [
+            "harness/prompts/evaluator.py",
+            "harness/prompts/dual_evaluator.py",
+            "harness/prompts/planner.py",
+            "harness/prompts/synthesis.py",
+            "harness/prompts/meta_review.py",
+        ]
+        for filepath in prompt_files:
+            with open(filepath) as f:
+                lines = f.readlines()
+            for i, line in enumerate(lines):
+                stripped = line.rstrip('\n').rstrip()
+                # Flag lines ending with backslash that are NOT string-opener lines
+                if stripped.endswith('\\') and '= """\\' not in stripped and not stripped.strip().startswith('#'):
+                    assert False, (
+                        f"{filepath}:{i+1} has a backslash line-continuation: {repr(stripped)!r}\n"
+                        "This creates extra whitespace in the LLM prompt. "
+                        "Fix: remove the backslash and join lines with a single space."
+                    )

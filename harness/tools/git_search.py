@@ -131,8 +131,10 @@ class GitSearchTool(Tool):
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max results to return (default: 20, max: 200).",
-                    "default": 20,
+                    "description": (
+                        "Max results to return (max: 200). Required — no default. "
+                        "Use 5-10 for targeted lookup, 20-50 for history scan."
+                    ),
                 },
                 "case_insensitive": {
                     "type": "boolean",
@@ -140,7 +142,7 @@ class GitSearchTool(Tool):
                     "default": False,
                 },
             },
-            "required": [],
+            "required": ["limit"],
         }
 
     async def execute(
@@ -151,7 +153,7 @@ class GitSearchTool(Tool):
         pattern: str = "",
         path: str = "",
         commit: str = "",
-        limit: int = 20,
+        limit: int,
         case_insensitive: bool = False,
     ) -> ToolResult:
         # Validate mode

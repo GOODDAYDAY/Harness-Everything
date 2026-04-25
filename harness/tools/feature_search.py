@@ -27,12 +27,15 @@ All analysis is pure AST + text scanning — no external dependencies.
 from __future__ import annotations
 
 import ast
+import logging
 import re
 from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.tools._ast_utils import parse_module
 from harness.tools.base import Tool, ToolResult
+
+log = logging.getLogger(__name__)
 
 _MAX_OUTPUT_BYTES = 24_000
 
@@ -72,8 +75,11 @@ class FeatureSearchTool(Tool):
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Maximum results per category (default: 30).",
-                    "default": 30,
+                    "description": (
+                        "Required — no default. "
+                        "Use 10-20 for focused scan, 50-100 for comprehensive. "
+                        "Maximum results per category."
+                    ),
                     "minimum": 1,
                     "maximum": 200,
                 },
@@ -101,15 +107,15 @@ class FeatureSearchTool(Tool):
                     "default": "substring",
                 },
             },
-            "required": ["keyword"],
+            "required": ["keyword", "max_results"],
         }
 
     async def execute(
         self,
         config: HarnessConfig,
+        max_results: int,
         keyword: str = "",
         root: str = "",
-        max_results: int = 30,
         categories: list[str] | None = None,
         scoring: str = "substring",
     ) -> ToolResult:
@@ -195,8 +201,6 @@ class FeatureSearchTool(Tool):
                 if parse_error:
                     log.debug("feature_search: %s", parse_error)
                 continue
-
-            lines = source.splitlines()
 
             # --- Category: symbols + comments (docstrings via AST) ---
             if "symbols" in active or "comments" in active:

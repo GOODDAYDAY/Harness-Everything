@@ -1,9 +1,7 @@
 """Test pipeline state persistence and summary writing."""
 
 import json
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
-from pathlib import Path
+from unittest.mock import Mock
 
 from harness.pipeline.pipeline_loop import PipelineLoop
 from harness.core.config import HarnessConfig, PipelineConfig
@@ -133,11 +131,13 @@ class TestWriteRunSummary:
         # Create a PipelineLoop instance
         pipeline = PipelineLoop(config=config)
         
-        # Initialize score history with declining scores
+        # Initialize score history with declining scores (4 entries so that
+        # 3 consecutive declines trigger the _DECLINE_WARN_STREAK=3 threshold).
         pipeline.score_history = [
             {"round": 1, "score": 9.0},
             {"round": 2, "score": 8.5},
             {"round": 3, "score": 8.0},
+            {"round": 4, "score": 7.5},
         ]
         
         # Initialize score trend warnings list
@@ -213,7 +213,7 @@ class TestWriteRunSummary:
         written_data = {}
         
         def write_artifact(content, *path_segments):
-            if len(path_segments) == 2 and path_segments[0] == "round-1" and path_segments[1] == "metrics.json":
+            if len(path_segments) == 2 and path_segments[0] == "round_1" and path_segments[1] == "metrics.json":
                 written_data["metrics.json"] = content
         
         mock_artifacts.write = Mock(side_effect=write_artifact)

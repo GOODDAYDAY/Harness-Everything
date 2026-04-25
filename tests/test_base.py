@@ -453,11 +453,13 @@ class TestToolCheckPath:
         assert "homoglyph" in error_result.error.lower(), \
             f"Expected 'homoglyph' in error, got: {error_result.error}"
 
+    @pytest.mark.filterwarnings("ignore::DeprecationWarning")
     def test_resolve_and_check_delegates_to_validate_root_path(self, tmp_path):
-        """Test that _resolve_and_check delegates to _validate_root_path.
-        
-        This test directly addresses the falsifiable criterion by verifying
-        the consolidation of path validation logic.
+        """Test that the deprecated _resolve_and_check delegates to _validate_root_path.
+
+        This test verifies backward-compatibility of the deprecated helper.
+        All production callers have been migrated to _check_path; this test
+        documents the expected delegation behaviour only.
         """
         # Create a mock tool instance
         class MockTool(Tool):

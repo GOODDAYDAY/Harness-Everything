@@ -15,7 +15,15 @@ class GrepSearchTool(Tool):
     description = (
         "Search file contents using a regex pattern. "
         "Returns matching lines with file paths (relative to root) and "
-        "line numbers. Supports filtering by file glob (e.g. '*.py')."
+        "line numbers. Supports filtering by file glob (e.g. '*.py'). "
+        "Use this for exact text or regex matches — e.g. finding all "
+        "usages of a string literal, locating an import, or checking "
+        "for a specific call pattern. "
+        "Prefer feature_search when you have a concept keyword (e.g. 'auth', "
+        "'retry') and want results grouped by symbols/files/comments. "
+        "Prefer cross_reference or data_flow when looking up callers/callees "
+        "of a named Python function or attribute (AST-accurate, no false "
+        "positives from comments or strings)."
     )
     requires_path_check = True
     tags = frozenset({"search"})
@@ -49,16 +57,22 @@ class GrepSearchTool(Tool):
                 },
                 "context_lines": {
                     "type": "integer",
-                    "description": "Lines of context before and after each match (default: 0)",
-                    "default": 0,
+                    "description": (
+                        "Lines of context before and after each match. Required. "
+                        "Use 0 for just matching lines, 2-3 for local context, "
+                        "5+ for understanding surrounding code."
+                    ),
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max total matches to return (default: 100)",
-                    "default": 100,
+                    "description": (
+                        "Max total matches to return. Required — no default. "
+                        "Choose based on need: 10-20 for targeted search, "
+                        "50-100 for broad scan."
+                    ),
                 },
             },
-            "required": ["pattern"],
+            "required": ["pattern", "limit", "context_lines"],
         }
 
     async def execute(
@@ -66,11 +80,11 @@ class GrepSearchTool(Tool):
         config: HarnessConfig,
         *,
         pattern: str,
+        limit: int,
+        context_lines: int,
         path: str = "",
         file_glob: str = "",
         case_insensitive: bool = False,
-        context_lines: int = 0,
-        limit: int = 100,
     ) -> ToolResult:
         raw = path if path else config.workspace
         # _check_path: symlink-resolved + allowed_paths-validated start point.

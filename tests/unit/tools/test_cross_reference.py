@@ -268,7 +268,6 @@ def test_symbol_depth_boundary_consistency():
     congruent results for the boundary case, preventing security bypasses.
     """
     import tempfile
-    from pathlib import Path
     
     tool = CrossReferenceTool()
     

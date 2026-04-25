@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -37,7 +36,15 @@ class CrossReferenceTool(Tool):
         "Find where a Python symbol (function, method, or class) is defined and "
         "all its call sites across the codebase. Returns definition location, "
         "callers list, callees list, and test files. Uses AST parsing — no "
-        "regex, no false positives from comments."
+        "regex, no false positives from comments. "
+        "Use this when you want the full picture for a single symbol: where it "
+        "is defined, every caller, every callee, and which tests exercise it — "
+        "all in one call. "
+        "Prefer data_flow when you only need one of reads/callers/call_chain and "
+        "want control over traversal depth. "
+        "Prefer call_graph when you want to trace outgoing calls recursively "
+        "(forward/downward) from a root function. "
+        "Prefer grep_search for non-Python files or string-literal occurrences."
     )
     requires_path_check = True  # use base class security validation
     tags = frozenset({"analysis"})
@@ -54,6 +61,18 @@ class CrossReferenceTool(Tool):
     # denial-of-service attacks via deeply nested symbols like "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p"
     # Matches regex pattern {0,9} (1-10 identifiers total).
     _MAX_SYMBOL_IDENTIFIERS = 10
+
+    def _read_file_atomically(
+        self,
+        path: Path,
+        allowed_paths: list[Path],
+    ) -> str | None:
+        """Thin wrapper around security.read_file_atomically for testability.
+
+        Returns the file contents as a string, or None if the path is outside
+        the allowed directories or if any security check fails.
+        """
+        return read_file_atomically(path, allowed_paths)
 
     def _validate_symbol_format(self, symbol: str) -> tuple[bool, str]:
         """
@@ -85,7 +104,9 @@ class CrossReferenceTool(Tool):
                     "type": "string",
                     "description": (
                         "Symbol to look up. Supports 'func_name' and "
-                        "'ClassName.method_name' forms. Maximum qualification depth "
+                        "'ClassName.method_name' forms. "
+                        "Examples: 'my_function', 'MyClass', 'MyClass.method_name'. "
+                        "Maximum qualification depth "
                         f"is {self._MAX_SYMBOL_IDENTIFIERS} (e.g., 'a.b.c.d.e.f.g.h.i.j' is 10)."
                     ),
                 },
@@ -116,39 +137,46 @@ class CrossReferenceTool(Tool):
         if call_node.func.attr != func_name:
             return False
 
-        # Helper function to extract the base variable name from an expression
-        def extract_base_name(node: ast.AST) -> str | None:
-            """Extract the base variable name from an expression.
-            
-            For example:
-            - `obj` -> "obj"
-            - `obj.attr` -> "obj"
-            - `obj.attr.method()` -> "obj"
-            - `self.helper` -> "self"
+        # Helper: extract base variable name AND chain depth
+        def extract_base_and_depth(node: ast.AST, depth: int = 0):
+            """Return (base_var_name, chain_depth) for an expression.
+
+            chain_depth counts the number of attribute accesses / intermediate
+            calls between the base variable and the final method call.  A
+            depth > 0 means we can no longer reliably infer the type from
+            the context (e.g. ``self.helper.process().method``).
             """
             if isinstance(node, ast.Name):
-                return node.id
+                return node.id, depth
             elif isinstance(node, ast.Attribute):
-                return extract_base_name(node.value)
+                return extract_base_and_depth(node.value, depth + 1)
             elif isinstance(node, ast.Call):
-                # For method calls like obj.method(), check the base of the method
                 if isinstance(node.func, ast.Attribute):
-                    return extract_base_name(node.func.value)
-            return None
+                    return extract_base_and_depth(node.func.value, depth + 1)
+            return None, depth
 
-        # Extract the base variable name from the function call
-        base_name = extract_base_name(call_node.func.value)
+        base_name, chain_depth = extract_base_and_depth(call_node.func.value)
         if not base_name:
             return False
 
-        # Check if variable type matches target class
-        if context and base_name in context and context[base_name] == class_name:
-            return True
-        # Special case: 'self' in instance methods
-        if base_name == 'self' and context and context.get('self_class') == class_name:
-            return True
-        
-        return False
+        # Direct call on a typed variable: ``obj.method()`` where context maps
+        # ``obj`` → a known class.  Only trust this for depth-0 calls (no
+        # intermediate attribute traversal).
+        if chain_depth == 0 and context and base_name in context:
+            return context[base_name] == class_name
+
+        # Direct ``self.method()`` inside the class's own methods.
+        if chain_depth == 0 and base_name == 'self':
+            if context and context.get('self_class') == class_name:
+                return True
+            # self is from a different class — not a match at depth-0.
+            if context and 'self_class' in context:
+                return False
+
+        # For chained calls (depth > 0) or variables whose type is unknown, use
+        # optimistic matching: return True to maximise recall.  False positives
+        # are acceptable; the caller can inspect results manually.
+        return True
 
     def validate_symbol(self, symbol: str) -> str:
         """Public interface for symbol validation. Returns the symbol if valid, otherwise raises ValueError.
@@ -207,7 +235,7 @@ class CrossReferenceTool(Tool):
 
         for fpath in py_files:
             # Use atomic file reading to prevent TOCTOU symlink attacks
-            source = read_file_atomically(fpath, allowed_paths=allowed)
+            source = self._read_file_atomically(fpath, allowed_paths=allowed)
             if source is None:
                 continue
             

@@ -99,8 +99,10 @@ class GitLogTool(Tool):
             "properties": {
                 "count": {
                     "type": "integer",
-                    "description": "Number of commits to show (default: 10)",
-                    "default": 10,
+                    "description": (
+                        "Number of commits to show. Required — no default. "
+                        "Use 5-10 for recent overview, 20-50 for history scan."
+                    ),
                 },
                 "oneline": {
                     "type": "boolean",
@@ -108,10 +110,11 @@ class GitLogTool(Tool):
                     "default": True,
                 },
             },
+            "required": ["count"],
         }
 
     async def execute(
-        self, config: HarnessConfig, *, count: int = 10, oneline: bool = True
+        self, config: HarnessConfig, *, count: int, oneline: bool = True
     ) -> ToolResult:
         args = ["log", f"-{count}"]
         if oneline:

@@ -18,11 +18,11 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT))  # noqa: E402
 
-from harness.core.config import HarnessConfig
-from harness.core.llm import LLM
-from harness.tools import build_registry
+from harness.core.config import HarnessConfig  # noqa: E402
+from harness.core.llm import LLM  # noqa: E402
+from harness.tools import build_registry  # noqa: E402
 
 
 SELF_PATH = Path(__file__).resolve()
@@ -54,7 +54,7 @@ async def main() -> int:
         f"the exact number of lines in that file. Reply only with the number."
     )
 
-    print(f"== DeepSeek smoke test ==")
+    print("== DeepSeek smoke test ==")
     print(f"Model:      {config.model}")
     print(f"Endpoint:   {config.base_url}")
     print(f"Target:     {SELF_PATH}")
@@ -66,7 +66,7 @@ async def main() -> int:
         registry=registry,
     )
 
-    print(f"-- Tool calls --")
+    print("-- Tool calls --")
     for entry in exec_log:
         print(f"  {entry['tool']}({entry.get('input', {})})")
     print()
@@ -85,7 +85,7 @@ async def main() -> int:
         print(f"FAIL: final text does not mention {expected_lines}±1 lines")
         return 1
 
-    print(f"PASS: tool loop works, model produced correct line count")
+    print("PASS: tool loop works, model produced correct line count")
     return 0
 
 

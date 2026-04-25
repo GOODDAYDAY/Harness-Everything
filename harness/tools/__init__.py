@@ -70,6 +70,11 @@ from harness.tools.batch_read import BatchReadTool
 from harness.tools.batch_edit import BatchEditTool
 from harness.tools.batch_write import BatchWriteTool
 from harness.tools.scratchpad import ScratchpadTool
+from harness.tools.file_info import FileInfoTool
+from harness.tools.lint_check import LintCheckTool
+from harness.tools.context_budget import ContextBudgetTool
+from harness.tools.project_map import ProjectMapTool
+from harness.tools.ast_rename import AstRenameTool
 
 log = logging.getLogger(__name__)
 
@@ -78,47 +83,51 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 DEFAULT_TOOLS: list[Tool] = [
-    # --- BATCH FILE TOOLS (primary) ---
-    # batch_read / batch_edit / batch_write replace the single-file variants
-    # in default agent / pipeline runs. One LLM round-trip can read or write
-    # up to 50 files; one batch_edit can land up to 100 search/replaces.
-    # The LLM should default to these — single-file tools are opt-in via
-    # extra_tools=["read_file"] when an integration genuinely needs them.
+    # --- BATCH FILE TOOLS (primary — listed first so LLM prefers these) ---
     BatchReadTool(),
     BatchEditTool(),
     BatchWriteTool(),
-    # scratchpad: persistent notes injected back into system prompt on each
-    # subsequent turn. Survives conversation pruning. The LLM loop intercepts
-    # scratchpad tool calls in core/llm.py.
+    EditFileTool(),
     ScratchpadTool(),
-    # --- OTHER FILE / DIR OPS ---
+    # --- SEARCH & ANALYSIS (high-signal, read-only) ---
+    GrepSearchTool(),
+    GlobSearchTool(),
+    SymbolExtractorTool(),
+    CodeAnalysisTool(),
+    CrossReferenceTool(),
+    FeatureSearchTool(),
+    ProjectMapTool(),
+    FileInfoTool(),
+    # --- TESTING & VERIFICATION ---
+    TestRunnerTool(),     # prefer over bash("pytest ...")
+    LintCheckTool(),      # prefer over bash("ruff ...")
+    ContextBudgetTool(),
+    # --- FILE / DIR OPS ---
     DeleteFileTool(),
     MoveFileTool(),
     CopyFileTool(),
     ListDirectoryTool(),
     CreateDirectoryTool(),
     TreeTool(),
-    GlobSearchTool(),
-    GrepSearchTool(),
-    BashTool(),
+    FilePatchTool(),
+    FindReplaceTool(),
+    DiffFilesTool(),
+    # --- GIT ---
     GitStatusTool(),
     GitDiffTool(),
     GitLogTool(),
-    CodeAnalysisTool(),
-    FilePatchTool(),
-    TestRunnerTool(),
-    SymbolExtractorTool(),
-    PythonEvalTool(),
-    FindReplaceTool(),
-    DiffFilesTool(),
-    CrossReferenceTool(),
+    # --- SPECIALIZED ---
     DataFlowTool(),
-    FeatureSearchTool(),
     CallGraphTool(),
     DependencyAnalyzerTool(),
+    PythonEvalTool(),
     JsonTransformTool(),
+    AstRenameTool(),
     ToolDiscoveryTool(),
     TodoScanTool(),
+    # --- BASH (last — use only for builds, installs, and commands that
+    #     have no dedicated tool; NEVER for reading source files) ---
+    BashTool(),
 ]
 
 # ---------------------------------------------------------------------------
@@ -135,12 +144,8 @@ OPTIONAL_TOOLS: list[Tool] = [
     WebSearchTool(),    # DuckDuckGo search + page fetch; needs network access
     HttpRequestTool(),  # Generic HTTP client (GET/POST/etc.); needs network access
     GitSearchTool(),    # Git history/blame/grep; high schema cost, opt in via extra_tools
-    # Single-file file tools — superseded by batch_read/batch_edit/batch_write
-    # in default runs. Opt in via extra_tools=["read_file", "edit_file",
-    # "write_file"] when a specific integration needs one-file-at-a-time.
-    ReadFileTool(),
-    EditFileTool(),
-    WriteFileTool(),
+    ReadFileTool(),     # Superseded by batch_read; opt in via extra_tools=["read_file"]
+    WriteFileTool(),    # Superseded by batch_write; opt in via extra_tools=["write_file"]
 ]
 
 # ---------------------------------------------------------------------------

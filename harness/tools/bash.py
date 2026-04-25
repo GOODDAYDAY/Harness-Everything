@@ -23,9 +23,19 @@ _SHELL_CHAIN_RE = re.compile(r"&&|\|\||;|\||&")
 class BashTool(Tool):
     name = "bash"
     description = (
-        "Execute a shell command and return its stdout/stderr. "
-        "The command runs in the workspace directory. "
-        "Timeout defaults to 60 seconds."
+        "LAST RESORT — execute a shell command only when no dedicated tool "
+        "exists. Runs in the workspace directory; timeout 60s. "
+        "Legitimate uses: pip install, git push, make, cargo build, custom "
+        "scripts. "
+        "WRONG (use the dedicated tool instead): "
+        "cat/head/tail/sed → batch_read; "
+        "grep → grep_search; "
+        "ls/find → list_directory/glob_search; "
+        "wc -l → file_info; "
+        "pytest → test_runner; "
+        "ruff → lint_check. "
+        "If you find yourself typing bash, check whether a dedicated tool "
+        "can do it — it almost always can."
     )
     tags = frozenset({"execution"})
 
@@ -33,7 +43,18 @@ class BashTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell command to execute"},
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Shell command to run in the workspace directory. "
+                        "NEVER use to read source files "
+                        "(no cat/head/tail/sed/grep on .py files). "
+                        "Use for: builds, tests, git, package installs, "
+                        "and metadata inspection. "
+                        "For reading source files use batch_read; "
+                        "for edits use batch_edit or batch_write."
+                    ),
+                },
                 "timeout": {
                     "type": "integer",
                     "description": "Timeout in seconds (default: 60)",

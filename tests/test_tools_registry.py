@@ -99,11 +99,14 @@ def test_tool_registry_filter_by_tags():
     assert set(filtered.names) == {"tool3"}  # Only tools with empty tags
     
     # Test that filtered registry is independent
-    filtered.register(Mock(spec=Tool, name="new_tool", tags=frozenset()))
+    independent_tool = Mock(spec=Tool)
+    independent_tool.name = "new_tool"
+    independent_tool.tags = frozenset()
+    filtered.register(independent_tool)
     assert "new_tool" not in registry.names
 
 
-def test_tool_registry_execute_routing():
+def test_tool_registry_execute_routing(tmp_path):
     """Test ToolRegistry.execute() routing and error handling."""
     registry = ToolRegistry()
     
@@ -126,8 +129,8 @@ def test_tool_registry_execute_routing():
     
     registry.register(mock_tool)
     
-    # Create a minimal config
-    config = HarnessConfig(workspace="/tmp/test", allowed_paths=["/tmp/test"])
+    # Create a minimal config using tmp_path for portability
+    config = HarnessConfig(workspace=str(tmp_path), allowed_paths=[str(tmp_path)])
     
     # Test successful execution
     result = asyncio.run(registry.execute(
@@ -143,10 +146,10 @@ def test_tool_registry_execute_routing():
     mock_tool.execute.assert_called_once_with(config, param1="value1", param2=42)
 
 
-def test_tool_registry_execute_unknown_tool():
+def test_tool_registry_execute_unknown_tool(tmp_path):
     """Test ToolRegistry.execute() with unknown tool name."""
     registry = ToolRegistry()
-    config = HarnessConfig(workspace="/tmp/test", allowed_paths=["/tmp/test"])
+    config = HarnessConfig(workspace=str(tmp_path), allowed_paths=[str(tmp_path)])
     
     result = asyncio.run(registry.execute("non_existent_tool", config, {}))
     
@@ -197,7 +200,7 @@ def test_tool_registry_execute_allowed_tools_restriction(tmp_path):
     assert "not in the allowed_tools list" in result.error
 
 
-def test_tool_registry_execute_allowed_tools_none():
+def test_tool_registry_execute_allowed_tools_none(tmp_path):
     """Test ToolRegistry.execute() when allowed_tools is None (allow-all)."""
     registry = ToolRegistry()
     
@@ -212,8 +215,8 @@ def test_tool_registry_execute_allowed_tools_none():
     
     # Config with allowed_tools=None (allow-all)
     config = HarnessConfig(
-        workspace="/tmp/test",
-        allowed_paths=["/tmp/test"],
+        workspace=str(tmp_path),
+        allowed_paths=[str(tmp_path)],
         allowed_tools=None  # Should allow all tools
     )
     
@@ -223,7 +226,7 @@ def test_tool_registry_execute_allowed_tools_none():
     assert result.output == "success"
 
 
-def test_tool_registry_execute_parameter_normalization():
+def test_tool_registry_execute_parameter_normalization(tmp_path):
     """Test ToolRegistry.execute() parameter alias normalization."""
     registry = ToolRegistry()
     
@@ -243,7 +246,7 @@ def test_tool_registry_execute_parameter_normalization():
     
     registry.register(mock_tool)
     
-    config = HarnessConfig(workspace="/tmp/test", allowed_paths=["/tmp/test"])
+    config = HarnessConfig(workspace=str(tmp_path), allowed_paths=[str(tmp_path)])
     
     # Test with aliased parameters (file_path -> path, text -> content)
     result = asyncio.run(registry.execute(
@@ -262,10 +265,10 @@ def test_tool_registry_execute_parameter_normalization():
     )
 
 
-def test_tool_registry_execute_error_categories():
+def test_tool_registry_execute_error_categories(tmp_path):
     """Test ToolRegistry.execute() error categorization."""
     registry = ToolRegistry()
-    config = HarnessConfig(workspace="/tmp/test", allowed_paths=["/tmp/test"])
+    config = HarnessConfig(workspace=str(tmp_path), allowed_paths=[str(tmp_path)])
     
     # Test TypeError -> SCHEMA ERROR
     mock_tool = Mock(spec=Tool)

@@ -24,7 +24,9 @@ Entry schema (one JSON object per line in memory.jsonl)::
       "score_delta": 2.5,
       "insight": "...",
       "evaluator_top_defect": "...",
-      "evaluator_key_risk": "..."
+      "evaluator_key_risk": "...",
+      "actionable_feedback": "...",
+      "what_would_make_10": "..."
     }
 
 Usage in PipelineLoop::
@@ -59,6 +61,18 @@ log = logging.getLogger(__name__)
 # Regex helpers for extracting structured fields from evaluator text
 # ---------------------------------------------------------------------------
 
+_ACTIONABLE_FEEDBACK_RE = re.compile(
+    r"ACTIONABLE\s+FEEDBACK\s*:\s*\n((?:[ \t]+\d+\.[^\n]+\n?)+)",
+    re.IGNORECASE,
+)
+_ACTIONABLE_MITIGATIONS_RE = re.compile(
+    r"ACTIONABLE\s+MITIGATIONS\s*:\s*\n((?:[ \t]+\d+\.[^\n]+\n?)+)",
+    re.IGNORECASE,
+)
+_WHAT_WOULD_MAKE_10_RE = re.compile(
+    r"WHAT\s+WOULD\s+MAKE\s+THIS\s+10/10\s*:\s*(.+?)(?:\n|$)",
+    re.IGNORECASE,
+)
 _TOP_DEFECT_RE = re.compile(
     r"TOP\s+DEFECT\s*:\s*(.+?)(?:\n|$)", re.IGNORECASE
 )
@@ -132,6 +146,48 @@ def _extract_key_risk(text: str) -> str:
     return ""
 
 
+def _extract_actionable_feedback(text: str) -> str:
+    """Extract the top-2 numbered items under ``ACTIONABLE FEEDBACK:`` or
+    ``ACTIONABLE MITIGATIONS:`` from an evaluator critique.
+
+    Returns the items joined by ``"; "`` and capped at 400 characters.
+    If neither section is found, returns ``""``.
+    """
+    section_m = _ACTIONABLE_FEEDBACK_RE.search(text)
+    if not section_m:
+        section_m = _ACTIONABLE_MITIGATIONS_RE.search(text)
+    if not section_m:
+        return ""
+    raw_lines = section_m.group(1).strip().splitlines()
+    items: list[str] = []
+    for line in raw_lines:
+        stripped = _BULLET_PREFIX_RE.sub("", line).replace("**", "").strip()
+        if stripped:
+            items.append(stripped)
+        if len(items) >= 2:
+            break
+    result = "; ".join(items)
+    return result[:400]
+
+
+def _extract_what_would_make_10(text: str) -> str:
+    """Extract the ``WHAT WOULD MAKE THIS 10/10:`` sentence from a critique.
+
+    Returns the sentence capped at 200 characters, or ``""`` if not present.
+    Filters out trivially positive answers (e.g. "it is already 10/10")
+    so they don't pollute the memory context.
+    """
+    m = _WHAT_WOULD_MAKE_10_RE.search(text)
+    if not m:
+        return ""
+    value = m.group(1).strip()
+    # Filter out "already perfect" non-answers
+    lower = value.lower()
+    if any(phrase in lower for phrase in ("already", "nothing", "n/a", "perfect")):
+        return ""
+    return value[:200]
+
+
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
@@ -149,6 +205,8 @@ class MemoryEntry:
     insight: str               # first ~400 chars of the phase synthesis
     evaluator_top_defect: str  # TOP DEFECT from best inner round's basic eval
     evaluator_key_risk: str    # KEY RISK from best inner round's diffusion eval
+    actionable_feedback: str   # top-2 ACTIONABLE FEEDBACK items from basic eval
+    what_would_make_10: str    # WHAT WOULD MAKE THIS 10/10 from basic eval
 
     def to_json_line(self) -> str:
         """Serialize to a compact single-line JSON string (no trailing newline)."""
@@ -168,6 +226,8 @@ class MemoryEntry:
                 insight=str(d.get("insight", "")),
                 evaluator_top_defect=str(d.get("evaluator_top_defect", "")),
                 evaluator_key_risk=str(d.get("evaluator_key_risk", "")),
+                actionable_feedback=str(d.get("actionable_feedback", "")),
+                what_would_make_10=str(d.get("what_would_make_10", "")),
             )
         except Exception:
             return None
@@ -232,9 +292,15 @@ class MemoryStore:
 
         top_defect = ""
         key_risk = ""
+        actionable_feedback = ""
+        what_would_make_10 = ""
         if best_inner and best_inner.dual_score:
-            top_defect = _extract_top_defect(best_inner.dual_score.basic.critique)
-            key_risk = _extract_key_risk(best_inner.dual_score.diffusion.critique)
+            basic_critique = best_inner.dual_score.basic.critique
+            diffusion_critique = best_inner.dual_score.diffusion.critique
+            top_defect = _extract_top_defect(basic_critique)
+            key_risk = _extract_key_risk(diffusion_critique)
+            actionable_feedback = _extract_actionable_feedback(basic_critique)
+            what_would_make_10 = _extract_what_would_make_10(basic_critique)
 
         # Insight-length policy: design/orchestrate-class phases produce richer
         # plan documents where truncating at 400 chars often loses the
@@ -257,6 +323,8 @@ class MemoryStore:
             insight=insight,
             evaluator_top_defect=top_defect,
             evaluator_key_risk=key_risk,
+            actionable_feedback=actionable_feedback,
+            what_would_make_10=what_would_make_10,
         )
         self._entries.append(entry)
         self._best_score_by_phase[label] = max(prev_best, score)
@@ -344,6 +412,10 @@ class MemoryStore:
                 lines.append(f"**Top defect to fix:** {e.evaluator_top_defect}")
             if e.evaluator_key_risk and e.evaluator_key_risk.lower() != "none":
                 lines.append(f"**Key risk to address:** {e.evaluator_key_risk}")
+            if e.actionable_feedback:
+                lines.append(f"**Action items:** {e.actionable_feedback}")
+            if e.what_would_make_10:
+                lines.append(f"**To reach 10/10:** {e.what_would_make_10}")
             lines.append("")
 
         return "\n".join(lines).rstrip()

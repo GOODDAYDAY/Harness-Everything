@@ -100,7 +100,6 @@ class FileSecurity:
         }
         
         # Validate path atomically
-        from harness.tools.base import Tool  # Import here to avoid circular import
         is_valid_path, path_validated = await FileSecurity.validate_atomic_path(config, path, **validation_kwargs)
         if not is_valid_path:
             # path_validated is a ToolResult when is_valid_path is False
@@ -222,9 +221,14 @@ class FileSecurity:
         """Atomically validate a file path with TOCTOU protection."""
         # Copy of the logic from Tool._validate_atomic_path
         try:
+            # Run security checks (null bytes, homoglyphs) BEFORE any OS call.
+            from harness.core.security import validate_path_security
+            if err_msg := validate_path_security(path, config):
+                return False, ToolResult(error=err_msg, is_error=True)
+
             # Resolve path relative to workspace
             resolved = os.path.join(config.workspace, path) if not os.path.isabs(path) else path
-            
+
             # Check if path is within allowed scope
             if check_scope:
                 from harness.core.security import validate_path_scope
@@ -348,7 +352,6 @@ class FileSecurity:
             "resolve_symlinks": resolve_symlinks,
         }
         
-        from harness.tools.base import Tool  # Import here to avoid circular import
         is_valid_src, src_validated = await FileSecurity.validate_atomic_path(config, source, **validation_kwargs)
         if not is_valid_src:
             # src_validated is a ToolResult when is_valid_src is False
@@ -394,7 +397,6 @@ class FileSecurity:
             "resolve_symlinks": resolve_symlinks,
         }
         
-        from harness.tools.base import Tool  # Import here to avoid circular import
         is_valid_src, src_validated = await FileSecurity.validate_atomic_path(config, source, **validation_kwargs)
         if not is_valid_src:
             # src_validated is a ToolResult when is_valid_src is False
@@ -460,84 +462,41 @@ class Tool(ABC):
 
     # ---- helpers ----
 
-    def _check_path(self, config: HarnessConfig, path: str, require_exists: bool = True, resolve_symlinks: bool = True) -> str | ToolResult:
-        """Validate a file path against security rules.
-        
-        Returns: str on success, ToolResult on validation failure.
-        
-        Security validation order:
-        1. validate_path_security on raw path (null bytes, control chars, homoglyphs)
-        2. Resolve path with Path.resolve(strict=True) to eliminate symlink TOCTOU
-        3. Check if resolved path is allowed
-        
+    def _check_path(
+        self,
+        config: HarnessConfig,
+        path: str,
+        require_exists: bool = False,
+        resolve_symlinks: bool = True,  # noqa: ARG002 – reserved for future use
+    ) -> str | ToolResult:
+        """Validate a file path against security rules and allowed-paths scope.
+
+        Delegates security validation and scope checking to ``_validate_root_path``
+        so both codepaths share a single implementation.  After the scope check
+        passes, an optional existence check is applied.
+
+        Returns:
+            str  – the resolved, validated path on success.
+            ToolResult – an error result on any validation failure.
+
         Args:
-            resolve_symlinks: If True, symlinks are resolved to their final target 
-                before scope checking. If False, the symlink path itself is validated.
-        
-        This method addresses the TOCTOU vulnerability by using atomic symlink
-        resolution before checking allowed paths.
+            require_exists: When *True*, return an error if the resolved path
+                does not exist on disk.  Defaults to *False* so that paths for
+                files-to-be-created pass validation.
+            resolve_symlinks: Reserved for API compatibility; the underlying
+                ``_validate_root_path`` always resolves symlinks.
         """
-        # 1. Call validate_path_security(path) and return a ToolResult on error
-        if error_msg := validate_path_security(path, config):
-            return ToolResult(error=error_msg, is_error=True)
-        
-        # Handle empty path (use workspace)
-        path_to_check = path if path else config.workspace
-        
-        # If path is relative, join it with workspace
-        if not os.path.isabs(path_to_check):
-            path_to_check = os.path.join(config.workspace, path_to_check)
-        
-        try:
-            # 2. Create a Path object and resolve it based on resolve_symlinks parameter
-            # Catch OSError and return a ToolResult with error
-            if resolve_symlinks:
-                resolved_path = Path(path_to_check).resolve(strict=True)
-            else:
-                # Don't follow symlinks - use absolute path without resolving symlinks
-                resolved_path = Path(path_to_check).absolute()
-            resolved_str = str(resolved_path)
-        except OSError as exc:
-            # Handle broken symlinks or non-existent paths
-            # Fall back to checking parent directories for paths that should be creatable
-            try:
-                # Try non-strict resolution
-                resolved_path = Path(path_to_check).resolve(strict=False)
-                resolved_str = str(resolved_path)
-                
-                # Check if all parent directory components exist
-                # Only do this check when require_exists=True
-                if require_exists:
-                    current = Path(resolved_str)
-                    while current != current.parent:  # Stop at root
-                        if not current.parent.exists():
-                            return ToolResult(
-                                error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
-                                is_error=True,
-                            )
-                        current = current.parent
-            except Exception as exc2:
-                return ToolResult(
-                    error=f"Cannot resolve path {path_to_check!r}: {exc2}",
-                    is_error=True,
-                )
-        
-        # 3. Convert the resolved Path object to a string resolved_str
-        # Already done above
-        
-        # 4. For each path in config.allowed_paths, resolve it with 
-        # Path(allowed_path).resolve(strict=False) and check if resolved_str 
-        # is equal to or starts with the allowed path
-        for allowed_path in config.allowed_paths:
-            allowed_resolved = str(Path(allowed_path).resolve(strict=False))
-            if resolved_str == allowed_resolved or resolved_str.startswith(allowed_resolved + os.sep):
-                return resolved_str
-        
-        # 5. If no allowed path matches, return a ToolResult with error
-        return ToolResult(
-            error=f"Path {resolved_str} is outside allowed directories",
-            is_error=True,
-        )
+        resolved, err = self._validate_root_path(config, path)
+        if err is not None:
+            return err
+
+        if require_exists and not Path(resolved).exists():
+            return ToolResult(
+                error=f"Path not found: {resolved}",
+                is_error=True,
+            )
+
+        return resolved
 
     def _validate_path_result(self, path_result: Any) -> tuple[bool, str | ToolResult]:
         """Standardize type checking for _check_path return values.
@@ -644,7 +603,7 @@ class Tool(ABC):
             # If we get here, file is not within any allowed path
             os.close(fd)
             return False, ToolResult(
-                error=f"TOCTOU security violation: file path changed during validation - resolved path not within allowed directories",
+                error="TOCTOU security violation: file path changed during validation - resolved path not within allowed directories",
                 is_error=True
             )
         except Exception as exc:
@@ -820,8 +779,7 @@ class Tool(ABC):
         (identified by inode) is within allowed directories.
         """
         import os
-        from pathlib import Path
-        
+
         # If the original path is already within search_root, use it
         try:
             if os.path.commonpath([original_path, search_root]) == search_root:
@@ -1301,38 +1259,40 @@ class Tool(ABC):
                 is_error=True,
             )
         
-        # 2. Resolve path to eliminate symlink TOCTOU using Path.resolve(strict=True)
+        # 2. Resolve path to eliminate symlink TOCTOU.
+        # Use strict=True when the path exists (catches symlink targets outside
+        # allowed dirs); fall back to strict=False for paths that don't exist
+        # yet (e.g. output files to be created) without requiring parent dirs.
         try:
-            # Use Path.resolve(strict=True) for atomic symlink resolution
             resolved_path = Path(path_to_check).resolve(strict=True)
-            resolved = str(resolved_path)
-        except OSError as exc:
-            # Handle broken symlinks or non-existent paths
-            # Fall back to checking parent directories
+        except OSError:
+            # Path doesn't exist yet — use non-strict resolution which resolves
+            # as far as the path exists then appends remaining components.
             try:
-                # Try non-strict resolution first
                 resolved_path = Path(path_to_check).resolve(strict=False)
-                resolved = str(resolved_path)
-                
-                # Check if all parent directories exist and are within allowed paths
-                current = Path(resolved)
-                while current != current.parent:  # Stop at root
-                    if not current.parent.exists():
-                        return "", ToolResult(
-                            error=f"Cannot resolve path {path_to_check!r}: parent directory {current.parent} does not exist",
-                            is_error=True,
-                        )
-                    current = current.parent
             except Exception as exc2:
                 return "", ToolResult(
                     error=f"Cannot resolve path {path_to_check!r}: {exc2}",
                     is_error=True,
                 )
+        resolved = str(resolved_path)
         
-        # 3. Check if resolved path is allowed
-        if not config.is_path_allowed(resolved):
+        # 3. Check if resolved path is within allowed_paths.
+        # Resolve allowed_paths to handle OS-level symlinks (e.g. macOS /var →
+        # /private/var) before comparing against the already-resolved path.
+        allowed_resolved = [
+            os.path.realpath(str(ap)) for ap in (config.allowed_paths or [])
+        ]
+        in_scope = any(
+            resolved == ap or resolved.startswith(ap + os.sep)
+            for ap in allowed_resolved
+        )
+        if not in_scope:
             return "", ToolResult(
-                error=f"Path not allowed: {resolved}  (allowed: {config.allowed_paths})",
+                error=(
+                    f"PERMISSION ERROR: Path not allowed: {resolved} is outside allowed "
+                    f"directories (allowed: {config.allowed_paths})"
+                ),
                 is_error=True,
             )
         

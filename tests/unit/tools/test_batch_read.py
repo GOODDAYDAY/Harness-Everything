@@ -20,7 +20,7 @@ def test_batch_read_tool_initialization():
     desc_lower = tool.description.lower()
     assert 'read' in desc_lower
     assert 'file' in desc_lower
-    assert 'multiple' in desc_lower
+    assert 'many' in desc_lower
     
     # Check input schema
     schema = tool.input_schema()
