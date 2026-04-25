@@ -60,8 +60,32 @@
   "// patience": "Early stopping: if the best score across all phases doesn't improve for N consecutive outer rounds, stop the pipeline. 0 = disabled (always run all outer_rounds). Saves cost on runs that plateau early. Recommended: 3–5.",
   "patience": 5,
 
-  "// evaluation_mode": "'dual_isolated' (recommended) = two independent evaluators score each proposal from different angles. 'three_way' = conservative/aggressive/merge evaluator pattern. dual_isolated is simpler and more robust.",
+  "// =====================================================================": "",
+  "// V5: EXPLORATION — periodically try novel approaches                   ": "",
+  "// =====================================================================": "",
+
+  "// exploration_interval": "V5: Insert an exploration phase every N outer rounds. Exploration phases use novelty-weighted evaluation (novelty 50%) and relaxed gating — the goal is to try bold new approaches that might not score well on correctness alone. 0 = disabled. Recommended: 3–5.",
+  "exploration_interval": 3,
+
+  "// =====================================================================": "",
+  "// V5: META-AGENT — periodic strategy layer                              ": "",
+  "// =====================================================================": "",
+
+  "// meta_agent_interval": "V5: Run the meta-agent strategy layer every N outer rounds. The meta-agent reads the Experience Store (structured memory) and score trends, then outputs strategy adjustments — which axis to focus on, whether to change evaluation weights, and whether to switch exploration mode. These adjustments are hot-applied to evaluator weights and pipeline config. 0 = disabled. Recommended: 5–10.",
+  "meta_agent_interval": 5,
+
+  "// evaluation_mode": "Which evaluator scoring pattern to use. 'dual_isolated' = two independent evaluators (basic + diffusion). 'three_way' = conservative/aggressive/merge. Only used when evaluation_engine is 'dual' (legacy path).",
   "evaluation_mode": "dual_isolated",
+
+  "// =====================================================================": "",
+  "// V5: MULTI-AXIS EVALUATION — 5-dimension vector scorer                ": "",
+  "// =====================================================================": "",
+
+  "// evaluation_engine": "'dual' = legacy DualEvaluator (two isolated scorers, single score). 'multi_axis' = V5 5-dimension vector evaluator (correctness, code_quality, arch_health, novelty, alignment). When 'multi_axis', dual_evaluator is ignored and evaluation_mode is superseded.",
+  "evaluation_engine": "multi_axis",
+
+  "// eval_weights": "Per-axis weights for the multi_axis evaluator. Empty dict = use built-in defaults (correctness:0.35, code_quality:0.25, arch_health:0.15, novelty:0.10, alignment:0.15). These are hot-reloaded from config/eval_weights.json on every evaluation — the meta-agent can adjust them mid-run without restarting the pipeline.",
+  "eval_weights": {},
 
   "// output_dir": "Directory for all pipeline artifacts: proposals, evaluations, syntheses, metrics, checkpoints. Can be relative (to CWD) or absolute. A unique run_id subdirectory is created inside.",
   "output_dir": "/path/to/output",
@@ -120,10 +144,10 @@
   "run_mode": "automatic",
 
   "// =====================================================================": "",
-  "// DUAL EVALUATOR — scoring prompts                                     ": "",
+  "// DUAL EVALUATOR — legacy scoring (only used when evaluation_engine='dual')": "",
   "// =====================================================================": "",
 
-  "// dual_evaluator": "Two independent evaluators score each proposal. basic_system = primary quality/correctness reviewer. diffusion_system = second-order effects analyst (ripple effects, maintainability). Each outputs 'SCORE: N' (0-10). Combined score = basic + diffusion (0-20). Customize these prompts for your domain.",
+  "// dual_evaluator": "Legacy two-evaluator scoring. Only active when evaluation_engine='dual'. When evaluation_engine='multi_axis', the V5 MultiAxisEvaluator supersedes this — prompts are loaded from harness/prompts/eval_basic.txt and eval_diffusion.txt (hot-reloadable plain text files, editable by meta-agent). basic_system = primary quality/correctness reviewer. diffusion_system = second-order effects analyst (ripple effects, maintainability). Each outputs 'SCORE: N' (0-10).",
   "dual_evaluator": {
     "basic_system": "You are an adversarial code reviewer for a Python framework.\n\nEvaluate proposals:\n1. Find the single most critical defect\n2. Verify changes follow existing patterns\n3. Check: no path security bypass, no arbitrary code execution\n4. QUALITY CHECK: Penalize -2 for dead code. Reward +1 for removing dead code.\n5. Score 0-10\n\nOutput: SCORE: <number>",
     "diffusion_system": "You are a second-order effects analyst.\n\nDo NOT evaluate correctness. Analyze ripple effects:\n- Does this change break other modes?\n- Does it increase context window consumption?\n- Does it make the framework harder to configure?\n- What happens when the LLM hallucinates tool names?\n- Does it affect checkpoint/resume reliability?\n\nScore 0-10.\nOutput: SCORE: <number>"
@@ -133,7 +157,7 @@
   "// PHASES — ordered list of pipeline stages                             ": "",
   "// =====================================================================": "",
 
-  "// phases doc": "Each phase runs sequentially within an outer round. Two modes: 'debate' (text-only proposals, no file changes) and 'implement' (tool_use, edits real files). Phases can be skipped conditionally via skip_cycle or skip_after_round.",
+  "// phases doc": "Each phase runs sequentially within an outer round. Three modes: 'debate' (text-only proposals, no file changes), 'implement' (tool_use, edits real files), and 'exploration' (V5 — novelty-weighted evaluation, relaxed gating, tries bold new approaches). Phases can be skipped conditionally via skip_cycle or skip_after_round.",
 
   "phases": [
     {

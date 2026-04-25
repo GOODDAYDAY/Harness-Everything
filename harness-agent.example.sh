@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# harness-agent.example.sh — manage a Harness autonomous agent
+# harness-agent.example.sh — manage a Harness V5 autonomous agent
+#
+# V5 adds: multi-axis evaluation, structured experience memory, exploration
+# phases, meta-agent strategy layer, and hot-reloadable self-configuration.
+# The agent can now modify its own evaluator prompts and weights at runtime.
 #
 # Copy this file, rename it, and adjust the configuration section below
 # to match your project. Then:
@@ -32,13 +36,24 @@ HARNESS_DIR="$SCRIPT_DIR"
 VENV="$HARNESS_DIR/.venv"
 PYTHON="$VENV/bin/python"
 
-# Agent config JSON (see config/agent_example_*.json for templates)
+# Agent or pipeline config JSON:
+#   Agent mode:  python main.py --agent config/agent_example.json
+#   Pipeline:    python main.py --pipeline config/pipeline_example_self_improve.json
+# See config/pipeline_example_self_improve.json for V5 features:
+#   - evaluation_engine: "multi_axis" (5-dim vector scoring)
+#   - exploration_interval (novelty-weighted exploration phases)
+#   - meta_agent_interval (strategy layer running every N rounds)
 AGENT_CONFIG="$HARNESS_DIR/config/agent_self_improve.json"
 
 # Runtime files (adjust names per project to avoid collisions)
 PID_FILE="$SCRIPT_DIR/.harness-agent.pid"
 LOG_FILE="$SCRIPT_DIR/.harness-agent.log"
 PAUSE_FILE="$HARNESS_DIR/.harness.pause"
+
+# V5 hot-reloadable config (editable by meta-agent at runtime):
+#   harness/prompts/eval_basic.txt     — basic evaluator prompt
+#   harness/prompts/eval_diffusion.txt — diffusion evaluator prompt
+#   harness/config/eval_weights.json   — multi-axis weights
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
