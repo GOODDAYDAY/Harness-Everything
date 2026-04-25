@@ -32,6 +32,21 @@
   "// patience": "Stop early if no improvement for 5 consecutive rounds — saves cost when a chunk plateaus.",
   "patience": 5,
   "evaluation_mode": "dual_isolated",
+
+  "// ---- V5: multi-axis evaluation ----": "",
+  "// evaluation_engine": "'dual' = legacy DualEvaluator. 'multi_axis' = V5 5-dim vector (correctness, code_quality, arch_health, novelty, alignment). When 'multi_axis', dual_evaluator below is ignored.",
+  "evaluation_engine": "multi_axis",
+  "// eval_weights": "Per-axis weights for multi_axis. Empty = defaults (correctness:0.35, code_quality:0.25, arch_health:0.15, novelty:0.10, alignment:0.15). Hot-reloaded from config/eval_weights.json. Meta-agent adjusts these mid-run.",
+  "eval_weights": {},
+
+  "// ---- V5: exploration ----": "",
+  "// exploration_interval": "Insert novelty-weighted exploration phase every N rounds. 0 = disabled. Recommended: 3–5.",
+  "exploration_interval": 3,
+
+  "// ---- V5: meta-agent ----": "",
+  "// meta_agent_interval": "Run strategy-layer meta-agent every N rounds. 0 = disabled. Recommended: 5–10.",
+  "meta_agent_interval": 5,
+
   "output_dir": "/home/ubuntu/harness-everything/harness_output",
   "min_synthesis_chars": 150,
   "max_file_context_chars": 30000,
@@ -53,6 +68,7 @@
   "rich_commit_metadata": true,
   "auto_update_prompts": false,
   "run_mode": "automatic",
+  "// dual_evaluator": "Legacy — only used when evaluation_engine='dual'. When 'multi_axis', prompts are hot-reloaded from harness/prompts/eval_basic.txt and eval_diffusion.txt.",
   "dual_evaluator": {
     "basic_system": "You are an adversarial code reviewer for an AI coding harness framework (Python 3.11+, async, Anthropic-compatible API).\n\nEvaluate proposals/implementations:\n1. Find the single most critical defect (security hole, race condition, data loss, context leak, prompt injection)\n2. Verify changes follow existing patterns (async, dataclass config, Tool ABC, ToolResult, frozenset tags)\n3. Check: no path security bypass, no arbitrary code execution regression, no sensitive data written to tracked files\n4. BLOAT GATE (HARD): Does this change increase net line count by >50 lines without equivalent deletions elsewhere? If yes: -3 points\n5. TOOL GATE (HARD): Does this change add a new tool file to harness/tools/ without merging or removing an existing one? If yes: -5 points\n6. ASYNC SAFETY: Does this change introduce blocking I/O in an async context (open(), subprocess.run(), time.sleep())? If yes to blocking: -2 points\n7. CONSOLIDATION BONUS: +2 for merging two tools into one. +2 for extracting shared boilerplate. +1 for adding a test covering a previously untested critical path\n8. QUALITY CHECK: Does this change add dead code, unused imports, or bloat? -2 for introducing dead code. +1 for removing dead code while making improvements\n9. Score 0-10 (10=excellent, 5=works but marginal, 0=broken or insecure)\n\nOutput: SCORE: <number>",
     "diffusion_system": "You are a second-order effects analyst for an AI coding harness framework.\n\nDo NOT evaluate correctness. Analyze ripple effects:\n- Does this change break simple mode while improving pipeline mode (or vice versa)?\n- Does it increase context window consumption?\n- Does it make the framework harder to configure or less generic?\n- What happens when the LLM hallucinates tool names or parameter names?\n- Does it affect checkpoint/resume reliability across process restarts?\n- Will this change make path security (_check_path) bypassable?\n- SIGNAL SAFETY: Does this change interact with the graceful shutdown mechanism? Could it leave the event loop in a bad state on SIGINT?\n- CODE QUALITY RIPPLE: Does this change leave orphaned imports, dead functions, or stale references in OTHER files?\n- TOOL COUNT INFLATION: Does this change increase the number of tool files? Every new tool must be justified by removing or merging an existing one.\n\nForce yourself to find at least one negative second-order impact.\n\nScore 0-10 (10=excellent ripple, 0=dangerous cascade).\nOutput: SCORE: <number>"
