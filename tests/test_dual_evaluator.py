@@ -346,7 +346,7 @@ class TestDualEvaluatorEvaluate:
         return asyncio.new_event_loop().run_until_complete(coro)
 
     def test_evaluate_returns_dual_score(self, evaluator):
-        from harness.pipeline.phase import DualScore
+        from harness.evaluation.dual_evaluator import DualScore
 
         result = self._run(evaluator.evaluate("Proposal text.", "Context here.", mode="debate"))
         assert isinstance(result, DualScore)
@@ -425,7 +425,7 @@ class TestDualEvaluatorEvaluate:
         llm.call = _bad_call
         evaluator = DualEvaluator(llm)
 
-        from harness.pipeline.phase import DualScore
+        from harness.evaluation.dual_evaluator import DualScore
 
         result = self._run(evaluator.evaluate("test subject", "test context", mode="debate"))
         assert isinstance(result, DualScore)

@@ -6,7 +6,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -14,24 +14,6 @@ log = logging.getLogger(__name__)
 _VALID_LOG_LEVELS: frozenset[str] = frozenset(
     {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
 )
-
-
-@dataclass
-class PlannerConfig:
-    """Prompts for the three-way planner."""
-
-    conservative_system: str = ""
-    aggressive_system: str = ""
-    merge_system: str = ""
-
-
-@dataclass
-class EvaluatorConfig:
-    """Prompts for the three-way evaluator."""
-
-    conservative_system: str = ""
-    aggressive_system: str = ""
-    merge_system: str = ""
 
 
 @dataclass
@@ -101,19 +83,6 @@ class HarnessConfig:
     # Valid values: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL".
     # Applied by HarnessLoop.__init__ and PipelineLoop.__init__ via
     # apply_log_level() so every run picks up the configured verbosity.
-
-    # --- sub-configs ---
-    planner: PlannerConfig = field(default_factory=PlannerConfig)
-    evaluator: EvaluatorConfig = field(default_factory=EvaluatorConfig)
-
-    # --- per-phase transient state ---
-    # File-mutating tools (edit, write, patch, delete, move, find_replace)
-    # reject writes whose workspace-relative path does not match at least one
-    # glob in this list. Empty (default) = unrestricted. PhaseRunner sets this
-    # from PhaseConfig.allowed_edit_globs for the duration of the executor
-    # call, then clears it. The separation lives on HarnessConfig — not on
-    # Tool state — so that build_registry() can stay stateless across phases.
-    phase_edit_globs: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # --- resolve paths ---
@@ -315,19 +284,14 @@ allowed_tools=all log_level=INFO
     def from_dict(cls, data: dict[str, Any]) -> HarnessConfig:
         """Build config from a plain dict (e.g. loaded from YAML/JSON).
 
-        Raises ValueError on unknown top-level keys AND on unknown keys in the
-        nested ``planner`` / ``evaluator`` sub-dicts so that typos like
-        ``"conservtive_system"`` are caught immediately rather than silently
-        dropped (the dataclass ``__init__`` would raise a cryptic TypeError
-        without this check).
+        Raises ValueError on unknown top-level keys so that typos are caught
+        immediately rather than silently dropped.
         """
         import dataclasses
 
         data = dict(data)  # don't mutate caller's dict
         # Strip JSON "comment" keys (// or _ prefix) before validation.
         data = {k: v for k, v in data.items() if not k.startswith("//") and not k.startswith("_")}
-        planner_data = data.pop("planner", {})
-        evaluator_data = data.pop("evaluator", {})
 
         known_fields = {f.name for f in dataclasses.fields(cls)}
         unknown = set(data) - known_fields
@@ -337,330 +301,4 @@ allowed_tools=all log_level=INFO
                 f"Known keys: {sorted(known_fields)}"
             )
 
-        # Validate nested sub-dicts so typos in prompt overrides are caught early.
-        known_planner = {f.name for f in dataclasses.fields(PlannerConfig)}
-        unknown_planner = set(planner_data) - known_planner
-        if unknown_planner:
-            raise ValueError(
-                f"HarnessConfig.planner: unknown key(s): {sorted(unknown_planner)}.  "
-                f"Known keys: {sorted(known_planner)}"
-            )
-
-        known_evaluator = {f.name for f in dataclasses.fields(EvaluatorConfig)}
-        unknown_evaluator = set(evaluator_data) - known_evaluator
-        if unknown_evaluator:
-            raise ValueError(
-                f"HarnessConfig.evaluator: unknown key(s): {sorted(unknown_evaluator)}.  "
-                f"Known keys: {sorted(known_evaluator)}"
-            )
-
-        return cls(
-            **data,
-            planner=PlannerConfig(**planner_data),
-            evaluator=EvaluatorConfig(**evaluator_data),
-        )
-
-
-# ===========================================================================
-# Pipeline mode configs
-# ===========================================================================
-
-
-@dataclass
-class DualEvaluatorConfig:
-    """Prompts for dual-isolated evaluation (Basic + Diffusion)."""
-
-    basic_system: str = ""
-    diffusion_system: str = ""
-    score_pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)"
-
-    def __post_init__(self) -> None:
-        import re as _re
-        try:
-            _re.compile(self.score_pattern)
-        except _re.error as exc:
-            raise ValueError(
-                f"DualEvaluatorConfig.score_pattern is not a valid regex: {exc}"
-            ) from exc
-
-
-@dataclass
-class PipelineConfig:
-    """Configuration for the phase pipeline orchestration mode."""
-
-    harness: HarnessConfig = field(default_factory=HarnessConfig)
-
-    # Phase list — loaded from config file
-    phases: list[dict[str, Any]] = field(default_factory=list)
-
-    # Pipeline parameters
-    outer_rounds: int = 5
-    inner_rounds: int = 3  # default per-phase, overridable in PhaseConfig
-
-    # Evaluation mode
-    evaluation_mode: Literal["three_way", "dual_isolated"] = "dual_isolated"
-    dual_evaluator: DualEvaluatorConfig = field(default_factory=DualEvaluatorConfig)
-
-    # Artifact & checkpoint
-    output_dir: str = "harness_output"
-    run_id: str | None = None  # auto-generated if None
-
-    # Early stopping
-    patience: int = 3  # 0 = disable
-
-    # Inner-round early exit for implement mode (sequential rounds only).
-    # If a completed inner round's combined_score (0–10) is >= this threshold,
-    # the remaining inner rounds are skipped — saves 2–4 LLM calls per phase.
-    # 0.0 = disabled (run all inner rounds); a typical useful value is 8.5
-    # (i.e. 85 % quality threshold), or 9.0 for a high-confidence exit.
-    inner_early_exit_threshold: float = 0.0  # 0.0 = disabled
-
-    # Synthesis
-    synthesis_system: str = ""
-    min_synthesis_chars: int = 150
-
-    # File context budget (chars) for source file injection into executor prompts.
-    # Controls the total size of $file_context in executor prompts.  Lower values
-    # prevent context-window bloat in long runs; higher values give the executor
-    # more code visibility.  Default matches the original hard-coded limit.
-    max_file_context_chars: int = 60_000
-
-    # Meta-review: periodic pause to review progress across rounds
-    meta_review_interval: int = 0    # 0 = disabled; N = run meta-review every N rounds
-    meta_review_system: str = ""     # custom system prompt (empty = use default)
-    meta_review_inject: bool = False  # prepend meta-review findings to next round's prompts
-
-    # Auto-push
-    auto_push_interval: int = 0    # 0 = disabled; N = push every N outer rounds
-    auto_push_remote: str = "origin"
-    auto_push_branch: str = ""     # empty = push current branch
-
-    # Auto-tag (configurable; legacy end-of-run tag still fires when interval=0)
-    auto_tag_interval: int = 0          # 0 = legacy end-of-run only; N = tag every N rounds
-    auto_tag_prefix: str = "v-auto"     # tag name prefix (legacy: "v-auto")
-    auto_tag_push: bool = False         # whether to git push the tag after creating it
-    auto_tag_min_score: float = 7.0     # minimum best_score to create a tag (legacy: 7.0)
-    auto_tag_at_end: bool = False       # force a tag at end of pipeline run regardless of
-                                        # interval / score / patience early stop. Use this
-                                        # for self-improvement loops where the next chunk
-                                        # is triggered by tag push: every chunk MUST emit
-                                        # a tag or the loop dies.
-
-    # Rich commit metadata
-    rich_commit_metadata: bool = False  # include score/round/phase in commit messages
-
-    # Prompt auto-update
-    auto_update_prompts: bool = False  # allow meta-review to modify phase prompts
-
-    # Manual/Automatic dual mode
-    run_mode: str = "automatic"  # "automatic" or "manual" (pause at meta-review)
-
-    def __post_init__(self) -> None:
-        # --- validate evaluation_mode (Literal enforcement at runtime) ---
-        _VALID_EVAL_MODES = ("three_way", "dual_isolated")
-        if self.evaluation_mode not in _VALID_EVAL_MODES:
-            raise ValueError(
-                f"PipelineConfig.evaluation_mode={self.evaluation_mode!r} is not valid.  "
-                f"Must be one of: {_VALID_EVAL_MODES}.  "
-                "Check for typos — common mistakes: 'dual_isolate', 'threeway', 'three-way'."
-            )
-
-        # --- validate output_dir is a non-empty string ---
-        if not isinstance(self.output_dir, str) or not self.output_dir.strip():
-            raise ValueError(
-                f"PipelineConfig.output_dir must be a non-empty string, "
-                f"got {self.output_dir!r}.  "
-                "Set it to a relative or absolute directory path, e.g. 'harness_output'."
-            )
-
-        if self.outer_rounds < 1:
-            raise ValueError(
-                f"PipelineConfig.outer_rounds must be ≥ 1, got {self.outer_rounds}"
-            )
-        if self.inner_rounds < 1:
-            raise ValueError(
-                f"PipelineConfig.inner_rounds must be ≥ 1, got {self.inner_rounds}"
-            )
-        if self.patience < 0:
-            raise ValueError(
-                f"PipelineConfig.patience must be ≥ 0 (0 = disabled), got {self.patience}"
-            )
-        if self.inner_early_exit_threshold < 0.0 or self.inner_early_exit_threshold > 10.0:
-            raise ValueError(
-                "PipelineConfig.inner_early_exit_threshold must be in [0.0, 10.0] "
-                f"(0.0 = disabled), got {self.inner_early_exit_threshold}"
-            )
-        if self.min_synthesis_chars < 0:
-            raise ValueError(
-                f"PipelineConfig.min_synthesis_chars must be ≥ 0, got {self.min_synthesis_chars}"
-            )
-        if self.min_synthesis_chars > 10_000:
-            log.warning(
-                "PipelineConfig.min_synthesis_chars=%d is very large — "
-                "synthesis may always retry and fall back to the best inner result; "
-                "typical values are 100–1 000",
-                self.min_synthesis_chars,
-            )
-
-        # --- validate max_file_context_chars ---
-        if self.max_file_context_chars < 1_000:
-            raise ValueError(
-                f"PipelineConfig.max_file_context_chars must be >= 1000, "
-                f"got {self.max_file_context_chars}"
-            )
-        if self.max_file_context_chars > 500_000:
-            log.warning(
-                "PipelineConfig.max_file_context_chars=%d is very large — "
-                "this may cause prompt overflow and high token costs; "
-                "typical values are 30000–80000",
-                self.max_file_context_chars,
-            )
-
-        # --- validate synthesis_system is a plain string (not an accidental list) ---
-        if not isinstance(self.synthesis_system, str):
-            raise ValueError(
-                f"PipelineConfig.synthesis_system must be a string, "
-                f"got {type(self.synthesis_system).__name__!r}"
-            )
-
-        # --- validate meta-review fields ---
-        if self.meta_review_interval < 0:
-            raise ValueError(
-                f"PipelineConfig.meta_review_interval must be >= 0, "
-                f"got {self.meta_review_interval}"
-            )
-        if self.auto_push_interval < 0:
-            raise ValueError(
-                f"PipelineConfig.auto_push_interval must be >= 0, "
-                f"got {self.auto_push_interval}"
-            )
-        if self.auto_tag_interval < 0:
-            raise ValueError(
-                f"PipelineConfig.auto_tag_interval must be >= 0, "
-                f"got {self.auto_tag_interval}"
-            )
-        if not isinstance(self.auto_tag_prefix, str) or not self.auto_tag_prefix.strip():
-            raise ValueError(
-                f"PipelineConfig.auto_tag_prefix must be a non-empty string, "
-                f"got {self.auto_tag_prefix!r}"
-            )
-        if self.run_mode not in ("automatic", "manual"):
-            raise ValueError(
-                f"PipelineConfig.run_mode must be 'automatic' or 'manual', "
-                f"got {self.run_mode!r}"
-            )
-
-        # --- scale warnings for inner_rounds / outer_rounds ---
-        if self.outer_rounds > 20:
-            log.warning(
-                "PipelineConfig.outer_rounds=%d is very large — "
-                "consider using patience early-stopping instead",
-                self.outer_rounds,
-            )
-        if self.inner_rounds > 10:
-            log.warning(
-                "PipelineConfig.inner_rounds=%d is very large — "
-                "more than 5–6 inner rounds rarely improves synthesis quality",
-                self.inner_rounds,
-            )
-
-        if not self.phases:
-            log.warning(
-                "PipelineConfig.phases is empty — the pipeline will exit immediately"
-            )
-
-        # Scale sanity check: each inner round makes 3 LLM calls (proposal +
-        # basic eval + diffusion eval) plus 1 synthesis call per phase.  Warn
-        # loudly when the configured budget exceeds 500 API calls so operators
-        # don't accidentally submit a job that runs for hours/costs a fortune.
-        n_phases = len(self.phases) if self.phases else 0
-        if n_phases > 0:
-            # per-phase inner_rounds may override the default; use the default
-            # here as a conservative estimate (actual may be higher).
-            estimated_calls = self.outer_rounds * n_phases * (self.inner_rounds * 3 + 1)
-            if estimated_calls > 500:
-                log.warning(
-                    "PipelineConfig: estimated LLM call budget is ~%d "
-                    "(%d outer × %d phases × (%d inner×3 + 1 synthesis)) — "
-                    "this may be expensive and time-consuming; "
-                    "reduce outer_rounds/inner_rounds or add patience early-stopping",
-                    estimated_calls,
-                    self.outer_rounds,
-                    n_phases,
-                    self.inner_rounds,
-                )
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> PipelineConfig:
-        """Build from a plain dict (e.g. loaded from YAML/JSON).
-
-        Raises ValueError on unknown top-level keys and on unknown/missing keys
-        in each phase entry so that typos in config files are caught immediately
-        rather than surfacing as a cryptic TypeError deep inside a run.
-        """
-        import dataclasses
-
-        data = dict(data)
-        # Strip JSON "comment" keys (// or _ prefix) before validation.
-        data = {k: v for k, v in data.items() if not k.startswith("//") and not k.startswith("_")}
-        harness_data = data.pop("harness", {})
-        dual_data = data.pop("dual_evaluator", {})
-
-        known_fields = {f.name for f in dataclasses.fields(cls)}
-        unknown = set(data) - known_fields
-        if unknown:
-            raise ValueError(
-                f"PipelineConfig: unknown config key(s): {sorted(unknown)}.  "
-                f"Known keys: {sorted(known_fields)}"
-            )
-
-        known_dual = {f.name for f in dataclasses.fields(DualEvaluatorConfig)}
-        unknown_dual = set(dual_data) - known_dual
-        if unknown_dual:
-            raise ValueError(
-                f"DualEvaluatorConfig: unknown config key(s): {sorted(unknown_dual)}.  "
-                f"Known keys: {sorted(known_dual)}"
-            )
-
-        # Eagerly validate each phase dict so that config typos (e.g.
-        # "sytem_prompt" instead of "system_prompt") are caught at startup
-        # rather than causing a cryptic TypeError during the first inner round.
-        phases_raw: list[Any] = data.get("phases", [])
-        if phases_raw:
-            # Import here to avoid a circular import at module load time
-            from harness.pipeline.phase import PhaseConfig as _PhaseConfig
-            known_phase = {f.name for f in dataclasses.fields(_PhaseConfig)}
-            # These fields have no defaults and MUST be supplied
-            required_phase = {
-                f.name for f in dataclasses.fields(_PhaseConfig)
-                if f.default is dataclasses.MISSING
-                and f.default_factory is dataclasses.MISSING  # type: ignore[misc]
-            }
-            for i, phase_raw in enumerate(phases_raw):
-                if not isinstance(phase_raw, dict):
-                    raise ValueError(
-                        f"PipelineConfig.phases[{i}] must be a dict, got {type(phase_raw).__name__}"
-                    )
-                # Strip comment keys from phase dicts too
-                phase_raw = {k: v for k, v in phase_raw.items()
-                             if not k.startswith("//") and not k.startswith("_")}
-                phases_raw[i] = phase_raw
-                unknown_phase = set(phase_raw) - known_phase
-                if unknown_phase:
-                    raise ValueError(
-                        f"PipelineConfig.phases[{i}] (name={phase_raw.get('name', '?')!r}): "
-                        f"unknown key(s): {sorted(unknown_phase)}.  "
-                        f"Known keys: {sorted(known_phase)}"
-                    )
-                missing_phase = required_phase - set(phase_raw)
-                if missing_phase:
-                    raise ValueError(
-                        f"PipelineConfig.phases[{i}] (name={phase_raw.get('name', '?')!r}): "
-                        f"missing required key(s): {sorted(missing_phase)}"
-                    )
-
-        return cls(
-            harness=HarnessConfig.from_dict(harness_data),
-            dual_evaluator=DualEvaluatorConfig(**dual_data),
-            **data,
-        )
+        return cls(**data)

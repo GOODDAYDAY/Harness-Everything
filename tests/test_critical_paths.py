@@ -1,12 +1,11 @@
 """Critical-path tests for tool dispatch, tag filtering, path security,
-config comment stripping, and meta-review prompt safety.
+and config comment stripping.
 
 These cover previously untested code paths that are high-risk:
 - ToolRegistry.execute() routing, allowed_tools enforcement, alias normalisation
 - ToolRegistry.filter_by_tags() semantics
 - Tool._resolve_and_check() path-security guards
-- PipelineConfig.from_dict() and HarnessConfig.from_dict() comment-key stripping
-- _auto_update_prompts() variable-preservation guard
+- HarnessConfig.from_dict() comment-key stripping
 """
 
 from __future__ import annotations
@@ -14,8 +13,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
-
 import pytest
 
 # Resolve circular-import ordering issue (same guard as test_tools_registry.py)
@@ -325,53 +322,14 @@ class TestPathSecurity:
 
 
 # ---------------------------------------------------------------------------
-# 4. Config comment stripping: PipelineConfig.from_dict() and HarnessConfig.from_dict()
+# 4. Config comment stripping: HarnessConfig.from_dict()
 # ---------------------------------------------------------------------------
 
 class TestConfigCommentStripping:
     """from_dict() silently drops // and _ prefixed keys (JSON comment convention)."""
 
-    def test_pipeline_config_strips_double_slash_keys(self, tmp_path):
-        """PipelineConfig.from_dict() must silently drop keys starting with '//'."""
-        from harness.core.config import PipelineConfig
-        data = {
-            "// this is a comment": "ignored",
-            "//another": "also ignored",
-            "outer_rounds": 2,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        cfg = PipelineConfig.from_dict(data)
-        assert cfg.outer_rounds == 2
-        # No error means the // keys were stripped before validation
-
-    def test_pipeline_config_strips_underscore_prefix_keys(self, tmp_path):
-        """PipelineConfig.from_dict() must silently drop keys starting with '_'."""
-        from harness.core.config import PipelineConfig
-        data = {
-            "_comment": "ignored",
-            "_todo": "also ignored",
-            "outer_rounds": 3,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        cfg = PipelineConfig.from_dict(data)
-        assert cfg.outer_rounds == 3
-
-    def test_pipeline_config_raises_on_truly_unknown_keys(self, tmp_path):
-        """Keys that are neither comments nor valid fields must raise ValueError."""
-        from harness.core.config import PipelineConfig
-        data = {
-            "totally_unknown_field": "bad",
-            "harness": {"workspace": str(tmp_path)},
-        }
-        with pytest.raises(ValueError, match="unknown config key"):
-            PipelineConfig.from_dict(data)
-
     def test_harness_config_strips_comment_keys(self, tmp_path):
-        """HarnessConfig.from_dict() must also strip // and _ prefixed keys."""
+        """HarnessConfig.from_dict() must strip // and _ prefixed keys."""
         from harness.core.config import HarnessConfig
         data = {
             "// model comment": "ignored",
@@ -381,317 +339,15 @@ class TestConfigCommentStripping:
         cfg = HarnessConfig.from_dict(data)
         assert cfg.workspace == str(Path(str(tmp_path)).resolve())
 
-    def test_phase_config_strips_comment_keys(self, tmp_path):
-        """PhaseConfig.from_dict() must strip // and _ prefixed keys."""
-        from harness.pipeline.phase import PhaseConfig
+    def test_harness_config_raises_on_truly_unknown_keys(self, tmp_path):
+        """Keys that are neither comments nor valid fields must raise ValueError."""
+        from harness.core.config import HarnessConfig
         data = {
-            "// comment": "ignored",
-            "_todo": "ignored",
-            "name": "test_phase",
-            "index": 0,
-            "system_prompt": "Do something",
+            "totally_unknown_field": "bad",
+            "workspace": str(tmp_path),
         }
-        phase = PhaseConfig.from_dict(data)
-        assert phase.name == "test_phase"
-        assert phase.index == 0
-
-
-# ---------------------------------------------------------------------------
-# 5. Meta-review safety: _auto_update_prompts() variable-preservation guard
-# ---------------------------------------------------------------------------
-
-class TestAutoUpdatePromptsGuard:
-    """_auto_update_prompts() must reject rewrites that drop template variables."""
-
-    def _make_pipeline_loop(self, tmp_path):
-        """Build a minimal PipelineLoop for testing _auto_update_prompts."""
-        from harness.core.config import PipelineConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        # Patch LLM to avoid real API calls
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        from harness.core.artifacts import ArtifactStore
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-        return loop
-
-    @pytest.mark.asyncio
-    async def test_rewrite_dropping_variables_is_rejected(self, tmp_path):
-        """A rewritten prompt that drops $file_context must be rejected; original kept."""
-        from harness.pipeline.phase import PhaseConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop
-        from harness.core.config import PipelineConfig
-        from harness.core.artifacts import ArtifactStore
-        from harness.core.llm import LLM
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-
-        # LLM mock: returns a prompt that drops $file_context
-        mock_llm = AsyncMock(spec=LLM)
-        mock_llm.call = AsyncMock(
-            return_value="Rewritten prompt without the important variable"
-        )
-        loop.llm = mock_llm
-
-        original_prompt = "Do $file_context things with $prior_best guidance"
-        phase = PhaseConfig(
-            name="test",
-            index=0,
-            system_prompt=original_prompt,
-        )
-
-        updated = await loop._auto_update_prompts(
-            meta_review_text="Some review", phases=[phase], outer=0
-        )
-        # The guard must have caught the missing variables and kept the original
-        assert updated[0].system_prompt == original_prompt
-
-    @pytest.mark.asyncio
-    async def test_rewrite_preserving_variables_is_accepted(self, tmp_path):
-        """A rewritten prompt that keeps all $variables must be applied."""
-        from harness.pipeline.phase import PhaseConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop
-        from harness.core.config import PipelineConfig
-        from harness.core.artifacts import ArtifactStore
-        from harness.core.llm import LLM
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-
-        original_prompt = "Do $file_context things with $prior_best guidance"
-        new_prompt = "Improved: use $file_context and consider $prior_best carefully"
-
-        mock_llm = AsyncMock(spec=LLM)
-        mock_llm.call = AsyncMock(return_value=new_prompt)
-        loop.llm = mock_llm
-
-        phase = PhaseConfig(
-            name="test",
-            index=0,
-            system_prompt=original_prompt,
-        )
-
-        updated = await loop._auto_update_prompts(
-            meta_review_text="Some review", phases=[phase], outer=0
-        )
-        # All variables preserved → the new prompt should be applied
-        assert updated[0].system_prompt == new_prompt
-
-    @pytest.mark.asyncio
-    async def test_llm_failure_keeps_original_prompt(self, tmp_path):
-        """When the LLM call raises, the original prompt must be preserved."""
-        from harness.pipeline.phase import PhaseConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop
-        from harness.core.config import PipelineConfig
-        from harness.core.artifacts import ArtifactStore
-        from harness.core.llm import LLM
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-
-        original_prompt = "Do $file_context things"
-        mock_llm = AsyncMock(spec=LLM)
-        mock_llm.call = AsyncMock(side_effect=RuntimeError("API down"))
-        loop.llm = mock_llm
-
-        phase = PhaseConfig(
-            name="test",
-            index=0,
-            system_prompt=original_prompt,
-        )
-
-        updated = await loop._auto_update_prompts(
-            meta_review_text="Some review", phases=[phase], outer=0
-        )
-        # Exception must be handled gracefully; original prompt must survive
-        assert updated[0].system_prompt == original_prompt
-
-    @pytest.mark.asyncio
-    async def test_truncation_guard_rejects_very_short_rewrite(self, tmp_path):
-        """A new prompt that is < 40% of the original length is rejected as truncated."""
-        from harness.pipeline.phase import PhaseConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop
-        from harness.core.config import PipelineConfig
-        from harness.core.artifacts import ArtifactStore
-        from harness.core.llm import LLM
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-
-        # Original is 200 chars; new is only 20 chars (10% of original → truncated)
-        original_prompt = "A" * 200
-        truncated_prompt = "short"  # 5 chars — well below 40% of 200
-
-        mock_llm = AsyncMock(spec=LLM)
-        mock_llm.call = AsyncMock(return_value=truncated_prompt)
-        loop.llm = mock_llm
-
-        phase = PhaseConfig(
-            name="test",
-            index=0,
-            system_prompt=original_prompt,
-        )
-
-        updated = await loop._auto_update_prompts(
-            meta_review_text="Some review", phases=[phase], outer=0
-        )
-        # Truncation guard must reject the short rewrite and keep original
-        assert updated[0].system_prompt == original_prompt
-
-    @pytest.mark.asyncio
-    async def test_truncation_guard_accepts_rewrite_at_40_percent(self, tmp_path):
-        """A new prompt that is ≥ 40% of original length passes the truncation guard."""
-        from harness.pipeline.phase import PhaseConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop
-        from harness.core.config import PipelineConfig
-        from harness.core.artifacts import ArtifactStore
-        from harness.core.llm import LLM
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-
-        # Original is 100 chars; new is exactly 40 chars (40% → acceptable)
-        original_prompt = "X" * 100
-        new_prompt = "Y" * 40  # exactly 40% of original
-
-        mock_llm = AsyncMock(spec=LLM)
-        mock_llm.call = AsyncMock(return_value=new_prompt)
-        loop.llm = mock_llm
-
-        phase = PhaseConfig(
-            name="test",
-            index=0,
-            system_prompt=original_prompt,
-        )
-
-        updated = await loop._auto_update_prompts(
-            meta_review_text="Some review", phases=[phase], outer=0
-        )
-        # At 40% threshold, the rewrite should be accepted
-        assert updated[0].system_prompt == new_prompt
-
-    def test_prompt_rewrite_system_constant_is_defined(self):
-        """_PROMPT_REWRITE_SYSTEM must be a non-empty string constant."""
-        from harness.pipeline.pipeline_loop import _PROMPT_REWRITE_SYSTEM
-        assert isinstance(_PROMPT_REWRITE_SYSTEM, str)
-        assert len(_PROMPT_REWRITE_SYSTEM) > 100
-
-    def test_prompt_rewrite_system_instructs_output_only(self):
-        """_PROMPT_REWRITE_SYSTEM must instruct the model to output only the prompt."""
-        from harness.pipeline.pipeline_loop import _PROMPT_REWRITE_SYSTEM
-        # Must say to output only the prompt (no meta-commentary)
-        lower = _PROMPT_REWRITE_SYSTEM.lower()
-        assert "only" in lower
-
-    def test_prompt_rewrite_system_mentions_variable_preservation(self):
-        """_PROMPT_REWRITE_SYSTEM must remind the model to preserve $variables."""
-        from harness.pipeline.pipeline_loop import _PROMPT_REWRITE_SYSTEM
-        # Must mention preserving template variables
-        assert "$" in _PROMPT_REWRITE_SYSTEM or "variable" in _PROMPT_REWRITE_SYSTEM.lower()
-
-    @pytest.mark.asyncio
-    async def test_prompt_rewrite_system_is_passed_to_llm(self, tmp_path):
-        """The _PROMPT_REWRITE_SYSTEM constant must be passed as the system= arg."""
-        from harness.pipeline.phase import PhaseConfig
-        from harness.pipeline.pipeline_loop import PipelineLoop, _PROMPT_REWRITE_SYSTEM
-        from harness.core.config import PipelineConfig
-        from harness.core.artifacts import ArtifactStore
-        from harness.core.llm import LLM
-
-        cfg_data = {
-            "outer_rounds": 1,
-            "inner_rounds": 1,
-            "phases": [],
-            "harness": {"workspace": str(tmp_path)},
-        }
-        pipeline_cfg = PipelineConfig.from_dict(cfg_data)
-        loop = object.__new__(PipelineLoop)
-        loop.config = pipeline_cfg
-        loop._meta_review_context = ""
-        loop._shutdown_requested = False
-        loop.artifacts = ArtifactStore(str(tmp_path / "output"))
-
-        original_prompt = "Do the thing with $task and $file_context."
-        new_prompt = "Do the improved thing with $task and $file_context."
-
-        mock_llm = AsyncMock(spec=LLM)
-        mock_llm.call = AsyncMock(return_value=new_prompt)
-        loop.llm = mock_llm
-
-        phase = PhaseConfig(name="test", index=0, system_prompt=original_prompt)
-        await loop._auto_update_prompts(
-            meta_review_text="Make it better", phases=[phase], outer=0
-        )
-
-        # Verify _PROMPT_REWRITE_SYSTEM was used as the system= kwarg
-        call_kwargs = mock_llm.call.call_args
-        assert call_kwargs is not None
-        # system= may be positional or keyword
-        passed_system = (
-            call_kwargs.kwargs.get("system")
-            or (call_kwargs.args[1] if len(call_kwargs.args) > 1 else None)
-        )
-        assert passed_system == _PROMPT_REWRITE_SYSTEM
+        with pytest.raises(ValueError, match="unknown config key"):
+            HarnessConfig.from_dict(data)
 
 
 # ---------------------------------------------------------------------------

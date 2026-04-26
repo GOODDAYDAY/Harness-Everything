@@ -97,7 +97,7 @@ class ImportSmokeHook(VerificationHook):
         # pipelines with different import entry points.
         self.modules = modules or [
             "harness.core.config",
-            "harness.pipeline.pipeline_loop",
+            "harness.agent",
             "harness.tools",
         ]
         # smoke_calls are arbitrary Python statements executed after the
@@ -189,10 +189,10 @@ class StaticCheckHook(VerificationHook):
     of a merge artefact or a hallucinated import.
 
     Behaviour with missing tools:
-      • Neither ``ruff`` nor ``pyflakes`` importable → log a WARNING, pass
+      * Neither ``ruff`` nor ``pyflakes`` importable -> log a WARNING, pass
         the hook. The build does not block. This preserves local-dev
         ergonomics and avoids a chicken-and-egg on fresh installs.
-      • Tool present and reports errors → fail the hook (gates the commit).
+      * Tool present and reports errors -> fail the hook (gates the commit).
 
     Scope: checks only the files changed in this phase, sourced from the
     hook context (``context["files_changed"]``). Falls back to a no-op if
@@ -434,49 +434,3 @@ class GitCommitHook(VerificationHook):
 
         output = "\n".join(results)
         return HookResult(passed=all_passed, output=output)
-
-
-def build_hooks(
-    phase_config: Any, *, pipeline_config: Any = None
-) -> list[VerificationHook]:
-    """Build verification hooks from a PhaseConfig.
-
-    ``pipeline_config`` (PipelineConfig) is optional; when provided its
-    ``rich_commit_metadata`` flag is forwarded to ``GitCommitHook``.
-    """
-    hooks: list[VerificationHook] = []
-
-    if phase_config.syntax_check_patterns:
-        hooks.append(SyntaxCheckHook(phase_config.syntax_check_patterns))
-
-    # Static check (ruff F821 etc.) runs right after syntax: same order of
-    # magnitude cost, catches strictly more (undefined names, redefinitions,
-    # unused imports). Opt-in via commit_on_success so advisory/debate-only
-    # phases don't pay the subprocess cost; implementation phases get it for
-    # free whenever a commit would otherwise land.
-    if phase_config.commit_on_success:
-        hooks.append(StaticCheckHook())
-
-    # Import smoke: opt-in via a non-empty module list. Keep it ordered
-    # before PytestHook/GitCommitHook so a failing import (gates_commit=True)
-    # reliably suppresses the commit via the short-circuit below.
-    _smoke_modules = getattr(phase_config, "import_smoke_modules", None)
-    _smoke_calls = getattr(phase_config, "import_smoke_calls", None)
-    if _smoke_modules or _smoke_calls:
-        hooks.append(
-            ImportSmokeHook(
-                modules=_smoke_modules or None,
-                smoke_calls=_smoke_calls or None,
-            )
-        )
-
-    if phase_config.run_tests:
-        hooks.append(PytestHook(phase_config.test_path))
-
-    if phase_config.commit_on_success and phase_config.commit_repos:
-        rich = bool(
-            pipeline_config and getattr(pipeline_config, "rich_commit_metadata", False)
-        )
-        hooks.append(GitCommitHook(phase_config.commit_repos, rich_metadata=rich))
-
-    return hooks

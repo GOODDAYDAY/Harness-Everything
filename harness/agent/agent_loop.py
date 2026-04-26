@@ -44,7 +44,7 @@ from harness.core.artifacts import ArtifactStore
 from harness.core.config import HarnessConfig
 from harness.core.llm import LLM
 from harness.core.signal_util import install_shutdown_handlers
-from harness.pipeline.hooks import (
+from harness.core.hooks import (
     ImportSmokeHook,
     StaticCheckHook,
     SyntaxCheckHook,

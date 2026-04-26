@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Harness-Everything is an AI coding harness that uses any Anthropic-compatible LLM (Claude, DeepSeek, etc.) to autonomously improve codebases. Two modes: simple (single task) and pipeline (multi-phase iterative improvement).
+Harness-Everything is an AI coding harness that uses any Anthropic-compatible LLM (Claude, DeepSeek, etc.) to autonomously improve codebases. It runs in agent mode: a single LLM with full tool access, persistent notes, and multi-cycle execution.
 
 ## When asked to investigate the live pipeline
 
@@ -22,50 +22,46 @@ and the gotchas that have already burned past sessions.
 ## Key Commands
 
 ```bash
-# Run simple mode
-python main.py "task description" [config.json]
-
-# Run pipeline mode
-python main.py --pipeline pipeline_config.json
+# Run agent mode
+python main.py <config.json>
 
 # Syntax check all harness code
 python -m py_compile harness/*.py harness/tools/*.py
 
 # Quick import verification
-python -c "from harness.config import PipelineConfig, HarnessConfig; print('OK')"
+python -c "from harness.agent import AgentConfig, AgentLoop; print('OK')"
 ```
 
 ## Architecture Rules
 
 - **Tool pattern**: Every tool is a `Tool` subclass in `harness/tools/`. Must implement `name`, `description`, `input_schema()`, `async execute(config, **params) -> ToolResult`. Register in `tools/__init__.py` `_ALL_TOOLS`.
 - **Path security**: Any tool that accesses the filesystem must call `self._check_path(config, path)` before reading/writing. Never bypass this.
-- **Config is data**: All project-specific content (prompts, paths, API URLs) lives in pipeline JSON configs, not in code. Code is generic.
+- **Config is data**: All project-specific content (prompts, paths, API URLs) lives in JSON configs, not in code. Code is generic.
 - **Async**: All LLM calls and tool executions are async. Use `asyncio.run()` only at the entry point (`main.py`).
-- **Dataclasses for data**: `PhaseConfig`, `HarnessConfig`, `PipelineConfig`, `ToolResult`, `InnerResult`, `PhaseResult` are all dataclasses. No behavior in data classes (except `from_dict()` and simple properties).
 
 ## File Layout
 
 ```
-main.py                    # CLI entry point
+main.py                    # CLI entry point (agent-only)
 harness/
-  config.py                # HarnessConfig, PipelineConfig, DualEvaluatorConfig
-  llm.py                   # LLM client (retry, pruning, streaming)
-  loop.py                  # Simple mode: HarnessLoop
-  pipeline.py              # Pipeline mode: PipelineLoop
-  phase.py                 # PhaseConfig, InnerResult, PhaseResult (data only)
-  phase_runner.py          # PhaseRunner (execute one phase)
-  planner.py               # Three-way planner
-  executor.py              # Tool-use executor
-  evaluator.py             # Three-way evaluator
-  dual_evaluator.py        # Dual isolated evaluator
-  three_way.py             # ThreeWayResolver pattern
-  memory.py                # Cross-round learning (JSONL)
-  artifacts.py             # Hierarchical artifact storage
-  checkpoint.py            # Resume-safe .done markers
-  metrics.py               # Structured metrics collector
-  hooks.py                 # Verification hooks (syntax, pytest)
-  static_analysis.py       # Deterministic code checks
-  project_context.py       # Project metadata injection
+  core/
+    config.py              # HarnessConfig
+    llm.py                 # LLM client (retry, pruning, streaming)
+    artifacts.py           # Hierarchical artifact storage
+    checkpoint.py          # Resume-safe .done markers
+    hooks.py               # Verification hooks (syntax, import smoke, static)
+    project_context.py     # Project metadata injection
+    security.py            # Path security validation
+    signal_util.py         # Shutdown signal handlers
+  agent/
+    agent_loop.py          # AgentLoop — the main execution engine
+    cycle_metrics.py       # Per-cycle metrics collection
+  evaluation/
+    dual_evaluator.py      # Dual isolated evaluator (DualScore, ScoreItem)
+    static_analysis.py     # Deterministic code checks
+    metrics.py             # Structured metrics collector
+  prompts/
+    dual_evaluator.py      # Dual evaluator prompts
   tools/
     base.py                # Tool ABC, ToolResult
     registry.py            # ToolRegistry (dispatch, alias normalization)
@@ -82,17 +78,12 @@ harness/
     code_analysis.py       # AST-based analysis
     symbol_extractor.py    # Python symbol extraction
     cross_reference.py     # Import graph / xref
-    _ast_utils.py          # (reserved for shared AST helpers)
+    _ast_utils.py          # Shared AST helpers
     find_replace.py        # Multi-file find/replace
     diff_files.py          # File differ
     test_runner.py         # Pytest integration
     python_eval.py         # Safe Python eval
     web_search.py          # DuckDuckGo (opt-in)
-  prompts/
-    planner.py             # Three-way planner prompts
-    evaluator.py           # Three-way evaluator prompts
-    dual_evaluator.py      # Dual evaluator prompts
-    synthesis.py           # Synthesis prompts
 ```
 
 ## Common Patterns
@@ -103,22 +94,14 @@ harness/
 3. If file-accessing: set `requires_path_check = True` and call `self._check_path()`
 4. Add import to `harness/tools/__init__.py` and append to `_ALL_TOOLS`
 
-**Pipeline config template variables:**
-- `$file_context` — source code injected by glob patterns
-- `$prior_best` — best proposal from previous rounds
-- `$syntax_errors` — errors from syntax check hook
-- `$falsifiable_criterion` — evaluation criterion from phase config
-
 **LLM provider switch:**
-Set `base_url` and `api_key` in the pipeline config's `harness` section. Env fallbacks: `HARNESS_BASE_URL`, `HARNESS_API_KEY`.
+Set `base_url` and `api_key` in the agent config JSON's `harness` section. Env fallbacks: `HARNESS_BASE_URL`, `HARNESS_API_KEY`.
 
 ## What NOT to Do
 
-- Don't put project-specific content (prompts, URLs, paths) in Python code — it goes in pipeline JSON configs
+- Don't put project-specific content (prompts, URLs, paths) in Python code — it goes in JSON configs
 - Don't bypass `_check_path()` in tools — it's the security boundary
 - Don't use `ANTHROPIC_BASE_URL` env var — it conflicts with Claude Code's proxy. Use `HARNESS_BASE_URL` instead
-- Don't define `metrics` or other shared state as local variables in `PipelineLoop.run()` — use `self.` for anything accessed by other methods
-- Pipeline JSON configs (`pipeline_*.json`) are gitignored (except `pipeline_example_*.json`) because they contain sensitive paths and API URLs
 
 ## Sensitive Information — Do Not Commit
 
@@ -138,10 +121,9 @@ The following categories of information must never appear in tracked files or gi
 - API keys, auth tokens, passwords — even in comments or examples
 - Database connection strings
 
-**Project-specific pipeline configs**
-- `pipeline_*.json` files contain workspace paths, API URLs, and detailed internal architecture descriptions
-- They are gitignored by design — keep it that way
-- Use `pipeline_example_*.json` as sanitized templates for sharing
+**Project-specific agent configs**
+- Non-example `agent_*.json` files may contain workspace paths and API URLs
+- Use `agent_example*.json` as sanitized templates for sharing
 
 **If sensitive content is accidentally committed**, rewrite history with:
 ```bash

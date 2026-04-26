@@ -1,7 +1,7 @@
 """Unit tests for harness.core.config.
 
-Covers: HarnessConfig, PipelineConfig, DualEvaluatorConfig validation,
-is_path_allowed(), from_dict(), startup_banner(), and apply_log_level().
+Covers: HarnessConfig validation, is_path_allowed(), from_dict(),
+startup_banner(), and apply_log_level().
 """
 from __future__ import annotations
 
@@ -11,13 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.core.config import (
-    DualEvaluatorConfig,
-    EvaluatorConfig,
-    HarnessConfig,
-    PipelineConfig,
-    PlannerConfig,
-)
+from harness.core.config import HarnessConfig
 
 
 # ---------------------------------------------------------------------------
@@ -281,20 +275,6 @@ class TestHarnessFromDict:
                 {"workspace": str(tmp_path), "model": "test", "bogus_key": 42}
             )
 
-    def test_unknown_planner_key_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="planner"):
-            HarnessConfig.from_dict(
-                {"workspace": str(tmp_path), "model": "test",
-                 "planner": {"no_such_field": "oops"}}
-            )
-
-    def test_unknown_evaluator_key_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="evaluator"):
-            HarnessConfig.from_dict(
-                {"workspace": str(tmp_path), "model": "test",
-                 "evaluator": {"typo_field": "oops"}}
-            )
-
     def test_comment_keys_stripped(self, tmp_path: Path) -> None:
         # Keys starting with // or _ should not raise unknown key errors
         cfg = HarnessConfig.from_dict(
@@ -304,218 +284,7 @@ class TestHarnessFromDict:
         )
         assert cfg.model == "test"
 
-    def test_planner_subdict_applied(self, tmp_path: Path) -> None:
-        cfg = HarnessConfig.from_dict(
-            {"workspace": str(tmp_path), "model": "test",
-             "planner": {}}
-        )
-        assert isinstance(cfg.planner, PlannerConfig)
-
-    def test_evaluator_subdict_applied(self, tmp_path: Path) -> None:
-        cfg = HarnessConfig.from_dict(
-            {"workspace": str(tmp_path), "model": "test",
-             "evaluator": {}}
-        )
-        assert isinstance(cfg.evaluator, EvaluatorConfig)
-
     def test_empty_dict_uses_defaults(self) -> None:
         # Default workspace is '.' which exists
         cfg = HarnessConfig.from_dict({})
         assert cfg.max_tokens > 0
-
-
-# ===========================================================================
-# DualEvaluatorConfig
-# ===========================================================================
-
-class TestDualEvaluatorConfig:
-    def test_default_constructs(self) -> None:
-        cfg = DualEvaluatorConfig()
-        assert cfg.score_pattern is not None
-
-    def test_valid_score_pattern_accepted(self) -> None:
-        cfg = DualEvaluatorConfig(score_pattern=r"Score:\s*(\d+)")
-        assert cfg.score_pattern == r"Score:\s*(\d+)"
-
-    def test_invalid_score_pattern_raises(self) -> None:
-        with pytest.raises(ValueError, match="score_pattern"):
-            DualEvaluatorConfig(score_pattern="[unclosed")
-
-    def test_valid_regex_without_capture_group_accepted(self) -> None:
-        # score_pattern only requires valid regex, not a capture group
-        cfg = DualEvaluatorConfig(score_pattern=r"Score:\s*\d+")
-        assert cfg.score_pattern == r"Score:\s*\d+"
-
-
-# ===========================================================================
-# PipelineConfig.__post_init__ — validation
-# ===========================================================================
-
-class TestPipelineConfigValidation:
-    def _minimal(self, **overrides) -> PipelineConfig:
-        defaults: dict = {}
-        defaults.update(overrides)
-        return PipelineConfig(**defaults)
-
-    def test_default_constructs(self) -> None:
-        cfg = self._minimal()
-        assert cfg.outer_rounds >= 1
-
-    def test_invalid_evaluation_mode_raises(self) -> None:
-        with pytest.raises(ValueError, match="evaluation_mode"):
-            self._minimal(evaluation_mode="quadruple")
-
-    @pytest.mark.parametrize("mode", ["three_way", "dual_isolated"])
-    def test_valid_evaluation_modes_accepted(self, mode: str) -> None:
-        cfg = self._minimal(evaluation_mode=mode)
-        assert cfg.evaluation_mode == mode
-
-    def test_outer_rounds_below_one_raises(self) -> None:
-        with pytest.raises(ValueError, match="outer_rounds"):
-            self._minimal(outer_rounds=0)
-
-    def test_inner_rounds_below_one_raises(self) -> None:
-        with pytest.raises(ValueError, match="inner_rounds"):
-            self._minimal(inner_rounds=0)
-
-    def test_patience_zero_accepted(self) -> None:
-        # patience=0 means disabled, not invalid
-        cfg = self._minimal(patience=0)
-        assert cfg.patience == 0
-
-    def test_patience_negative_raises(self) -> None:
-        with pytest.raises(ValueError, match="patience"):
-            self._minimal(patience=-1)
-
-    def test_inner_early_exit_threshold_below_zero_raises(self) -> None:
-        with pytest.raises(ValueError, match="inner_early_exit_threshold"):
-            self._minimal(inner_early_exit_threshold=-0.1)
-
-    def test_inner_early_exit_threshold_above_10_raises(self) -> None:
-        with pytest.raises(ValueError, match="inner_early_exit_threshold"):
-            self._minimal(inner_early_exit_threshold=10.1)
-
-    def test_inner_early_exit_threshold_zero_accepted(self) -> None:
-        # 0.0 means disabled
-        cfg = self._minimal(inner_early_exit_threshold=0.0)
-        assert cfg.inner_early_exit_threshold == 0.0
-
-    def test_inner_early_exit_threshold_10_accepted(self) -> None:
-        cfg = self._minimal(inner_early_exit_threshold=10.0)
-        assert cfg.inner_early_exit_threshold == 10.0
-
-    def test_inner_early_exit_threshold_midrange_accepted(self) -> None:
-        cfg = self._minimal(inner_early_exit_threshold=7.0)
-        assert cfg.inner_early_exit_threshold == 7.0
-
-    def test_min_synthesis_chars_negative_raises(self) -> None:
-        with pytest.raises(ValueError, match="min_synthesis_chars"):
-            self._minimal(min_synthesis_chars=-1)
-
-    def test_min_synthesis_chars_zero_accepted(self) -> None:
-        cfg = self._minimal(min_synthesis_chars=0)
-        assert cfg.min_synthesis_chars == 0
-
-    def test_max_file_context_chars_below_one_raises(self) -> None:
-        with pytest.raises(ValueError, match="max_file_context_chars"):
-            self._minimal(max_file_context_chars=0)
-
-    def test_max_file_context_chars_minimum_accepted(self) -> None:
-        # Minimum is 1000, not just > 0
-        cfg = self._minimal(max_file_context_chars=1000)
-        assert cfg.max_file_context_chars == 1000
-
-    def test_max_file_context_chars_below_minimum_raises(self) -> None:
-        with pytest.raises(ValueError, match="max_file_context_chars"):
-            self._minimal(max_file_context_chars=100)
-
-    def test_synthesis_system_must_be_string(self) -> None:
-        with pytest.raises((ValueError, TypeError)):
-            self._minimal(synthesis_system=12345)  # type: ignore[arg-type]
-
-    def test_synthesis_system_string_accepted(self) -> None:
-        cfg = self._minimal(synthesis_system="You are a synthesiser.")
-        assert cfg.synthesis_system == "You are a synthesiser."
-
-    def test_run_mode_invalid_raises(self) -> None:
-        with pytest.raises(ValueError, match="run_mode"):
-            self._minimal(run_mode="turbo")
-
-    @pytest.mark.parametrize("mode", ["automatic", "manual"])
-    def test_run_mode_valid_accepted(self, mode: str) -> None:
-        cfg = self._minimal(run_mode=mode)
-        assert cfg.run_mode == mode
-
-    def test_meta_review_interval_zero_accepted(self) -> None:
-        # 0 = disabled, not invalid
-        cfg = self._minimal(meta_review_interval=0)
-        assert cfg.meta_review_interval == 0
-
-    def test_meta_review_interval_negative_raises(self) -> None:
-        with pytest.raises(ValueError, match="meta_review_interval"):
-            self._minimal(meta_review_interval=-1)
-
-    def test_meta_review_interval_positive_accepted(self) -> None:
-        cfg = self._minimal(meta_review_interval=3)
-        assert cfg.meta_review_interval == 3
-
-
-# ===========================================================================
-# PipelineConfig.from_dict()
-# ===========================================================================
-
-class TestPipelineFromDict:
-    def test_empty_dict_uses_defaults(self) -> None:
-        cfg = PipelineConfig.from_dict({})
-        assert cfg.outer_rounds >= 1
-
-    def test_unknown_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="unknown config key"):
-            PipelineConfig.from_dict({"no_such_field": 42})
-
-    def test_unknown_dual_evaluator_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="DualEvaluatorConfig"):
-            PipelineConfig.from_dict({"dual_evaluator": {"bad_field": 1}})
-
-    def test_comment_keys_stripped(self) -> None:
-        cfg = PipelineConfig.from_dict({
-            "// comment": "ignored",
-            "_note": "also ignored",
-        })
-        assert cfg.outer_rounds >= 1
-
-    def test_outer_rounds_applied(self) -> None:
-        cfg = PipelineConfig.from_dict({"outer_rounds": 5})
-        assert cfg.outer_rounds == 5
-
-    def test_phases_non_dict_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be a dict"):
-            PipelineConfig.from_dict({"phases": ["not_a_dict"]})
-
-    def test_phases_unknown_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="unknown key"):
-            PipelineConfig.from_dict(
-                {"phases": [{"name": "dev", "typo_key": "oops"}]}
-            )
-
-    def test_harness_subdict_applied(self, tmp_path: Path) -> None:
-        cfg = PipelineConfig.from_dict(
-            {"harness": {"model": "mymodel", "workspace": str(tmp_path)}}
-        )
-        assert cfg.harness.model == "mymodel"
-
-    def test_dual_evaluator_subdict_applied(self) -> None:
-        cfg = PipelineConfig.from_dict(
-            {"dual_evaluator": {}}
-        )
-        assert isinstance(cfg.dual_evaluator, DualEvaluatorConfig)
-
-    def test_phase_with_required_keys_and_comment_accepted(self) -> None:
-        # Comment keys in phase dicts should not cause unknown key errors
-        cfg = PipelineConfig.from_dict({
-            "phases": [
-                {"name": "dev", "index": 0, "system_prompt": "You are...",
-                 "// note": "ignored"}
-            ]
-        })
-        assert cfg.phases[0]["name"] == "dev"

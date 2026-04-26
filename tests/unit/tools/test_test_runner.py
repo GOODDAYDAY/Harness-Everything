@@ -256,7 +256,7 @@ class TestTestRunnerToolIntegration:
         """Running passing tests returns a PASS result."""
         result = await tool.execute(
             config,
-            test_path="tests/unit/pipeline/test_phase_config.py",
+            test_path="tests/unit/core/test_config.py",
             timeout=60,
             max_failures=5,
             pytest_args=[],
@@ -271,7 +271,7 @@ class TestTestRunnerToolIntegration:
         """JSON format returns parseable JSON with expected keys."""
         result = await tool.execute(
             config,
-            test_path="tests/unit/pipeline/test_phase_config.py",
+            test_path="tests/unit/core/test_config.py",
             timeout=60,
             max_failures=5,
             pytest_args=[],
@@ -303,7 +303,7 @@ class TestTestRunnerToolIntegration:
         """Passing -k filter restricts test selection and still succeeds."""
         result = await tool.execute(
             config,
-            test_path="tests/unit/pipeline/test_phase_config.py",
+            test_path="tests/unit/core/test_config.py",
             timeout=30,
             max_failures=5,
             pytest_args=["-k", "test_phase"],
@@ -316,7 +316,7 @@ class TestTestRunnerToolIntegration:
         """JSON output: tests list contains per-test entries with nodeid and outcome."""
         result = await tool.execute(
             config,
-            test_path="tests/unit/pipeline/test_phase_config.py",
+            test_path="tests/unit/core/test_config.py",
             timeout=60,
             max_failures=5,
             pytest_args=[],

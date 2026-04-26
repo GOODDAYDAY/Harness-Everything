@@ -9,11 +9,42 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from harness.core.llm import LLM
-from harness.pipeline.phase import DualScore, ScoreItem
 from harness.prompts import dual_evaluator as default_prompts
+
+
+@dataclass
+class ScoreItem:
+    """A single evaluator's score and critique."""
+
+    score: float
+    critique: str
+
+
+@dataclass
+class DualScore:
+    """Result from dual-isolated evaluation."""
+
+    basic: ScoreItem
+    diffusion: ScoreItem
+
+    @property
+    def combined(self) -> float:
+        """Combined score (weighted average of basic and diffusion, 0-10).
+
+        Uses 60% weight for basic score (detailed correctness evaluation) and
+        40% weight for diffusion score (system-level impact evaluation).
+        The result is clamped to the [0.0, 10.0] range.
+        """
+        if not (0.0 <= self.basic.score <= 10.0):
+            raise ValueError(f"Basic score {self.basic.score} is outside valid range [0.0, 10.0]")
+        if not (0.0 <= self.diffusion.score <= 10.0):
+            raise ValueError(f"Diffusion score {self.diffusion.score} is outside valid range [0.0, 10.0]")
+        weighted_score = 0.6 * self.basic.score + 0.4 * self.diffusion.score
+        return max(0.0, min(10.0, weighted_score))
 
 log = logging.getLogger(__name__)
 

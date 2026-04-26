@@ -1,9 +1,8 @@
-"""Harness-Everything entry point.
+"""Harness-Everything — autonomous agent for codebase improvement.
 
-Three modes:
-  Simple:   python main.py "task description" [config.json]
-  Pipeline: python main.py --pipeline pipeline_config.json
-  Agent:    python main.py --agent agent_config.json
+Usage:
+  python main.py <config.json>
+  python main.py --agent <config.json>   (legacy form, still supported)
 """
 
 from __future__ import annotations
@@ -15,9 +14,6 @@ import sys
 from pathlib import Path
 
 from harness.agent import AgentConfig, AgentLoop
-from harness.core.config import HarnessConfig, PipelineConfig
-from harness.pipeline.simple_loop import HarnessLoop
-from harness.pipeline.pipeline_loop import PipelineLoop
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -28,82 +24,10 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 
-# ===========================================================================
-# Simple mode
-# ===========================================================================
-
-
-async def run_simple(task: str, config: HarnessConfig) -> None:
-    loop = HarnessLoop(config)
-    result = await loop.run(task)
-
-    print("\n" + "=" * 60)
-    if result.success:
-        print(f"SUCCESS after {len(result.iterations)} iteration(s)")
-        print(f"Total tool calls: {result.total_tool_calls}")
-        if result.final_result:
-            print(f"Files changed: {result.final_result.files_changed}")
-    else:
-        print(f"FAILED after {len(result.iterations)} iteration(s)")
-        last = result.iterations[-1] if result.iterations else None
-        if last:
-            print(f"Last verdict: {last.verdict.reason}")
-            print(f"Last feedback: {last.verdict.feedback}")
-    print("=" * 60)
-
-
-# ===========================================================================
-# Pipeline mode
-# ===========================================================================
-
-
-async def run_pipeline(config: PipelineConfig) -> int:
-    """Run the pipeline. Returns the process exit code.
-
-    Exit codes:
-      0 — pipeline produced real work (best_score >= 1.0 OR fewer than 3 rounds
-          ran, which is too few to call catastrophic).
-      2 — zero-work catastrophe: rounds>=3 completed but every phase crashed
-          (total_phases_run == 0) OR best_score stayed at 0. Distinguishable
-          from natural clean exit so systemd (Restart=on-failure) restarts
-          and heartbeat can treat it as a fault. See 2026-04-19 incident
-          where a missing function silently tanked 6 rounds × ~4 phases.
-    """
-    loop = PipelineLoop(config)
-    result = await loop.run()
-
-    print("\n" + "=" * 60)
-    if result.success:
-        print(f"Pipeline completed: {result.rounds_completed} round(s)")
-    else:
-        print("Pipeline failed")
-    if result.final_proposal:
-        print(f"Final proposal: {result.final_proposal[:200]}...")
-    print("=" * 60)
-
-    zero_work = (
-        result.rounds_completed >= 3
-        and (result.total_phases_run == 0 or result.best_score < 1.0)
-    )
-    if zero_work:
-        print(
-            f"ZERO-WORK CATASTROPHE: rounds={result.rounds_completed} "
-            f"phases_run={result.total_phases_run} best_score={result.best_score:.1f} "
-            f"— exiting with code 2 so systemd treats this as a failure."
-        )
-        return 2
-    return 0
-
-
-# ===========================================================================
-# Agent mode
-# ===========================================================================
-
-
 async def run_agent(config: AgentConfig) -> int:
     """Run the autonomous agent. Returns the process exit code.
 
-    Exit codes mirror pipeline mode for systemd compatibility:
+    Exit codes:
       0 — mission complete OR at least one cycle produced work
       2 — nothing happened at all (zero cycles, or first cycle crashed
           before any tool call)
@@ -130,56 +54,24 @@ async def run_agent(config: AgentConfig) -> int:
     return 0
 
 
-# ===========================================================================
-# CLI
-# ===========================================================================
-
-
 def main() -> None:
     setup_logging()
     args = sys.argv[1:]
 
-    # Pipeline mode
-    if "--pipeline" in args:
-        idx = args.index("--pipeline")
-        if idx + 1 >= len(args):
-            print("Usage: python main.py --pipeline <config.json>")
-            sys.exit(1)
-        config_path = Path(args[idx + 1])
-        with open(config_path, encoding="utf-8") as f:
-            config = PipelineConfig.from_dict(json.load(f))
-        exit_code = asyncio.run(run_pipeline(config))
-        sys.exit(exit_code)
-
-    # Agent mode
+    # Strip legacy --agent flag if present
     if "--agent" in args:
-        idx = args.index("--agent")
-        if idx + 1 >= len(args):
-            print("Usage: python main.py --agent <config.json>")
-            sys.exit(1)
-        config_path = Path(args[idx + 1])
-        with open(config_path, encoding="utf-8") as f:
-            agent_cfg = AgentConfig.from_dict(json.load(f))
-        exit_code = asyncio.run(run_agent(agent_cfg))
-        sys.exit(exit_code)
+        args.remove("--agent")
 
-    # Simple mode
     if not args:
-        print("Usage:")
-        print('  python main.py "task description" [config.json]')
-        print("  python main.py --pipeline pipeline_config.json")
-        print("  python main.py --agent agent_config.json")
+        print("Usage: python main.py <config.json>")
         sys.exit(1)
 
-    task = args[0]
-    if len(args) >= 2 and not args[1].startswith("--"):
-        config_path = Path(args[1])
-        with open(config_path, encoding="utf-8") as f:
-            config = HarnessConfig.from_dict(json.load(f))
-    else:
-        config = HarnessConfig()
+    config_path = Path(args[0])
+    with open(config_path, encoding="utf-8") as f:
+        agent_cfg = AgentConfig.from_dict(json.load(f))
 
-    asyncio.run(run_simple(task, config))
+    exit_code = asyncio.run(run_agent(agent_cfg))
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
