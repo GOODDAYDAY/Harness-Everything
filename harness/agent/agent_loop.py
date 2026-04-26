@@ -1,18 +1,9 @@
-"""AgentLoop — third runtime (fully autonomous single-LLM agent).
+"""AgentLoop — fully autonomous single-LLM agent runtime.
 
-Unlike ``PipelineLoop`` (orchestrate → implement → review phases, multiple
-LLM roles per round) or ``HarnessLoop`` (plan-and-execute one task),
 ``AgentLoop`` is a single LLM with every tool available, running a
 connected tool-use dialogue for up to ``max_tool_turns`` calls per cycle.
 Cross-cycle context lives in a persistent notes file on disk so the agent
 can remember where it left off across restarts.
-
-When to use which mode:
-  * simple    — "fix this specific bug" — single call, commit, done
-  * pipeline  — "iterate on quality" — scored rounds with roles
-  * agent     — "maintain this codebase" — autonomous, open-ended, long-
-                horizon; the agent itself decides what to work on and when
-                to stop
 
 Control flow per cycle:
   1. Build system prompt = mission + persistent notes from disk
@@ -50,6 +41,7 @@ from harness.core.hooks import (
     SyntaxCheckHook,
     VerificationHook,
 )
+from harness.evaluation.dual_evaluator import DualEvaluator
 from harness.tools import build_registry
 from harness.tools.path_utils import collect_changed_paths
 from harness.agent.cycle_metrics import (
@@ -57,6 +49,7 @@ from harness.agent.cycle_metrics import (
     format_summary as format_metrics_summary,
     persist_cycle_metrics,
 )
+from harness.agent import agent_git, agent_eval
 
 log = logging.getLogger(__name__)
 
@@ -73,14 +66,13 @@ class AgentConfig:
     """Configuration for the autonomous agent loop.
 
     The ``harness`` field carries the underlying LLM + workspace + tool
-    settings (shared with simple / pipeline modes). The other fields are
-    agent-mode-specific.
+    settings. The other fields are agent-mode-specific.
     """
 
     harness: HarnessConfig
     mission: str = ""
     # Hard cap on cycles. 999 is effectively "run until MISSION COMPLETE or
-    # manual stop" — a 10-round pipeline chunk has no equivalent here.
+    # manual stop".
     max_cycles: int = 999
     # When True, the agent does not stop on "MISSION COMPLETE" — it keeps
     # cycling until max_cycles or graceful shutdown.  Designed for standing
@@ -113,9 +105,8 @@ class AgentConfig:
     auto_push: bool = False
     auto_push_remote: str = "origin"
     auto_push_branch: str = "main"
-    # Every N successful cycles, create a tag + push it. Matches the
-    # PipelineLoop auto-tag mechanism so cycle tags can trigger the same
-    # deploy workflow. 0 disables tagging entirely.
+    # Every N successful cycles, create a tag + push it. Cycle tags can
+    # trigger deploy workflows. 0 disables tagging entirely.
     # Tag format: <prefix>-<cycle_count>-<shortsha>, e.g. harness-r-10-a3f5d2c.
     auto_tag_interval: int = 0
     auto_tag_prefix: str = "harness-r"
@@ -126,6 +117,18 @@ class AgentConfig:
     pause_file: str = ".harness.pause"
     # How often (seconds) to check whether the pause file has been removed.
     pause_poll_interval: int = 30
+    # ── V5 auto-evaluation ──
+    # When True, the framework automatically runs DualEvaluator on each
+    # cycle's git diff after commit.  Scores are logged and appended to
+    # agent_notes.md so the agent sees quality trends without needing to
+    # self-evaluate.
+    auto_evaluate: bool = True
+    # ── V5 periodic meta-review ──
+    # Every ``meta_review_interval`` committed cycles, the framework runs
+    # a meta-review LLM call that analyses score trends + git history and
+    # produces strategic direction guidance, injected into subsequent
+    # cycles' system prompts.  Set to 0 to disable.
+    meta_review_interval: int = 5
     # Artifact root — a new run_id subdirectory is created under this.
     output_dir: str = "harness_output"
     run_id: str | None = None
@@ -142,8 +145,7 @@ class AgentConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AgentConfig":
-        # Strip comment-style keys (// or _ prefix) to match PipelineConfig's
-        # JSON-comment convention so the same idiom works here.
+        # Strip comment-style keys (// or _ prefix) — JSON-comment convention.
         cleaned = {
             k: v for k, v in data.items()
             if not k.startswith("//") and not k.startswith("_")
@@ -153,6 +155,8 @@ class AgentConfig:
             raise ValueError(
                 "agent config requires a 'harness' object with LLM/workspace settings"
             )
+        # Silently drop deprecated fields for backward compatibility.
+        cleaned.pop("meta_review_inject", None)
         cleaned["harness"] = HarnessConfig.from_dict(harness_data)
         return cls(**cleaned)
 
@@ -170,80 +174,32 @@ class AgentResult:
 
 
 _AGENT_BASE_SYSTEM = """\
-You are an autonomous software engineer working on a codebase without
-supervision for an extended session. Each turn you may call any tool in
-the schema to read the repo, search, edit, run tests, etc. You are the
-only agent here — there is no orchestrator, no evaluator, no next phase.
+You are an autonomous software engineer working on a codebase for an
+extended session. Each turn you call tools to read, search, edit, and
+test. You are the only agent — no orchestrator, no next phase.
 
-Guidelines:
-  * Work against the MISSION stated below. Break it into tasks you pick
-    yourself. Use the scratchpad tool to record findings that you'll
-    need after many turns — conversation history gets pruned, but
-    scratchpad notes survive compaction. Save key findings (function
-    signatures, constant values, architecture decisions) to scratchpad
-    IMMEDIATELY after reading, BEFORE making changes. Save at least 3-5
-    notes per cycle — if you haven't saved to scratchpad yet, do it now.
-  * ALWAYS BATCH TOOL CALLS. Every response must include as many
-    independent tool calls as possible — 5 files + 3 greps + git status
-    = ONE response with 9 calls, not 9 separate responses. Read-only
-    tools (batch_read, grep_search, glob_search, git_status, git_diff,
-    git_log, code_analysis, symbol_extractor, tree, etc.) run in
-    parallel. Only write/edit/bash calls must be sequential. A response
-    with a single read-only call is almost always a wasted turn.
-  * Prefer batch_read / batch_edit / batch_write over single-file tools;
-    symbol_extractor for function bodies, project_map for module overview,
-    cross_reference for callers, feature_search for concept-based lookup.
-  * Before you write, read the relevant code. Before you change a
-    function signature, use cross_reference to find all callers.
-  * Verify each change: lint_check (ruff) after edits, run tests when
-    tests exist (use test_runner tool, not bash). The post-cycle hook
-    will catch syntax errors, but failing in your own loop is faster.
-  * Commit discipline: each cycle ends with a commit of everything in
-    the workspace that changed (auto). Make your changes in the cycle
-    coherent.
-  * Budget: you have ~50 tool turns per cycle. Aim for 20-35. At turn 40,
-    STOP starting new tasks and wrap up what you have. Use context_budget
-    to check remaining turns.
-  * ONE THING PER CYCLE. Pick a single focused task (e.g. "write tests for
-    batch_edit" or "tighten evaluator rubric"). Do NOT combine unrelated
-    changes in one cycle.
+Core rules:
+  * ONE THING PER CYCLE. Pick a single focused task, finish it, commit.
+  * Read before you write. Use cross_reference before changing signatures.
+  * BATCH TOOL CALLS. Pack independent reads/searches into one response.
+    Prefer batch_read / batch_edit over single-file tools. Never use bash
+    to read files — use batch_read, grep_search, symbol_extractor, etc.
+  * Save key findings to scratchpad IMMEDIATELY — conversation history
+    gets pruned, scratchpad survives. Save at least 3 notes per cycle.
   * Focus persistence: START each cycle by reading your previous cycle's
-    "Next high-value target" from your notes. Execute THAT target unless
-    you have a concrete reason not to. Do not switch axes mid-cycle.
+    notes. Execute the planned next target unless there is a concrete
+    reason to switch.
+  * Verify your changes: lint_check after edits, test_runner when tests
+    exist. Unused imports (F401) will block your commit.
+  * Use context_budget to check remaining turns. Wrap up before running out.
 
-Anti-patterns — avoid these:
-  * NEVER use bash to read source files. Do NOT run
-    `python -c "import X; print(X.VAR)"` or `cat file.py` or
-    `head/tail/sed/grep`. ALWAYS use batch_read — it is faster, cheaper,
-    and the results appear in your tool history. This is the #1 source of
-    wasted tokens.
-    Wrong: `bash("cat file.py")` → Right: `batch_read(paths=[file], limit=200)`.
-    Wrong: `bash("grep -n def harness/core/llm.py")` → Right: `grep_search(...)`.
-    Wrong: `bash("sed -n '10,50p' foo.py")` → Right: `batch_read(offset=10, limit=40)`.
-    Wrong: `bash("wc -l file.py")` → Right: `file_info(paths=[file])`.
-    Wrong: `bash("ls harness/")` → Right: `list_directory(path="harness/")`.
-  * Re-reading the same file twice. Results from batch_read remain in
-    your conversation history — scratchpad them if you need them long-term.
-    For a specific function use symbol_extractor instead of a full file read.
-  * Do NOT re-read the same constants/variables repeatedly. If you need a
-    prompt constant from harness/prompts/*.py, read it ONCE with batch_read,
-    save the key parts to scratchpad, then reference scratchpad.
-  * Failing batch_edit with "match not found". This is almost always a
-    whitespace or indentation difference. Fix: use batch_read to see the
-    exact text first, then copy-paste into old_str verbatim.
-  * Single-tool-call responses. If you only have one tool call,
-    look for what else you can do in parallel.
-  * Leaving unused imports — ruff F401 will block your commit.
-  * Writing tests that only check types — test actual behaviour.
-  * Declaring done before running verification commands.
-  * Editing the same file 5 cycles in a row without a concrete reason.
-  * Cleaning up working code — focus on measurable improvements, not cosmetic reformatting.
-  * Do NOT revert intentional schema changes. If a tool's input_schema says
-    "Required — no default" or lacks a default value, that is INTENTIONAL —
-    it forces the LLM to think about what value to use. Never add defaults
-    back to make tools "easier" to call.
-  * Making changes to tool files that just reformat descriptions without
-    adding real value — changing "X" to "X (default: Y)" wastes a cycle.
+Quality feedback:
+  Your work is automatically evaluated after each committed cycle on 8
+  dimensions (correctness, completeness, specificity, architecture fit,
+  caller impact, maintenance debt, emergent behaviour, rollback safety).
+  Scores and critiques appear in your persistent notes — review them to
+  understand what the framework values. Every few cycles, a strategic
+  direction review analyses your score trends and adjusts priorities.
 
 Signalling the end of the mission:
 {completion_rules}\
@@ -299,9 +255,23 @@ class AgentLoop:
 
         self._notes_path = Path(self.artifacts.run_dir) / "agent_notes.md"
         self._shutdown_requested: bool = False
+
+        # Resolved repo paths for git operations (computed once).
+        self._repo_paths = agent_git.resolve_repo_paths(
+            config.harness.workspace, config.commit_repos,
+        )
+
+        # V5: auto-evaluation state
+        self._evaluator = DualEvaluator(self.llm) if config.auto_evaluate else None
+        self._score_history: list[dict[str, Any]] = []
+
+        # V5: meta-review state
+        self._meta_review_context: str = ""
+        self._last_review_hash: str = ""
+
         self._install_signal_handlers()
 
-    # ---- signal handling (mirrors PipelineLoop pattern) ----
+    # ---- signal handling ----
 
     def _request_shutdown(self) -> None:
         if not self._shutdown_requested:
@@ -384,6 +354,14 @@ class AgentLoop:
         )
         base = _AGENT_BASE_SYSTEM.format(completion_rules=completion_rules)
         parts = [base]
+
+        # Strategic direction from the last meta-review (before mission,
+        # so the agent reads direction first).
+        if self._meta_review_context:
+            parts.append(
+                f"\n## Strategic Direction\n{self._meta_review_context}\n"
+            )
+
         if self.config.mission:
             parts.append(f"\n## MISSION\n{self.config.mission}\n")
         notes = self._read_notes()
@@ -458,204 +436,6 @@ class AgentLoop:
             )
         return failures
 
-    # ---- commit ----
-
-    async def _auto_commit(
-        self, cycle: int, agent_text: str, changed_paths: list[str],
-    ) -> None:
-        """Stage only the paths the agent touched, then commit in each repo.
-
-        Using ``git add <path>`` instead of ``git add -A`` keeps unrelated
-        untracked files (editor settings, local debug logs, external-reference
-        docs, etc.) out of the commit. Empty changed_paths still produces an
-        allow-empty commit so the cycle is recorded in the log.
-        """
-        workspace = Path(self.config.harness.workspace)
-        summary_line = agent_text.strip().splitlines()[0][:80] if agent_text.strip() else ""
-        # When the tool loop was cut off, the summary is useless ("COMPLETED:
-        # unknown …").  Fall back to a `git diff --stat` summary so the commit
-        # message still describes what actually changed.
-        if "unknown (tool loop was cut off)" in summary_line:
-            summary_line = await self._diff_summary(workspace, changed_paths)
-        msg = f"agent: cycle {cycle + 1}"
-        if summary_line:
-            msg += f" — {summary_line}"
-
-        for repo in self.config.commit_repos:
-            repo_path = workspace / repo if not Path(repo).is_absolute() else Path(repo)
-            if not repo_path.is_dir():
-                log.warning("Agent: commit_repos entry not found: %s", repo_path)
-                continue
-            try:
-                if changed_paths:
-                    # ``git add -- <paths>`` records deletions too when the
-                    # path is gone, so delete_file / move_file sources
-                    # correctly show up as removals in the commit.
-                    add = await asyncio.create_subprocess_exec(
-                        "git", "add", "--", *changed_paths,
-                        cwd=str(repo_path),
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _, add_err = await add.communicate()
-                    if add.returncode != 0:
-                        log.warning(
-                            "Agent: git add failed in %s: %s",
-                            repo, add_err.decode(errors="replace")[:200],
-                        )
-                commit = await asyncio.create_subprocess_exec(
-                    "git", "commit", "--allow-empty", "-m", msg,
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, stderr = await commit.communicate()
-                if commit.returncode == 0:
-                    log.info(
-                        "Agent: committed cycle %d in %s (%d path(s))",
-                        cycle + 1, repo, len(changed_paths),
-                    )
-                else:
-                    log.warning(
-                        "Agent: commit failed in %s: %s",
-                        repo, stderr.decode(errors="replace")[:200],
-                    )
-            except Exception as exc:
-                log.warning("Agent: commit error in %s: %s", repo, exc)
-
-    @staticmethod
-    async def _diff_summary(workspace: Path, changed_paths: list[str]) -> str:
-        """Generate a one-line commit summary from ``git diff --stat``."""
-        try:
-            diff = await asyncio.create_subprocess_exec(
-                "git", "diff", "--cached", "--stat",
-                cwd=str(workspace),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await diff.communicate()
-            lines = stdout.decode(errors="replace").strip().splitlines()
-            # Last line of --stat is like "5 files changed, 30 insertions(+), 10 deletions(-)"
-            if lines:
-                stat_line = lines[-1].strip()
-                # Collect changed file basenames for context
-                file_names = [
-                    Path(p).name for p in changed_paths[:5]
-                ] if changed_paths else []
-                parts = ", ".join(file_names)
-                if len(changed_paths) > 5:
-                    parts += f" +{len(changed_paths) - 5} more"
-                summary = f"{parts} ({stat_line})" if parts else stat_line
-                return summary[:80]
-        except Exception as exc:
-            log.debug("_diff_summary failed: %s", exc)
-        return f"{len(changed_paths)} file(s) changed"
-
-    # ---- push / tag ----
-
-    async def _auto_push_head(self, cycle: int) -> None:
-        """``git push <remote> <branch>`` from each configured repo.
-
-        Noisy-by-default — a push failure shouldn't abort the cycle loop
-        (remote could be down, credentials could have rotated, etc.), just
-        logs WARNING so the operator can see it in the normal output stream.
-        """
-        if not self.config.auto_push:
-            return
-        workspace = Path(self.config.harness.workspace)
-        for repo in self.config.commit_repos:
-            repo_path = workspace / repo if not Path(repo).is_absolute() else Path(repo)
-            if not repo_path.is_dir():
-                continue
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "git", "push", self.config.auto_push_remote,
-                    self.config.auto_push_branch,
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, stderr = await proc.communicate()
-                if proc.returncode == 0:
-                    log.info("Agent: pushed cycle %d in %s", cycle + 1, repo)
-                else:
-                    log.warning(
-                        "Agent: push failed in %s: %s",
-                        repo, stderr.decode(errors="replace")[:200],
-                    )
-            except Exception as exc:
-                log.warning("Agent: push error in %s: %s", repo, exc)
-
-    async def _auto_tag_cycle(self, cycle: int) -> None:
-        """Tag HEAD after cycle N when ``cycle+1 % auto_tag_interval == 0``.
-
-        Disabled when ``auto_tag_interval`` is 0. Tag format is
-        ``<prefix>-<count>-<shortsha>`` mirroring the PipelineLoop naming
-        so any downstream CI watching ``<prefix>*`` fires identically.
-        """
-        interval = self.config.auto_tag_interval
-        if interval <= 0 or (cycle + 1) % interval != 0:
-            return
-        workspace = Path(self.config.harness.workspace)
-        for repo in self.config.commit_repos:
-            repo_path = workspace / repo if not Path(repo).is_absolute() else Path(repo)
-            if not repo_path.is_dir():
-                continue
-            try:
-                sha_proc = await asyncio.create_subprocess_exec(
-                    "git", "rev-parse", "--short=7", "HEAD",
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                sha_out, _ = await sha_proc.communicate()
-                if sha_proc.returncode != 0:
-                    log.warning("Agent: auto_tag rev-parse failed in %s", repo)
-                    continue
-                short_sha = sha_out.decode().strip()
-                tag_name = f"{self.config.auto_tag_prefix}-{cycle + 1}-{short_sha}"
-
-                tag_proc = await asyncio.create_subprocess_exec(
-                    "git", "tag", "-f", tag_name,
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, tag_err = await tag_proc.communicate()
-                if tag_proc.returncode != 0:
-                    log.warning(
-                        "Agent: auto_tag create failed in %s: %s",
-                        repo, tag_err.decode(errors="replace")[:200],
-                    )
-                    continue
-                log.info(
-                    "Agent: created tag %r in %s (cycle=%d)",
-                    tag_name, repo, cycle + 1,
-                )
-
-                if self.config.auto_tag_push:
-                    push_proc = await asyncio.create_subprocess_exec(
-                        "git", "push", self.config.auto_push_remote,
-                        tag_name,
-                        cwd=str(repo_path),
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _, push_err = await push_proc.communicate()
-                    if push_proc.returncode == 0:
-                        log.info(
-                            "Agent: pushed tag %r to %s",
-                            tag_name, self.config.auto_push_remote,
-                        )
-                    else:
-                        log.warning(
-                            "Agent: tag push failed for %r: %s",
-                            tag_name,
-                            push_err.decode(errors="replace")[:200],
-                        )
-            except Exception as exc:
-                log.warning("Agent: tag error in %s: %s", repo, exc)
-
     # ---- main loop ----
 
     async def run(self) -> AgentResult:
@@ -666,17 +446,12 @@ class AgentLoop:
 
         for cycle in range(self.config.max_cycles):
             cycles_run = cycle + 1
-            log.info(
-                "Agent cycle %d/%d starting",
-                cycle + 1, self.config.max_cycles,
-            )
+            log.info("Agent cycle %d/%d starting", cycles_run, self.config.max_cycles)
             t_start = time.monotonic()
 
-            # 1. build prompts
+            # ── Phase 1: Execute ──
             system = self._build_system(cycle)
             user_msg = self._build_cycle_user_message(cycle)
-
-            # 2. run tool-use loop
             try:
                 text, exec_log = await self.llm.call_with_tools(
                     [{"role": "user", "content": user_msg}],
@@ -685,100 +460,135 @@ class AgentLoop:
                     max_turns=self.config.harness.max_tool_turns,
                 )
             except Exception as exc:
-                log.error(
-                    "Agent cycle %d crashed: %s", cycle + 1, exc, exc_info=True,
-                )
-                final_summary = f"cycle {cycle + 1} crashed: {exc}"
+                log.error("Agent cycle %d crashed: %s", cycles_run, exc, exc_info=True)
+                final_summary = f"cycle {cycles_run} crashed: {exc}"
                 mission_status = "blocked"
                 break
 
             total_tool_calls += len(exec_log)
             elapsed = time.monotonic() - t_start
+            changed_paths = collect_changed_paths(exec_log)
             log.info(
-                "Agent cycle %d: %d tool calls in %.1fs (total tool calls: %d)",
-                cycle + 1, len(exec_log), elapsed, total_tool_calls,
+                "Agent cycle %d: %d tool calls in %.1fs",
+                cycles_run, len(exec_log), elapsed,
             )
 
-            # 3. post-cycle hooks
+            # ── Phase 2: Verify ──
             hook_failures = await self._run_hooks(cycle, exec_log)
 
-            # 4. auto-commit (only when all gating hooks passed). Stage the
-            # exact paths the agent's tool log declares it touched, not
-            # `git add -A` — unrelated untracked files (Claude Code settings,
-            # run logs, external-reference docs) would otherwise sneak into
-            # the commit.
-            changed_paths = collect_changed_paths(exec_log)
+            # ── Phase 3: Commit ──
+            committed = False
+            workspace = Path(self.config.harness.workspace)
             if self.config.auto_commit and not hook_failures:
-                await self._auto_commit(cycle, text, changed_paths)
-                await self._auto_push_head(cycle)
-                await self._auto_tag_cycle(cycle)
+                commit_msg = await agent_git.build_commit_message(
+                    cycle, text, changed_paths, workspace,
+                )
+                await agent_git.commit_cycle(
+                    self._repo_paths, cycle, commit_msg, changed_paths,
+                )
+                if self.config.auto_push:
+                    await agent_git.push_head(
+                        self._repo_paths,
+                        self.config.auto_push_remote,
+                        self.config.auto_push_branch,
+                        cycle,
+                    )
+                await agent_git.tag_cycle(
+                    self._repo_paths,
+                    cycle,
+                    self.config.auto_tag_interval,
+                    self.config.auto_tag_prefix,
+                    self.config.auto_push_remote,
+                    self.config.auto_tag_push,
+                )
+                committed = True
             elif hook_failures:
                 log.warning(
-                    "Agent: skipping commit for cycle %d — hook failures: %s",
-                    cycle + 1, "; ".join(hook_failures)[:500],
+                    "Agent: skipping commit (cycle %d) — %s",
+                    cycles_run, "; ".join(hook_failures)[:300],
                 )
 
-            # 5. persist cycle artifacts
-            self._persist_cycle(cycle, text, exec_log, hook_failures)
-
-            # 5b. compute and persist cycle metrics
+            # ── Phase 4: Evaluate ──
+            # 4a. Cycle metrics (always)
+            metrics_line = ""
             try:
                 cycle_m = collect_cycle_metrics(
-                    cycle=cycle + 1,
+                    cycle=cycles_run,
                     exec_log=exec_log,
                     changed_paths=changed_paths,
                     hook_failures=hook_failures,
                     elapsed_s=elapsed,
                 )
                 persist_cycle_metrics(
-                    cycle_m, self.artifacts.write, f"cycle_{cycle + 1}",
+                    cycle_m, self.artifacts.write, f"cycle_{cycles_run}",
                 )
                 metrics_line = format_metrics_summary(cycle_m)
             except Exception as exc:
-                log.warning("Agent: metrics collection failed cycle %d: %s", cycle + 1, exc)
-                metrics_line = ""
+                log.warning("Agent: metrics failed cycle %d: %s", cycles_run, exc)
 
-            # 6. compute cycle summary (notes) and append
+            # 4b. Auto-evaluation (when committed with changes)
+            eval_notes = ""
+            primary_repo = self._repo_paths[0] if self._repo_paths else workspace
+            if self.config.auto_evaluate and committed and changed_paths:
+                diff_text = await agent_git.get_cycle_diff(primary_repo)
+                eval_score = await agent_eval.run_evaluation(
+                    self._evaluator, cycle, diff_text, self.config.mission,
+                )
+                if eval_score is not None:
+                    agent_eval.record_score(eval_score, cycle, self._score_history)
+                    agent_eval.persist_eval_scores(
+                        eval_score, cycle, self.artifacts.write,
+                    )
+                    eval_notes = agent_eval.format_eval_notes(eval_score)
+
+            # 4c. Meta-review (every N cycles when we have scores)
+            interval = self.config.meta_review_interval
+            if (interval > 0
+                    and cycles_run % interval == 0
+                    and self._score_history):
+                result = await agent_eval.run_meta_review(
+                    self.llm, cycle, self._score_history,
+                    self._last_review_hash, self._read_notes(),
+                    primary_repo, self.artifacts.write,
+                )
+                self._meta_review_context = result.context
+                self._last_review_hash = result.head_hash
+
+            # ── Phase 5: Persist ──
+            self._persist_cycle(cycle, text, exec_log, hook_failures)
             summary = self._extract_cycle_summary(text, exec_log, hook_failures)
             if metrics_line:
                 summary = f"{metrics_line}\n{summary}"
+            if eval_notes:
+                summary += f"\n{eval_notes}"
             self._append_notes(cycle, summary)
 
-            # 7. check for mission-status signals
+            # ── Phase 6: Control ──
             lowered = (text or "").lower()
             if not self.config.continuous and _MISSION_COMPLETE_MARKER in lowered:
                 mission_status = "complete"
                 final_summary = text
-                log.info("Agent: MISSION COMPLETE signalled at cycle %d", cycle + 1)
+                log.info("Agent: MISSION COMPLETE at cycle %d", cycles_run)
                 break
             if _MISSION_BLOCKED_MARKER in lowered:
                 mission_status = "blocked"
                 final_summary = text
-                log.info("Agent: MISSION BLOCKED signalled at cycle %d", cycle + 1)
+                log.info("Agent: MISSION BLOCKED at cycle %d", cycles_run)
                 break
-
             if self._shutdown_requested:
                 mission_status = "partial"
                 final_summary = text
-                log.info(
-                    "Agent: graceful shutdown after cycle %d", cycle + 1,
-                )
+                log.info("Agent: graceful shutdown after cycle %d", cycles_run)
                 break
 
-            # 8. release cycle memory before sleeping / next cycle
-            final_summary = text  # preserve for post-loop summary
-            del text, exec_log, hook_failures, changed_paths, summary
+            final_summary = text
+            del text, exec_log, hook_failures, changed_paths, summary, eval_notes
             gc.collect()
 
-            # 9. pause gate — if the pause file exists, block until removed
             await self._check_pause(cycle)
             if self._shutdown_requested:
                 mission_status = "partial"
-                # `text` was deleted above; final_summary was already set
-                log.info(
-                    "Agent: shutdown requested during pause after cycle %d",
-                    cycle + 1,
-                )
+                log.info("Agent: shutdown during pause after cycle %d", cycles_run)
                 break
 
         # Write the final summary so find_resumable doesn't treat the run as
