@@ -101,6 +101,15 @@ def persist_eval_scores(
 # Formatting
 # ---------------------------------------------------------------------------
 
+def format_eval_oneliner(score: DualScore) -> str:
+    """One-line summary for git commit messages (no critique)."""
+    return (
+        f"basic={score.basic.score:.1f} "
+        f"diffusion={score.diffusion.score:.1f} "
+        f"combined={score.combined:.1f}"
+    )
+
+
 def format_eval_notes(score: DualScore) -> str:
     """Format evaluation scores as a compact string for agent_notes.md."""
     lines = [

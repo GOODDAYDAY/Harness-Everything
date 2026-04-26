@@ -42,11 +42,15 @@ def _primary_repo(repo_paths: list[Path], workspace: str | Path) -> Path:
 # Diff / hash queries
 # ---------------------------------------------------------------------------
 
-async def get_cycle_diff(repo_path: Path) -> str:
-    """Return ``git diff HEAD~1..HEAD``, truncated to 30 k chars."""
+async def get_staged_diff(repo_path: Path) -> str:
+    """Return ``git diff --cached`` (staged changes), truncated to 30 k chars.
+
+    Use this *before* committing to feed the evaluator without requiring
+    a commit to exist first.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "diff", "HEAD~1..HEAD",
+            "git", "diff", "--cached",
             cwd=str(repo_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -54,11 +58,11 @@ async def get_cycle_diff(repo_path: Path) -> str:
         stdout, _ = await proc.communicate()
         diff = stdout.decode(errors="replace")
         if len(diff) > 30_000:
-            log.debug("agent_git: diff truncated from %d to 30k chars", len(diff))
+            log.debug("agent_git: staged diff truncated from %d to 30k chars", len(diff))
             diff = diff[:30_000] + "\n\n... (diff truncated at 30k chars)"
         return diff
     except Exception as exc:
-        log.warning("agent_git: get_cycle_diff failed: %s", exc)
+        log.warning("agent_git: get_staged_diff failed: %s", exc)
         return ""
 
 
@@ -146,41 +150,76 @@ async def build_commit_message(
     agent_text: str,
     changed_paths: list[str],
     workspace: Path,
+    *,
+    metrics_line: str = "",
+    eval_line: str = "",
+    hooks_line: str = "",
 ) -> str:
-    """Build the commit message for this cycle."""
+    """Build a rich commit message with structured cycle data.
+
+    Format::
+
+        agent: cycle 5 — fix calendar handler
+
+        metrics: tools=23 success=85% files=3 elapsed=45s
+        eval: basic=7.2 diffusion=6.8 combined=7.0
+        hooks: syntax=pass static=pass import_smoke=pass
+    """
     summary_line = (
         agent_text.strip().splitlines()[0][:80] if agent_text.strip() else ""
     )
     if "unknown (tool loop was cut off)" in summary_line:
         summary_line = await diff_summary(workspace, changed_paths)
-    msg = f"agent: cycle {cycle + 1}"
+    title = f"agent: cycle {cycle + 1}"
     if summary_line:
-        msg += f" — {summary_line}"
-    return msg
+        title += f" — {summary_line}"
+
+    body_parts: list[str] = []
+    if metrics_line:
+        body_parts.append(f"metrics: {metrics_line}")
+    if eval_line:
+        body_parts.append(f"eval: {eval_line}")
+    if hooks_line:
+        body_parts.append(f"hooks: {hooks_line}")
+
+    if body_parts:
+        return title + "\n\n" + "\n".join(body_parts)
+    return title
 
 
-async def commit_cycle(
+async def stage_changes(
+    repo_paths: list[Path],
+    changed_paths: list[str],
+) -> None:
+    """``git add -- <paths>`` in each repo.  Call before evaluation."""
+    if not changed_paths:
+        return
+    for repo_path in repo_paths:
+        try:
+            add = await asyncio.create_subprocess_exec(
+                "git", "add", "--", *changed_paths,
+                cwd=str(repo_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, add_err = await add.communicate()
+            if add.returncode != 0:
+                log.warning(
+                    "agent_git: git add failed in %s: %s",
+                    repo_path, add_err.decode(errors="replace")[:200],
+                )
+        except Exception as exc:
+            log.warning("agent_git: stage error in %s: %s", repo_path, exc)
+
+
+async def commit_staged(
     repo_paths: list[Path],
     cycle: int,
     commit_msg: str,
-    changed_paths: list[str],
 ) -> None:
-    """Stage *changed_paths* and commit in each repo."""
+    """Commit already-staged changes in each repo (no ``git add``)."""
     for repo_path in repo_paths:
         try:
-            if changed_paths:
-                add = await asyncio.create_subprocess_exec(
-                    "git", "add", "--", *changed_paths,
-                    cwd=str(repo_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, add_err = await add.communicate()
-                if add.returncode != 0:
-                    log.warning(
-                        "agent_git: git add failed in %s: %s",
-                        repo_path, add_err.decode(errors="replace")[:200],
-                    )
             commit = await asyncio.create_subprocess_exec(
                 "git", "commit", "--allow-empty", "-m", commit_msg,
                 cwd=str(repo_path),
@@ -190,8 +229,8 @@ async def commit_cycle(
             _, stderr = await commit.communicate()
             if commit.returncode == 0:
                 log.info(
-                    "agent_git: committed cycle %d in %s (%d path(s))",
-                    cycle + 1, repo_path, len(changed_paths),
+                    "agent_git: committed cycle %d in %s",
+                    cycle + 1, repo_path,
                 )
             else:
                 log.warning(

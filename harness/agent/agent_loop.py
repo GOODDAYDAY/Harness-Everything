@@ -129,6 +129,12 @@ class AgentConfig:
     # produces strategic direction guidance, injected into subsequent
     # cycles' system prompts.  Set to 0 to disable.
     meta_review_interval: int = 5
+    # Project-specific parameters.  The framework does not interpret these —
+    # they are injected into the system prompt as-is so the agent can see
+    # project-level context (e.g. coding conventions, domain glossary,
+    # focus areas, forbidden patterns).  Keys and values should be strings
+    # or simple types that serialise to readable text.
+    extra: dict[str, Any] = field(default_factory=dict)
     # Artifact root — a new run_id subdirectory is created under this.
     output_dir: str = "harness_output"
     run_id: str | None = None
@@ -364,6 +370,9 @@ class AgentLoop:
 
         if self.config.mission:
             parts.append(f"\n## MISSION\n{self.config.mission}\n")
+        if self.config.extra:
+            lines = "\n".join(f"- **{k}**: {v}" for k, v in self.config.extra.items())
+            parts.append(f"\n## Project Parameters\n{lines}\n")
         notes = self._read_notes()
         if notes:
             parts.append(f"\n## Persistent Notes (previous cycles)\n{notes}\n")
@@ -476,32 +485,13 @@ class AgentLoop:
             # ── Phase 2: Verify ──
             hook_failures = await self._run_hooks(cycle, exec_log)
 
-            # ── Phase 3: Commit ──
-            committed = False
+            # ── Phase 3: Stage ──
+            staged = False
             workspace = Path(self.config.harness.workspace)
+            primary_repo = self._repo_paths[0] if self._repo_paths else workspace
             if self.config.auto_commit and not hook_failures:
-                commit_msg = await agent_git.build_commit_message(
-                    cycle, text, changed_paths, workspace,
-                )
-                await agent_git.commit_cycle(
-                    self._repo_paths, cycle, commit_msg, changed_paths,
-                )
-                if self.config.auto_push:
-                    await agent_git.push_head(
-                        self._repo_paths,
-                        self.config.auto_push_remote,
-                        self.config.auto_push_branch,
-                        cycle,
-                    )
-                await agent_git.tag_cycle(
-                    self._repo_paths,
-                    cycle,
-                    self.config.auto_tag_interval,
-                    self.config.auto_tag_prefix,
-                    self.config.auto_push_remote,
-                    self.config.auto_tag_push,
-                )
-                committed = True
+                await agent_git.stage_changes(self._repo_paths, changed_paths)
+                staged = True
             elif hook_failures:
                 log.warning(
                     "Agent: skipping commit (cycle %d) — %s",
@@ -526,11 +516,11 @@ class AgentLoop:
             except Exception as exc:
                 log.warning("Agent: metrics failed cycle %d: %s", cycles_run, exc)
 
-            # 4b. Auto-evaluation (when committed with changes)
+            # 4b. Auto-evaluation (on staged changes)
             eval_notes = ""
-            primary_repo = self._repo_paths[0] if self._repo_paths else workspace
-            if self.config.auto_evaluate and committed and changed_paths:
-                diff_text = await agent_git.get_cycle_diff(primary_repo)
+            eval_line = ""
+            if self.config.auto_evaluate and staged and changed_paths:
+                diff_text = await agent_git.get_staged_diff(primary_repo)
                 eval_score = await agent_eval.run_evaluation(
                     self._evaluator, cycle, diff_text, self.config.mission,
                 )
@@ -540,8 +530,44 @@ class AgentLoop:
                         eval_score, cycle, self.artifacts.write,
                     )
                     eval_notes = agent_eval.format_eval_notes(eval_score)
+                    eval_line = agent_eval.format_eval_oneliner(eval_score)
 
-            # 4c. Meta-review (every N cycles when we have scores)
+            # 4c. Hooks summary line
+            if not hook_failures:
+                hooks_line = "all passed"
+            else:
+                hooks_line = "FAILED: " + "; ".join(hook_failures)[:200]
+
+            # ── Phase 5: Commit ──
+            committed = False
+            if staged:
+                commit_msg = await agent_git.build_commit_message(
+                    cycle, text, changed_paths, workspace,
+                    metrics_line=metrics_line,
+                    eval_line=eval_line,
+                    hooks_line=hooks_line,
+                )
+                await agent_git.commit_staged(
+                    self._repo_paths, cycle, commit_msg,
+                )
+                if self.config.auto_push:
+                    await agent_git.push_head(
+                        self._repo_paths,
+                        self.config.auto_push_remote,
+                        self.config.auto_push_branch,
+                        cycle,
+                    )
+                await agent_git.tag_cycle(
+                    self._repo_paths,
+                    cycle,
+                    self.config.auto_tag_interval,
+                    self.config.auto_tag_prefix,
+                    self.config.auto_push_remote,
+                    self.config.auto_tag_push,
+                )
+                committed = True
+
+            # 4d. Meta-review (every N cycles when we have scores)
             interval = self.config.meta_review_interval
             if (interval > 0
                     and cycles_run % interval == 0
