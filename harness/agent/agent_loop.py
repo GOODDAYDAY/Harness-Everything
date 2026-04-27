@@ -49,7 +49,7 @@ from harness.agent.cycle_metrics import (
     format_summary as format_metrics_summary,
     persist_cycle_metrics,
 )
-from harness.agent import agent_git, agent_eval
+from harness.agent import agent_git, agent_eval, agent_squash
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +129,14 @@ class AgentConfig:
     # produces strategic direction guidance, injected into subsequent
     # cycles' system prompts.  Set to 0 to disable.
     meta_review_interval: int = 5
+    # ── Smart squash ──
+    # Every ``auto_squash_interval`` cycles, the framework asks the LLM to
+    # group recent commits by logical task and squash each group into a
+    # single clean commit.  Only runs when ``auto_push`` is False (squash
+    # rewrites history).  Set to 0 to disable.
+    auto_squash_interval: int = 0
+    # Minimum number of commits since last squash before triggering.
+    squash_min_commits: int = 3
     # Project-specific parameters.  The framework does not interpret these —
     # they are injected into the system prompt as-is so the agent can see
     # project-level context (e.g. coding conventions, domain glossary,
@@ -278,6 +286,8 @@ class AgentLoop:
         # V5: meta-review state
         self._meta_review_context: str = ""
         self._last_review_hash: str = ""
+        # Smart squash state
+        self._last_squash_hash: str = ""
 
         self._install_signal_handlers()
 
@@ -465,6 +475,12 @@ class AgentLoop:
         mission_status = "exhausted"
         final_summary = ""
 
+        # Initialize squash baseline to current HEAD
+        if self.config.auto_squash_interval > 0 and self._repo_paths:
+            self._last_squash_hash = await agent_git.get_head_hash(
+                self._repo_paths[0],
+            )
+
         for cycle in range(self.config.max_cycles):
             cycles_run = cycle + 1
             log.info("Agent cycle %d/%d starting", cycles_run, self.config.max_cycles)
@@ -600,6 +616,22 @@ class AgentLoop:
                 )
                 self._meta_review_context = result.context
                 self._last_review_hash = result.head_hash
+
+            # 4e. Smart squash (every N cycles, after meta-review)
+            squash_interval = self.config.auto_squash_interval
+            if (squash_interval > 0
+                    and cycles_run % squash_interval == 0
+                    and self.config.auto_commit
+                    and not self.config.auto_push):
+                new_hash = await agent_squash.run_squash(
+                    self.llm, primary_repo,
+                    self._last_squash_hash,
+                    min_commits=self.config.squash_min_commits,
+                )
+                self._last_squash_hash = new_hash
+                # Squash rewrites history — update review hash too
+                if new_hash != self._last_review_hash:
+                    self._last_review_hash = new_hash
 
             # ── Phase 5: Persist ──
             self._persist_cycle(cycle, text, exec_log, hook_failures)

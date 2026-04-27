@@ -1,6 +1,6 @@
 """Git operations for the agent loop.
 
-All git interactions — commit, push, tag, diff — live here so that
+All git interactions — commit, push, tag, diff, squash — live here so that
 ``agent_loop.py`` contains only orchestration logic.  Every public
 function is ``async`` and accepts resolved paths (no config objects).
 """
@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import tempfile
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -348,3 +351,133 @@ async def tag_cycle(
                     )
         except Exception as exc:
             log.warning("agent_git: tag error in %s: %s", repo_path, exc)
+
+
+# ---------------------------------------------------------------------------
+# Squash
+# ---------------------------------------------------------------------------
+
+async def get_commits_since(
+    repo_path: Path,
+    since_hash: str,
+) -> list[dict[str, str]]:
+    """Return commits from *since_hash*..HEAD, oldest first.
+
+    Each entry: ``{"sha": "<full hash>", "message": "<subject line>"}``.
+    Returns an empty list on error.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "log", "--reverse", "--format=%H %s",
+            f"{since_hash}..HEAD",
+            cwd=str(repo_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return []
+        commits: list[dict[str, str]] = []
+        for line in stdout.decode(errors="replace").strip().splitlines():
+            if " " in line:
+                sha, msg = line.split(" ", 1)
+                commits.append({"sha": sha, "message": msg})
+        return commits
+    except Exception as exc:
+        log.warning("agent_git: get_commits_since failed: %s", exc)
+        return []
+
+
+async def squash_groups(
+    repo_path: Path,
+    base_sha: str,
+    groups: list[dict[str, Any]],
+) -> bool:
+    """Squash commit groups via programmatic interactive rebase.
+
+    *groups* is a list ordered oldest-first.  Each entry::
+
+        {"shas": ["abc...", "def..."], "message": "[harness] ..."}
+
+    Groups must be contiguous and cover all commits from *base_sha*..HEAD.
+
+    Returns True on success, False on failure (rebase is aborted cleanly).
+    """
+    # Build the rebase todo
+    todo_lines: list[str] = []
+    for group in groups:
+        shas = group["shas"]
+        msg = group["message"].replace("'", "'\\''")  # shell-safe
+        for i, sha in enumerate(shas):
+            short = sha[:12]
+            if i == 0:
+                todo_lines.append(f"pick {short}")
+            else:
+                todo_lines.append(f"fixup {short}")
+        # After fixups, amend the commit message to the group summary
+        if len(shas) > 1 or group["message"] != "":
+            todo_lines.append(f"exec git commit --amend -m $'{msg}'")
+
+    todo_content = "\n".join(todo_lines) + "\n"
+
+    # Write the todo content and an editor script that replaces git's
+    # interactive todo with our programmatic one.
+    todo_fd, todo_path = tempfile.mkstemp(prefix="harness-rebase-todo-", suffix=".txt")
+    editor_fd, editor_path = tempfile.mkstemp(prefix="harness-rebase-editor-", suffix=".sh")
+    try:
+        with os.fdopen(todo_fd, "w") as f:
+            f.write(todo_content)
+        with os.fdopen(editor_fd, "w") as f:
+            f.write(f"#!/bin/sh\ncp '{todo_path}' \"$1\"\n")
+        os.chmod(editor_path, 0o755)
+
+        env = {**os.environ, "GIT_SEQUENCE_EDITOR": editor_path}
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rebase", "-i", base_sha,
+            cwd=str(repo_path),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            log.warning(
+                "agent_git: squash rebase failed, aborting: %s",
+                stderr.decode(errors="replace")[:500],
+            )
+            abort = await asyncio.create_subprocess_exec(
+                "git", "rebase", "--abort",
+                cwd=str(repo_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await abort.communicate()
+            return False
+
+        log.info(
+            "agent_git: squash rebase succeeded (%d groups, %d commits)",
+            len(groups),
+            sum(len(g["shas"]) for g in groups),
+        )
+        return True
+    except Exception as exc:
+        log.warning("agent_git: squash error: %s", exc)
+        # Attempt abort in case rebase is in progress
+        try:
+            abort = await asyncio.create_subprocess_exec(
+                "git", "rebase", "--abort",
+                cwd=str(repo_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await abort.communicate()
+        except Exception:
+            pass
+        return False
+    finally:
+        for p in (todo_path, editor_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
