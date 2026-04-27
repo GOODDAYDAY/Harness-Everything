@@ -155,8 +155,13 @@ class PilotLoop:
         log.info("No-action notification sent")
 
     async def _notify_error(self, error_msg: str) -> None:
-        """Notify the operator about a cycle failure."""
-        text = f"⚠️ Improvement cycle failed: {error_msg}"
+        """Notify the operator about a cycle failure.
+
+        Truncates the error message to avoid leaking internal paths or
+        stack traces into the Feishu chat.
+        """
+        sanitized = error_msg.split("\n")[0][:200]
+        text = f"⚠️ Improvement cycle failed: {sanitized}"
         await self._feishu.send_text(self._config.feishu.chat_id, text)
 
     # ── Phase: Discussion ────────────────────────────────────────────────
