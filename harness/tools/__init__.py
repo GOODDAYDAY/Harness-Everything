@@ -75,6 +75,9 @@ from harness.tools.lint_check import LintCheckTool
 from harness.tools.context_budget import ContextBudgetTool
 from harness.tools.project_map import ProjectMapTool
 from harness.tools.ast_rename import AstRenameTool
+from harness.tools.game_tools import (
+    GameLaunchTool, GameScreenshotTool, GameInputTool, GameStateTool,
+)
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +149,11 @@ OPTIONAL_TOOLS: list[Tool] = [
     GitSearchTool(),    # Git history/blame/grep; high schema cost, opt in via extra_tools
     ReadFileTool(),     # Superseded by batch_read; opt in via extra_tools=["read_file"]
     WriteFileTool(),    # Superseded by batch_write; opt in via extra_tools=["write_file"]
+    # Game automation tools — Godot TestHarness integration
+    GameLaunchTool(),   # Launch/stop Godot game process
+    GameScreenshotTool(),  # Capture game viewport screenshot
+    GameInputTool(),    # Send mouse/keyboard input to game
+    GameStateTool(),    # Query game state (score, grid, hand, etc.)
 ]
 
 # ---------------------------------------------------------------------------

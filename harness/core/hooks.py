@@ -440,3 +440,110 @@ class GitCommitHook(VerificationHook):
 
         output = "\n".join(results)
         return HookResult(passed=all_passed, output=output)
+
+
+class GodotSyntaxHook(VerificationHook):
+    """Validate GDScript syntax by running ``godot --headless --quit``.
+
+    Launches Godot in headless mode against the game project directory.
+    Godot loads and parses all autoload scripts and the main scene on
+    startup; any parse error triggers a non-zero exit and/or ERROR output.
+
+    Requires the ``godot`` binary to be available (checked via PATH and
+    common locations). If Godot is not found, the hook passes with a
+    warning rather than blocking the commit.
+    """
+
+    name = "godot_syntax"
+    gates_commit = True
+
+    def __init__(
+        self,
+        game_path: str | None = None,
+        godot_path: str | None = None,
+        timeout: int = 30,
+    ) -> None:
+        self.game_path = game_path
+        self.godot_path = godot_path
+        self.timeout = timeout
+
+    def _find_godot(self) -> str | None:
+        import shutil
+
+        if self.godot_path and os.path.isfile(self.godot_path):
+            return self.godot_path
+        for name in ("godot", "godot4"):
+            found = shutil.which(name)
+            if found:
+                return found
+        for path in (
+            "/usr/local/bin/godot",
+            "/opt/homebrew/bin/godot",
+            "/Applications/Godot.app/Contents/MacOS/Godot",
+        ):
+            if os.path.isfile(path):
+                return path
+        return None
+
+    async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
+        # Only run when .gd files were changed
+        changed = [
+            f for f in context.get("files_changed", [])
+            if isinstance(f, str) and f.endswith(".gd")
+        ]
+        if not changed:
+            return HookResult(
+                passed=True,
+                output="godot_syntax: no .gd files changed",
+            )
+
+        godot = self._find_godot()
+        if godot is None:
+            log.warning("godot_syntax: Godot not found, check SKIPPED")
+            return HookResult(
+                passed=True,
+                output="godot_syntax: Godot not installed, check SKIPPED",
+                errors="SKIPPED: Godot not found",
+            )
+
+        game_dir = self.game_path or config.workspace
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                godot, "--headless", "--path", game_dir, "--quit",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=self.timeout,
+            )
+        except asyncio.TimeoutError:
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
+            return HookResult(
+                passed=False, output="", errors="GDScript validation timed out",
+            )
+        except FileNotFoundError:
+            return HookResult(
+                passed=True,
+                output="godot_syntax: Godot binary not executable, check SKIPPED",
+                errors="SKIPPED: Godot not executable",
+            )
+        except Exception as e:
+            return HookResult(passed=False, output="", errors=str(e))
+
+        output = stdout.decode(errors="replace") + stderr.decode(errors="replace")
+        error_indicators = ("SCRIPT ERROR", "Parse Error", "ERROR:", "error(")
+        has_errors = any(ind in output for ind in error_indicators)
+
+        if proc.returncode != 0 or has_errors:
+            return HookResult(
+                passed=False, output="",
+                errors=f"GDScript errors detected:\n{output[:2000]}",
+            )
+
+        return HookResult(
+            passed=True,
+            output=f"godot_syntax: OK ({len(changed)} .gd file(s) changed)",
+        )

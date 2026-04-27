@@ -36,6 +36,7 @@ from harness.core.config import HarnessConfig
 from harness.core.llm import LLM
 from harness.core.signal_util import install_shutdown_handlers
 from harness.core.hooks import (
+    GodotSyntaxHook,
     ImportSmokeHook,
     StaticCheckHook,
     SyntaxCheckHook,
@@ -423,6 +424,10 @@ class AgentLoop:
                     smoke_calls=self.config.import_smoke_calls or None,
                 )
             )
+        if "godot_syntax" in names:
+            game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
+            godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
+            hooks.append(GodotSyntaxHook(game_path=game_path, godot_path=godot_path))
         return hooks
 
     async def _run_hooks(
