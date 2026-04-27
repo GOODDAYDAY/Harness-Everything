@@ -441,9 +441,11 @@ class AgentLoop:
             try:
                 result = await hook.run(self.config.harness, ctx)
             except Exception as exc:
-                log.warning("Agent: hook %s crashed: %s", hook.name, exc)
                 if getattr(hook, "gates_commit", False):
+                    log.warning("Agent: hook %s crashed: %s", hook.name, exc)
                     failures.append(f"{hook.name}: crash ({exc})")
+                else:
+                    log.error("Agent: hook %s crashed (non-gating, not blocking commit): %s", hook.name, exc)
                 continue
             if not result.passed and getattr(hook, "gates_commit", False):
                 failures.append(
@@ -500,8 +502,9 @@ class AgentLoop:
             workspace = Path(self.config.harness.workspace)
             primary_repo = self._repo_paths[0] if self._repo_paths else workspace
             if self.config.auto_commit and not hook_failures:
-                await agent_git.stage_changes(self._repo_paths, changed_paths)
-                staged = True
+                staged = await agent_git.stage_changes(self._repo_paths, changed_paths)
+                if not staged:
+                    log.warning("Agent: staging failed for cycle %d, skipping commit", cycles_run)
             elif hook_failures:
                 log.warning(
                     "Agent: skipping commit (cycle %d) — %s",
@@ -562,25 +565,30 @@ class AgentLoop:
                     eval_line=eval_line,
                     hooks_line=hooks_line,
                 )
-                await agent_git.commit_staged(
+                commit_ok = await agent_git.commit_staged(
                     self._repo_paths, cycle, commit_msg,
                 )
-                if self.config.auto_push:
-                    await agent_git.push_head(
+                if commit_ok:
+                    committed = True
+                    if self.config.auto_push:
+                        push_ok = await agent_git.push_head(
+                            self._repo_paths,
+                            self.config.auto_push_remote,
+                            self.config.auto_push_branch,
+                            cycle,
+                        )
+                        if not push_ok:
+                            log.warning("Agent: push failed for cycle %d", cycles_run)
+                    await agent_git.tag_cycle(
                         self._repo_paths,
-                        self.config.auto_push_remote,
-                        self.config.auto_push_branch,
                         cycle,
+                        self.config.auto_tag_interval,
+                        self.config.auto_tag_prefix,
+                        self.config.auto_push_remote,
+                        self.config.auto_tag_push,
                     )
-                await agent_git.tag_cycle(
-                    self._repo_paths,
-                    cycle,
-                    self.config.auto_tag_interval,
-                    self.config.auto_tag_prefix,
-                    self.config.auto_push_remote,
-                    self.config.auto_tag_push,
-                )
-                committed = True
+                else:
+                    log.warning("Agent: commit failed for cycle %d", cycles_run)
 
             # 4d. Meta-review (every N cycles)
             interval = self.config.meta_review_interval

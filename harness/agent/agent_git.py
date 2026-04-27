@@ -190,10 +190,11 @@ async def build_commit_message(
 async def stage_changes(
     repo_paths: list[Path],
     changed_paths: list[str],
-) -> None:
-    """``git add -- <paths>`` in each repo.  Call before evaluation."""
+) -> bool:
+    """``git add -- <paths>`` in each repo.  Returns True if all repos staged OK."""
     if not changed_paths:
-        return
+        return True
+    ok = True
     for repo_path in repo_paths:
         try:
             add = await asyncio.create_subprocess_exec(
@@ -208,16 +209,20 @@ async def stage_changes(
                     "agent_git: git add failed in %s: %s",
                     repo_path, add_err.decode(errors="replace")[:200],
                 )
+                ok = False
         except Exception as exc:
             log.warning("agent_git: stage error in %s: %s", repo_path, exc)
+            ok = False
+    return ok
 
 
 async def commit_staged(
     repo_paths: list[Path],
     cycle: int,
     commit_msg: str,
-) -> None:
-    """Commit already-staged changes in each repo (no ``git add``)."""
+) -> bool:
+    """Commit already-staged changes in each repo.  Returns True if all succeeded."""
+    ok = True
     for repo_path in repo_paths:
         try:
             commit = await asyncio.create_subprocess_exec(
@@ -237,8 +242,11 @@ async def commit_staged(
                     "agent_git: commit failed in %s: %s",
                     repo_path, stderr.decode(errors="replace")[:200],
                 )
+                ok = False
         except Exception as exc:
             log.warning("agent_git: commit error in %s: %s", repo_path, exc)
+            ok = False
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -250,8 +258,9 @@ async def push_head(
     remote: str,
     branch: str,
     cycle: int,
-) -> None:
-    """``git push <remote> <branch>`` from each repo."""
+) -> bool:
+    """``git push <remote> <branch>`` from each repo.  Returns True if all succeeded."""
+    ok = True
     for repo_path in repo_paths:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -268,8 +277,11 @@ async def push_head(
                     "agent_git: push failed in %s: %s",
                     repo_path, stderr.decode(errors="replace")[:200],
                 )
+                ok = False
         except Exception as exc:
             log.warning("agent_git: push error in %s: %s", repo_path, exc)
+            ok = False
+    return ok
 
 
 async def tag_cycle(

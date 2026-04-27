@@ -112,6 +112,7 @@ class ImportSmokeHook(VerificationHook):
 
     async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
         if not self.modules and not self.smoke_calls:
+            log.warning("import_smoke: no modules or calls configured, skipping")
             return HookResult(passed=True, output="(no modules to check)", errors="")
         import_stmts = "\n".join(f"import {m}" for m in self.modules)
         call_stmts = "\n".join(self.smoke_calls)
@@ -290,6 +291,7 @@ class StaticCheckHook(VerificationHook):
             )
 
         # Neither tool available. Warn but don't block — see class docstring.
+        log.warning("static_check: neither ruff nor pyflakes available, checks SKIPPED")
         return HookResult(
             passed=True,
             output=(
@@ -297,6 +299,7 @@ class StaticCheckHook(VerificationHook):
                 f"{sys.executable}; static checks SKIPPED. Install ruff to "
                 "restore this guard (pip install ruff)."
             ),
+            errors="SKIPPED: no linting tool available",
         )
 
 

@@ -48,8 +48,10 @@ async def run_evaluation(
     mode.  When False, evaluates the agent's reasoning/exploration output in
     ``reasoning`` mode.  Returns the score or ``None``.
     """
-    if evaluator is None or not diff_text.strip():
+    if evaluator is None:
         return None
+    if not diff_text.strip():
+        diff_text = "(empty cycle — agent produced no output)"
     try:
         mission_ctx = mission[:200] if mission else "autonomous maintenance"
         mode = "implement" if has_diff else "reasoning"
@@ -102,8 +104,8 @@ def persist_eval_scores(
             }, indent=2),
             f"cycle_{cycle + 1}", "eval_scores.json",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("agent_eval: failed to persist eval scores for cycle %d: %s", cycle + 1, exc)
 
 
 # ---------------------------------------------------------------------------
