@@ -1,7 +1,7 @@
 {
   "//": "=== Agent mode example — V5 autonomous single-LLM runtime ===",
-  "// purpose": "Minimal example showing the shape of an agent config. Copy and edit for your own mission. Unlike pipeline configs, agent configs have no phases — the agent decides what to work on. V5 adds: multi-axis evaluation (harness/evaluation/multi_axis.py), structured experience memory (harness/core/experience.py), and hot-reloadable evaluator prompts (harness/prompts/eval_basic.txt, eval_diffusion.txt).",
-  "// run": "python main.py --agent config/agent_example.json",
+  "// purpose": "Minimal example showing the shape of an agent config. Copy and edit for your own mission. The agent decides what to work on — no phases or pipelines.",
+  "// run": "python main.py config/agent_example.json",
   "harness": {
     "model": "bedrock/claude-sonnet-4-6",
     "// max_tokens": "Leave headroom below the model's ceiling; 16K is safe for Sonnet-class models.",
@@ -28,7 +28,7 @@
     "max_concurrent_llm_calls": 4,
     "log_level": "INFO"
   },
-  "mission": "You are the maintainer of this codebase. Each cycle, pick the single most valuable improvement you can make right now — a real bug, a dead code path to prune, a test that's missing, a rough API to polish. Prefer small coherent changes to big rewrites. End the mission only when you believe the codebase is in materially better shape than when you started; otherwise keep iterating.\n\nV5 codebase architecture:\n- Evaluator: harness/evaluation/multi_axis.py (5-dim vector: correctness, code_quality, arch_health, novelty, alignment)\n- Prompts: harness/prompts/eval_basic.txt + eval_diffusion.txt (hot-reloadable, editable at runtime)\n- Memory: harness/core/experience.py (structured experience store)\n- Config: harness/core/eval_config.py (weights hot-reload from harness/config/eval_weights.json)\n- Strategy: harness/pipeline/meta_agent.py (periodic strategy layer)",
+  "mission": "You are the maintainer of this codebase. Each cycle, pick the single most valuable improvement you can make right now — a real bug, a dead code path to prune, a test that's missing, a rough API to polish. Prefer small coherent changes to big rewrites. End the mission only when you believe the codebase is in materially better shape than when you started; otherwise keep iterating.",
   "max_cycles": 50,
   "max_notes_cycles": 20,
   "cycle_hooks": ["syntax", "static", "import_smoke"],
