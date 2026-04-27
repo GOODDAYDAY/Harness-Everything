@@ -42,6 +42,7 @@ logs/
 *.backup
 
 # Test artifacts
+.coverage
 test_*.py.bak
 
 # Intelligence probe results — append-only runtime artifact, not source
