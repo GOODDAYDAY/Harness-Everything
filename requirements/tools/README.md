@@ -1,116 +1,118 @@
-# Tools Domain
+# Tools Domain -- Framework and Dispatch
 
-The tools domain provides the agent's hands: every action the LLM takes on a codebase -- reading a file, searching for a symbol, running tests, editing code -- flows through a tool. The domain's job is to make the agent capable while preventing it from causing damage.
+This domain covers the tool framework itself: how tools are registered, discovered, dispatched, and how errors are communicated back to the caller. These are the infrastructure-level concerns that every individual tool relies on.
 
-## Scope
+**Actors:**
+- "As a tool" -- the tool's own behavioral contract within the framework
+- "As the agent" -- the agent that invokes tools to accomplish tasks
 
-This domain covers four concern areas:
+---
 
-| Concern | Document | Core question |
-|---------|----------|---------------|
-| File operations | [file-operations.md](file-operations.md) | How does the agent read, write, edit, move, copy, and delete files safely and efficiently? |
-| Search and analysis | [search-and-analysis.md](search-and-analysis.md) | What questions can the agent answer about a codebase without executing code? |
-| Execution and system | [execution-and-system.md](execution-and-system.md) | How does the agent run commands, tests, network requests, and git operations under safety constraints? |
+## Tool Registration and Discovery
 
-The tool registry and base framework are cross-cutting concerns that affect all three areas. They are described inline below rather than in a separate document, because they exist to serve the tools above, not as an independent capability.
+## US-01: As a tool, I need to be registered in a central catalog so that the agent can discover and invoke me by name
 
-## Key actors
+Every tool declares its identity (name and description) and is collected into a single catalog at startup. Without registration, a tool is invisible to the agent and cannot be invoked.
 
-- **Agent** -- the LLM instance that selects and invokes tools via structured tool-use calls.
-- **Registry** -- the dispatch layer that receives a tool name + parameters from the agent, validates them, routes to the correct tool implementation, and returns a uniform result.
-- **Tool** -- a single capability (read a file, run grep, etc.) with a declared schema, security tags, and an async execute method.
-- **Framework** -- the surrounding runtime (config, security module, hooks) that tools depend on but do not control.
+### Acceptance Criteria
+- Given a tool with a unique name, when the system starts, then the tool appears in the catalog and can be looked up by name
+- Given a tool whose name duplicates an already-registered tool, when registration is attempted, then the later registration replaces the earlier one (last-write-wins)
+- Given the catalog, when the agent requests the list of available tools, then all registered tools are returned
 
-## Tool framework -- inline requirements
+## US-02: As the agent, I need each tool to declare its input schema so that I know what parameters to supply
 
-### R-TOOL-01: Uniform result contract
+Each tool publishes a JSON-compatible description of its accepted parameters, including which are required and which are optional with defaults. This schema is sent to the LLM as part of the API call so it can generate valid invocations.
 
-Every tool execution must return a single `ToolResult` containing output text, error text, an error flag, elapsed time, and optional metadata. The agent never receives raw exceptions -- all failures are translated into error results with actionable messages.
+### Acceptance Criteria
+- Given a registered tool, when the agent requests its schema, then a structured description of all parameters (names, types, defaults, descriptions) is returned
+- Given the schema, when it is exported for the LLM API, then it includes the tool name, description, and input schema as a single definition
 
-**Why:** The LLM consumes tool results as text. If different tools returned different shapes (some raise, some return dicts, some return strings), the agent would need per-tool parsing logic. A uniform contract means the agent can treat every tool result identically.
+## US-03: As the agent, I need tools partitioned into a default set and an optional set so that only the tools I need are active
 
-**Acceptance criteria:**
-- A tool that encounters an I/O error returns `is_error=True` with a message describing the problem, never raises to the caller.
-- A tool that succeeds returns `is_error=False` with output text the agent can read.
-- Elapsed time is recorded on every result, success or failure.
+Some tools expand the agent's capabilities in ways that are expensive (e.g., network access) or irrelevant for many tasks. The framework provides a default set that is always available and an optional set that must be explicitly enabled.
 
-### R-TOOL-02: Schema-driven dispatch
+### Acceptance Criteria
+- Given a fresh registry build with no extra configuration, when the agent lists available tools, then only default tools are present
+- Given a registry build with extra tool names specified, when the agent lists available tools, then the requested optional tools are also present
+- Given an unknown tool name in the extra-tools list, when the registry is built, then a warning is logged and the unknown name is skipped without aborting
 
-Every tool must declare a JSON Schema describing its inputs. The registry uses this schema for two purposes: (1) exporting tool definitions to the LLM API so the model knows what tools exist, and (2) validating parameters before dispatch so malformed calls fail fast with clear error messages.
+## US-04: As the agent, I need to filter tools by capability category so that I can present a focused toolset for specific tasks
 
-**Why:** Without schema validation, a missing required parameter surfaces as a cryptic Python `TypeError` deep in the tool's execute method. The agent would waste a tool turn retrying with the same broken arguments. Schema validation catches this before execution and gives the LLM a precise signal ("missing required parameter `path`") that it can correct on the next call.
+Tools are tagged with capability categories (e.g., reading, writing, searching, analysis). The registry can produce a filtered subset containing only tools matching at least one requested category, reducing schema size and cognitive load for the LLM.
 
-**Acceptance criteria:**
-- A call with an unknown parameter name is rejected before the tool executes.
-- A call missing a required parameter is rejected with a message listing the required parameters.
-- The error category is distinguishable from permission errors and runtime errors, so the agent knows to fix its parameters rather than change the path.
+### Acceptance Criteria
+- Given a filter request for a specific category, when the filtered registry is built, then it contains only tools tagged with that category plus any tools with no tags (backward-compatible defaults)
+- Given a filter request for a category with no matching tools, when the filtered registry is built, then it contains only the untagged tools
 
-### R-TOOL-03: Parameter alias normalization
+## US-05: As the agent, I need tools restricted by an allowlist so that in constrained environments only approved tools can execute
 
-The registry must silently correct common LLM parameter-name mistakes (e.g., `file_path` -> `path`, `old_string` -> `old_str`) before dispatch. Correction only applies when the alias target exists in the tool's schema and the correct name is not already present.
+The runtime configuration may specify an allowlist of tool names. When present, only tools on the list may be dispatched, even if they are registered. This provides defense-in-depth for restricted execution environments.
 
-**Why:** LLMs frequently hallucinate parameter names that are close but not exact. Without alias normalization, every such mistake burns a full tool turn on a TypeError-retry cycle. Normalizing the most common mistakes lets the agent's first attempt succeed.
+### Acceptance Criteria
+- Given a non-empty allowlist and a tool invocation for a tool not on the list, when dispatch is attempted, then a permission error is returned
+- Given a non-empty allowlist and a tool invocation for an allowed tool, when dispatch is attempted, then the tool executes normally
+- Given an empty or absent allowlist, when any registered tool is invoked, then it executes normally (no restriction)
 
-**Acceptance criteria:**
-- A call with `file_path="foo.py"` to a tool that expects `path` succeeds without error.
-- If the agent sends both `file_path` and `path`, the explicit `path` wins and `file_path` is not applied.
-- Aliases only rewrite keys that exist in the target tool's schema -- a tool that genuinely has a `file_path` parameter is not affected.
+---
 
-### R-TOOL-04: Categorized error reporting
+## Dispatch and Parameter Handling
 
-Tool execution errors must be classified into three categories: schema errors (wrong parameters), permission errors (path outside allowed scope), and tool errors (everything else). Each category must be labeled in the error message.
+## US-06: As the agent, I need tool dispatch to normalize common parameter name mistakes so that my first invocation attempt succeeds
 
-**Why:** The corrective action differs by category. A schema error means "fix your parameters." A permission error means "the path is outside allowed directories." A tool error means "something unexpected happened." If all three look the same, the agent guesses at the fix and often guesses wrong.
+LLMs frequently use alternative parameter names (e.g., "file_path" instead of "path", "old_string" instead of "old_str"). The dispatch layer automatically maps known aliases to the correct parameter names before invoking the tool, avoiding a wasted round-trip.
 
-**Acceptance criteria:**
-- A TypeError during dispatch is labeled `SCHEMA ERROR`.
-- A PermissionError is labeled `PERMISSION ERROR` and includes the allowed paths.
-- Any other exception is labeled `TOOL ERROR`.
+### Acceptance Criteria
+- Given a tool invocation with a known alias (e.g., "file_path" for "path"), when the tool is dispatched, then the alias is silently renamed to the correct parameter and the tool executes successfully
+- Given a tool invocation where both the alias and the correct name are present, when the tool is dispatched, then the correct name takes precedence and the alias is not applied
+- Given a tool invocation with an alias whose target is not in the tool's schema, when the tool is dispatched, then the alias is left unchanged
 
-### R-TOOL-05: Extensibility via subclassing
+## US-07: As the agent, I need dispatch to reject unknown parameters so that I get a clear error instead of a silent misfire
 
-Adding a new tool must require only: (1) creating a Python class that subclasses the base tool and implements name, description, schema, and execute; (2) registering it in the tool list. No changes to the registry, dispatch, or framework code should be necessary.
+If the agent sends a parameter that does not exist in the tool's schema (a hallucinated parameter), dispatch rejects the call immediately with a list of known parameters, rather than letting the tool silently ignore it or crash deep inside its implementation.
 
-**Why:** The tool set evolves faster than the framework. If adding a tool required modifying dispatch logic or schema-export code, every new tool would be a framework change with framework-level risk. Subclassing isolates tool-specific logic.
+### Acceptance Criteria
+- Given a tool invocation with a parameter not in the tool's schema, when dispatch runs, then a schema error is returned listing the unknown parameter(s) and all known parameters
+- Given a tool invocation with only valid parameters, when dispatch runs, then no schema error is raised
 
-**Acceptance criteria:**
-- A new tool file added to the tools directory, imported and appended to the default list, appears in the LLM's tool definitions on the next run with no other changes.
-- The new tool inherits path validation, error handling, and result formatting from the base class.
+---
 
-### R-TOOL-06: Tag-based filtering
+## Error Handling and Reporting
 
-Tools must declare categorical tags (e.g., `file_read`, `file_write`, `search`, `git`, `analysis`, `execution`). The registry must support filtering to a subset of tools by tag, so the framework can restrict tool availability per phase or per task.
+## US-08: As the agent, I need tool errors categorized by kind so that I know whether to fix my parameters, check permissions, or report a failure
 
-**Why:** Not every phase needs every tool. A read-only analysis phase should not offer write tools. A code-generation phase may not need git tools. Tag filtering lets the framework narrow the tool set without hardcoding tool names.
+Tool errors fall into three distinct categories: schema errors (wrong or missing parameters), permission errors (path outside allowed scope), and tool errors (I/O failures, unexpected exceptions). Each category requires a different corrective action from the agent.
 
-**Acceptance criteria:**
-- A registry filtered to `{"search"}` contains only tools tagged `search`, plus any untagged tools.
-- A tool with no tags is included in every filtered view (backward compatibility).
+### Acceptance Criteria
+- Given a missing required parameter, when the tool is invoked, then a schema error is returned that names the missing parameter and lists all required parameters
+- Given a path outside the allowed directories, when a file tool is invoked, then a permission error is returned that identifies the offending path and lists allowed directories
+- Given an unexpected exception during tool execution, when the error is caught, then a tool error is returned with the exception type and message
 
-### R-TOOL-07: Default vs. optional tool separation
+## US-09: As a tool, I need to return a uniform result structure so that the agent can always parse my output the same way
 
-Tools that require network access or have high schema cost must be registered as optional, not default. They are only available when explicitly enabled via configuration.
+Every tool invocation produces a result with the same shape: output text (on success), error text (on failure), a success/failure flag, and elapsed time. This uniformity means the agent never needs tool-specific result parsing logic.
 
-**Why:** Including network tools by default would (a) add schema weight to every LLM call even when unused, and (b) allow outbound network access in air-gapped environments. Keeping them opt-in prevents accidental network calls and keeps the default schema lean.
+### Acceptance Criteria
+- Given a successful tool execution, when the result is returned, then it contains output text, no error text, the success flag set, and the elapsed time
+- Given a failed tool execution, when the result is returned, then it contains error text, the failure flag set, and the elapsed time
+- Given any result, when it is formatted for the LLM API, then it produces a text content block with either the output or the error text
 
-**Acceptance criteria:**
-- A fresh registry built with no extra configuration does not include network-access tools.
-- Setting `extra_tools=["web_search"]` in config adds the web search tool to the registry.
-- An unknown tool name in `extra_tools` logs a warning and is skipped, not a fatal error.
+## US-10: As a tool, I need to measure my own execution time so that the agent can detect slow operations and optimize its strategy
 
-### R-TOOL-08: Tool allowlist enforcement
+Each tool invocation is timed from dispatch to completion. The elapsed time is recorded in the result and logged as a structured trace event, enabling performance monitoring and helping the agent prioritize faster alternatives.
 
-When the config specifies an `allowed_tools` list, only tools in that list may execute, even if they are registered. This is enforced at dispatch time, not just at registration.
+### Acceptance Criteria
+- Given any tool invocation, when it completes (success or failure), then the result includes the elapsed time in seconds
+- Given any tool invocation, when it completes, then a structured trace log entry is emitted containing the tool name, success status, and duration in milliseconds
 
-**Why:** Registration and dispatch are separate steps. A restrictive config must be honored at runtime even if the registry was built with all tools. This prevents a permissive registry from bypassing a restrictive config.
+---
 
-**Acceptance criteria:**
-- A registered tool not in `allowed_tools` returns a `PERMISSION ERROR` when called.
-- An empty `allowed_tools` list means no filter (all registered tools are allowed).
+## Output Safety
 
-## Design constraints
+## US-11: As a tool, I need to safely serialize large outputs so that oversized results do not corrupt the agent's context window
 
-- **Async everywhere.** All tool execute methods are async. Blocking I/O (file reads, subprocess calls) must be wrapped in `asyncio.to_thread` or use async subprocess APIs. A tool that blocks the event loop degrades the entire agent's responsiveness.
-- **No tool may bypass path security.** Any tool that touches the filesystem must validate paths through the security layer. There is no "trusted tool" exemption.
-- **Tools are stateless.** A tool instance holds no mutable state between calls. All context comes from the config and parameters. This makes tools safe to share across concurrent agents (future capability).
-- **Output budgets.** Tools that can produce unbounded output (search results, AST dumps, subprocess stdout) must enforce output caps. Flooding the LLM context window with a 500 KB grep result is worse than returning nothing.
+When a tool produces a large structured result (e.g., a cross-reference map), the output is automatically trimmed by progressively halving the largest list fields until the result fits within a size budget. The trimmed result remains valid and includes a truncation indicator.
+
+### Acceptance Criteria
+- Given a tool result that fits within the size budget, when serialization runs, then the output is returned unchanged
+- Given a tool result that exceeds the size budget, when serialization runs, then list fields are progressively shortened and a truncation flag is set
+- Given a tool result that cannot be reduced below the size budget even after maximum trimming, when serialization runs, then a minimal error envelope is returned instead of invalid output

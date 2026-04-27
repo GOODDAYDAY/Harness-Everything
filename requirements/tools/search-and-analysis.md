@@ -1,200 +1,174 @@
 # Search and Analysis
 
-This document specifies what questions the agent must be able to answer about a codebase through search tools and static analysis, without executing any code.
+User stories covering capabilities for finding files, searching file contents, and performing static code analysis: glob search, grep, AST-based analysis, symbol extraction, cross-referencing, and call graphs.
 
-## Context
+**Actors:**
+- "As the agent" -- the agent performing search and analysis to understand the codebase
 
-Before the agent can make useful changes, it must understand the code it is working with: where things are defined, how they are connected, what calls what, and where a concept lives across the codebase. The search and analysis tools are the agent's eyes -- they turn a codebase from an opaque directory tree into a navigable, queryable structure.
+---
 
-These tools are read-only. They never modify files. Their output is consumed by the agent to inform editing decisions.
+## File Search (Glob)
 
-## Concern 1: File discovery
+## US-01: As the agent, I need to find files by name or path pattern so that I can locate relevant source files without knowing their exact paths
 
-### R-SEARCH-01: Glob-based file search
+The agent provides a glob pattern (e.g., all Python files, all test files under a directory) and receives a list of matching file paths sorted by modification time, most recent first.
 
-The agent must be able to find files by name or path pattern using glob syntax (e.g., `**/*.py`, `src/**/test_*.py`). Results must be sorted by modification time and capped to prevent unbounded output.
+### Acceptance Criteria
+- Given a glob pattern and a root directory, when the agent searches, then all matching files within the allowed directories are returned as relative paths
+- Given a glob pattern that matches no files, when the agent searches, then a message indicates zero matches
+- Given results exceeding the requested limit, when the agent searches, then only the most recently modified files up to the limit are returned with a note that results were truncated
 
-**Why:** Before reading a file, the agent needs to find it. Glob search answers "what files exist that match this pattern?" -- the first step in any exploration task.
+## US-02: As the agent, I need file search to have a candidate scan cap so that broad patterns in large repositories do not hang or exhaust memory
 
-**Acceptance criteria:**
-- Standard glob patterns work: `*` matches within a directory, `**` matches across directories.
-- Results are relative to the search root, not absolute paths.
-- A hard cap on candidates prevents CPU exhaustion on patterns like `**/*` in large trees.
-- Files that resolve outside allowed paths via symlinks are silently excluded.
+When a very broad pattern (e.g., all files) is used in a large repository, the search stops scanning after a configured maximum number of candidates. The result includes a warning advising the agent to narrow the pattern.
 
-### R-SEARCH-02: Content search with regex
+### Acceptance Criteria
+- Given a broad pattern that produces more candidates than the scan cap, when the search runs, then scanning stops at the cap and the result warns that some matches may be missing
+- Given a narrow pattern that produces fewer candidates than the scan cap, when the search runs, then all candidates are evaluated
 
-The agent must be able to search file contents using regular expressions, with results showing file path, line number, and matching line. Context lines (before and after each match) must be configurable.
+---
 
-**Why:** Finding where a string or pattern appears in code is the most common search task. The agent needs this to locate usages, find definitions, check for patterns, and verify changes. Context lines help the agent understand the match without a separate read call.
+## Content Search (Grep)
 
-**Acceptance criteria:**
-- Regex patterns follow Python `re` syntax.
-- Results can be filtered by file glob (e.g., only search `*.py` files).
-- Case-insensitive search is supported.
-- Total matches are capped to prevent a broad pattern from flooding the context.
-- A hard cap on files scanned prevents unbounded I/O on `**/*` patterns.
+## US-03: As the agent, I need to search file contents using a regex pattern so that I can find specific text, imports, or call patterns across the codebase
 
-## Concern 2: Concept-level search
+The agent provides a regex pattern and receives matching lines with file paths and line numbers. An optional file glob filter restricts which files are searched. Context lines before and after each match provide surrounding code for understanding.
 
-### R-SEARCH-03: Feature/concept search
+### Acceptance Criteria
+- Given a regex pattern and a directory, when the agent searches, then all matching lines across all files are returned with relative file paths and line numbers
+- Given a context lines setting greater than zero, when matches are found, then surrounding lines are included in the output
+- Given a context lines setting of zero, when matches are found, then only the matching lines themselves are returned
+- Given a file glob filter, when the agent searches, then only files matching the glob are scanned
 
-The agent must be able to search for a plain-English concept (e.g., "retry", "authentication", "checkpoint") and receive results grouped by category: symbol names containing the keyword, files whose names contain the keyword, comments and docstrings mentioning the keyword, and module-level constants/config containing the keyword.
+## US-04: As the agent, I need case-insensitive content search so that I can find text regardless of capitalization
 
-**Why:** Regex search finds exact text matches but does not answer "where does the codebase deal with retries?" A concept search aggregates multiple signal types (names, comments, config keys) into a coherent answer about where a feature lives. This is the entry point for understanding an unfamiliar area of code.
+The agent can enable case-insensitive matching for content searches, useful for finding variable names or strings that may appear in different cases.
 
-**Acceptance criteria:**
-- Results are grouped by signal type (symbols, files, comments, config), not interleaved.
-- Supports both substring matching (default) and token-overlap scoring for multi-word concepts.
-- Pure AST and text analysis -- no external dependencies, no code execution.
+### Acceptance Criteria
+- Given a case-insensitive search, when the pattern matches text differing only in case, then those matches are included in the results
 
-### R-SEARCH-04: TODO/FIXME annotation scanning
+## US-05: As the agent, I need content search results capped at a specified limit so that broad searches do not flood my context window
 
-The agent must be able to scan source files for developer annotations (TODO, FIXME, HACK, NOTE, BUG, XXX) and return them grouped by tag and file, with optional context lines.
+The agent specifies the maximum number of matches to return. Once the limit is reached, searching stops and the result indicates it was truncated.
 
-**Why:** Developer annotations are signals about known issues, intentional workarounds, and planned work. Before modifying a module, the agent should know about these annotations to avoid undoing intentional workarounds or duplicating planned work.
+### Acceptance Criteria
+- Given a match limit, when the total matches exceed the limit, then only matches up to the limit are returned
+- Given a match limit, when fewer matches exist, then all matches are returned
 
-**Acceptance criteria:**
-- Default scan finds all six standard tags; the tag set is configurable per call.
-- Results can be sorted by file, tag, or line number.
-- Results are capped to prevent a heavily-annotated codebase from flooding the context.
+---
 
-## Concern 3: Git history search
+## Code Analysis (AST-based)
 
-### R-SEARCH-05: Git history, blame, and working-tree search
+## US-06: As the agent, I need to analyze a Python file's structure without executing it so that I can understand its classes, functions, imports, and complexity
 
-The agent must be able to search git history (commit messages matching a regex), blame individual files (which commit last changed each line matching a pattern), search the working tree via `git grep`, show the diff of a specific commit, and view the commit log for a specific file.
+The agent provides a file or directory path and receives a static analysis report containing: symbol table (classes, functions, constants with line numbers), import map, per-function call graph (outgoing calls), and cyclomatic complexity estimates.
 
-**Why:** Understanding *why* code looks the way it does requires knowing its history. Blame tells the agent who changed a line and when. Commit message search finds when a feature was added or a bug was fixed. `git grep` is faster than Python-level search for large repos because it operates on the git index.
+### Acceptance Criteria
+- Given a single Python file, when the agent analyzes it, then the report includes all top-level classes with methods, all functions with argument lists, all imports with line numbers, and per-function complexity scores
+- Given a directory, when the agent analyzes it, then all matching Python files are analyzed and an aggregate summary across files is appended
+- Given a file with syntax errors, when the agent analyzes it, then the error is reported for that file without aborting analysis of other files
 
-**Acceptance criteria:**
-- All modes run with a timeout to prevent stalls on large repositories.
-- Output is capped to prevent a verbose `git log` from flooding the context.
-- This tool is optional (not registered by default) because it has high schema cost and is only useful in git repositories.
+## US-07: As the agent, I need to identify high-complexity functions so that I can prioritize refactoring targets
 
-## Concern 4: Symbol-level analysis
+The analysis report flags functions whose complexity score exceeds a threshold, listing them prominently in the summary. This helps the agent focus on the most tangled code.
 
-### R-SEARCH-06: AST-based code analysis
+### Acceptance Criteria
+- Given functions with varying complexity, when analysis completes, then functions at or above the complexity threshold are listed in a dedicated high-complexity section
+- Given an aggregate analysis of multiple files, when high-complexity functions exist, then they are listed with their file paths for cross-file visibility
 
-The agent must be able to analyze a Python source file and receive a structured report containing: the import map (what the file imports), the symbol table (classes, functions, their line ranges and signatures), per-function cyclomatic complexity estimates, and the internal call graph (what each function calls).
+## US-08: As the agent, I need analysis output in either human-readable text or structured data format so that I can choose based on my downstream needs
 
-**Why:** Reading source code gives the agent text; AST analysis gives it structure. The agent can ask "what functions are in this file and how complex are they?" without reading every line. This is essential for deciding which functions need attention and which are simple enough to skip.
+The analysis tool supports both a formatted text output (for reading in context) and a JSON output (for programmatic consumption by other tools or post-processing steps).
 
-**Acceptance criteria:**
-- Analysis works on files with syntax errors (returns an error for that file, not a crash).
-- Complexity estimates use a branch-counting heuristic, not an external tool.
-- Pure stdlib `ast` -- no third-party dependencies.
+### Acceptance Criteria
+- Given a text format request, when analysis completes, then the output is formatted with section headers, aligned columns, and summary blocks
+- Given a JSON format request, when analysis completes, then the output is valid JSON containing the same data as the text format
 
-### R-SEARCH-07: Symbol extraction by name
+---
 
-The agent must be able to extract the source text of a specific named symbol (function, class, method) from a file without reading the entire file. Supports extracting multiple symbols in one call, glob-style name patterns, and cross-file search (finding a symbol name across a directory).
+## Symbol Extraction
 
-**Why:** When the agent knows *which* function it needs to see but not *which lines* it occupies, symbol extraction is more precise than line-range reading. It also avoids the context cost of surrounding code the agent does not need.
+## US-09: As the agent, I need to extract the complete source code of a named function, class, or constant without reading the entire file so that I consume minimal context budget
 
-**Acceptance criteria:**
-- Dotted names work: `"MyClass.my_method"` extracts the method, not the whole class.
-- Pattern matching: `"_check_*"` returns all private helpers starting with `_check_`.
-- Optional context lines show decorators or docstrings above the definition.
-- Output format supports both human-readable text and structured JSON.
+The agent provides a symbol name (e.g., a function name, a class name, or a qualified method name) and receives the exact source text of that definition -- nothing more, nothing less. This is far more token-efficient than reading a whole file when only one function is needed.
 
-## Concern 5: Cross-reference and dependency analysis
+### Acceptance Criteria
+- Given a function name and a file path, when the agent extracts it, then only the source text of that function is returned with a header showing the file, symbol name, kind, and line range
+- Given a class name, when the agent extracts it, then the entire class body is returned
+- Given a qualified method name (class and method), when the agent extracts it, then only the method body is returned, not the entire class
+- Given a module-level constant name, when the agent extracts it, then the assignment statement is returned
 
-### R-SEARCH-08: Cross-reference (definition + callers + callees + tests)
+## US-10: As the agent, I need to extract symbols using glob patterns so that I can find all definitions matching a naming convention
 
-The agent must be able to ask "where is this symbol defined, who calls it, what does it call, and which tests exercise it?" in a single tool call. Analysis uses AST parsing, not regex, to avoid false positives from comments and string literals.
+The agent can provide a wildcard pattern (e.g., all private helpers starting with a prefix, or all methods named a certain way across classes). All matching definitions are returned.
 
-**Why:** Before refactoring a function, the agent needs the full picture: definition location, all callers (to assess impact), all callees (to understand dependencies), and test coverage (to know if tests exist). Without cross-reference, the agent must make 4 separate calls (grep for def, grep for calls, read the function, grep for test files) and mentally combine the results.
+### Acceptance Criteria
+- Given a glob pattern for symbol names, when the agent extracts, then all functions, methods, and constants matching the pattern are returned
+- Given a pattern with no matches, when the agent extracts, then a message indicates no symbols were found
 
-**Acceptance criteria:**
-- Returns definition location (file, line, signature).
-- Returns list of callers with file and line.
-- Returns list of callees.
-- Returns list of test files that import or reference the symbol.
-- Uses AST, not regex -- a comment containing the function name does not appear as a caller.
+## US-11: As the agent, I need to extract multiple symbols in one call so that I can read several related definitions without multiple round-trips
 
-### R-SEARCH-09: Data flow tracing
+The agent provides a list of symbol names or patterns and receives all matching definitions from the target file or directory in a single response.
 
-The agent must be able to trace how a symbol is used across the codebase in three modes: (1) find all direct callers of a function, (2) find all sites where an attribute is read (e.g., `config.workspace`), and (3) trace callers-of-callers to a configurable depth.
+### Acceptance Criteria
+- Given a list of symbol names, when the agent extracts, then all matching symbols are returned in a single result
+- Given a limit on the number of results, when matches exceed the limit, then the result is truncated with a notice
 
-**Why:** Cross-reference gives the full picture for one symbol. Data flow gives focused answers to specific questions: "who calls this function?" (impact analysis), "where is this config field read?" (before renaming it), "how deeply is this helper embedded?" (before moving it).
+## US-12: As the agent, I need to search an entire directory for a symbol so that I can find where a function or class is defined when I do not know which file it is in
 
-**Acceptance criteria:**
-- Caller mode accepts a bare function name and returns all functions that call it.
-- Read mode accepts `obj.attr` notation and returns all sites where the attribute is accessed.
-- Call-chain mode traverses callers-of-callers up to a limited depth (capped at 2 levels to avoid combinatorial explosion).
-- Uses AST analysis, not text matching.
+When the target path is a directory, the extraction tool searches all Python files under it for the named symbol. An optional file glob narrows the search scope.
 
-### R-SEARCH-10: Call graph construction
+### Acceptance Criteria
+- Given a symbol name and a directory, when the agent extracts, then all files under the directory are searched and matching definitions from any file are returned
+- Given a file glob filter, when extracting across a directory, then only files matching the glob are searched
 
-The agent must be able to trace the outgoing call graph from a starting function: all functions it calls, and recursively all functions those call, up to a configurable depth. The output is a directed graph of nodes with their definition locations and call edges.
+## US-13: As the agent, I need optional context lines before a symbol definition so that I can see decorators, comments, or preceding code
 
-**Why:** Understanding the downstream impact of a function change requires seeing everything that function transitively depends on. The call graph answers "if I change function X, what other functions might be affected?"
+The agent can request additional lines of source code before the start of each extracted symbol. This is useful for seeing decorators, docstrings, or comments that give semantic context to the definition.
 
-**Acceptance criteria:**
-- BFS traversal with a depth cap (hard maximum of 5) prevents runaway expansion.
-- A node cap (maximum 200 unique nodes) prevents unbounded output on large codebases.
-- Cycle detection prevents infinite loops on mutually recursive functions.
-- Each node records its definition file, line, and list of callees.
+### Acceptance Criteria
+- Given a context-lines parameter greater than zero, when a symbol is extracted, then the requested number of lines preceding the definition are prepended to the output
+- Given a context-lines parameter of zero, when a symbol is extracted, then only the definition itself is returned
 
-### R-SEARCH-11: Import dependency graph and circular import detection
+---
 
-The agent must be able to build a module-level import dependency graph for a directory and detect circular import cycles. Only workspace-local modules are included by default (stdlib edges are filtered out).
+## Cross-referencing
 
-**Why:** Circular imports cause runtime failures that are hard to diagnose from error messages alone. The dependency graph also reveals the module structure (which modules are central, which are leaf) and guides refactoring decisions about where to break dependencies.
+## US-14: As the agent, I need to find where a Python symbol is defined and every place it is called so that I can understand its usage across the codebase
 
-**Acceptance criteria:**
-- Relative imports are resolved to absolute dotted module names.
-- Circular import cycles are detected and reported as ordered lists of modules forming the cycle.
-- The graph can optionally include stdlib imports.
-- Output uses the `_safe_json` budget cap to prevent large graphs from flooding the context.
+The agent provides a symbol name and receives: its definition location (file and line), a list of all call sites (callers), a list of all functions it calls (callees), and which test files exercise it. All analysis is AST-based, avoiding false positives from comments or strings.
 
-## Concern 6: Project orientation
+### Acceptance Criteria
+- Given a function name, when the agent cross-references it, then the definition file and line, all callers with file/line/snippet, and all callees are returned
+- Given a qualified method name (class and method), when the agent cross-references it, then callers include both direct class calls and instance method calls
+- Given a symbol with test files that reference it, when cross-referencing with test inclusion enabled, then matching test files are listed
+- Given a symbol that does not exist in the codebase, when the agent cross-references it, then the definition is reported as not found and callers/callees are empty
 
-### R-SEARCH-12: Project map
+## US-15: As the agent, I need cross-reference results to be bounded so that large codebases do not produce overwhelming output
 
-The agent must be able to generate a high-level project overview in one call: a list of all Python modules with line counts, class counts, and function counts; entry points (files with `if __name__ == "__main__"`); and the inter-module import graph.
+The cross-reference tool enforces caps on the number of callers, callees, and test files returned. When the cap is reached, the result includes a truncation indicator.
 
-**Why:** When the agent starts work on an unfamiliar codebase, its first task is orientation: what is here, how is it organized, what are the entry points? Without a project map, the agent must call `tree`, then `glob_search`, then `batch_read` on several files, burning multiple turns. A project map answers all orientation questions in one call.
+### Acceptance Criteria
+- Given a heavily-used symbol exceeding the caller cap, when cross-referencing completes, then only callers up to the cap are returned and the result indicates truncation
+- Given long code snippets in caller entries, when cross-referencing completes, then snippets are truncated to a readable length
 
-**Acceptance criteria:**
-- Covers all Python files under the specified directory up to a configurable depth.
-- Reports per-module: relative path, line count, class count, function count.
-- Identifies entry points.
-- Shows which modules import which other modules.
-- Test files can be included or excluded.
-- Output is capped to prevent large projects from flooding the context.
+## US-16: As the agent, I need symbol names validated for security so that maliciously crafted inputs cannot cause unexpected behavior
 
-## Concern 7: Specialized analysis tools
+Cross-reference symbol inputs are validated against a strict format: ASCII letters, digits, underscores, and dots only, with a maximum qualification depth. This prevents injection of path traversal sequences or excessively deep lookups.
 
-### R-SEARCH-13: Context budget awareness
+### Acceptance Criteria
+- Given a valid symbol name (e.g., "my_function" or "MyClass.method"), when validation runs, then it passes
+- Given a symbol name containing non-ASCII characters or path separators, when validation runs, then it is rejected with a format error
+- Given a symbol name with excessive dot-qualification depth, when validation runs, then it is rejected with a depth error
 
-The agent must be able to check its current token usage, remaining budget, turn count, and scratchpad status. This is not a search tool per se, but it is a read-only analysis tool that helps the agent decide how to allocate its remaining resources.
+---
 
-**Why:** An agent that does not know how close it is to its turn limit or context budget will either waste resources on unnecessary exploration or get cut off mid-task. Budget awareness lets the agent pace itself.
+## Combined Extraction and Cross-referencing
 
-**Acceptance criteria:**
-- Returns current input tokens used, output tokens used, turn number, max turns, and scratchpad note count.
-- No parameters required -- the agent just calls it.
+## US-17: As the agent, I need to extract a symbol's source and find its cross-references in a single operation so that I get the full picture of a symbol's definition and usage without multiple calls
 
-### R-SEARCH-14: Tool self-discovery
+The symbol extraction tool can optionally include cross-reference data (callers, callees, test files) alongside the extracted source code, combining two lookups into one.
 
-The agent must be able to introspect the currently registered tool set at runtime: what tools are available, their descriptions, parameter schemas, and whether they require path checks. Supports filtering by name substring.
-
-**Why:** With 30+ tools available, the agent may not remember what each tool does or what parameters it takes. Self-discovery lets the agent look up the right tool for a task without hallucinating tool names or parameters.
-
-**Acceptance criteria:**
-- Returns name, description, and required/optional parameters for each matching tool.
-- A name filter narrows results to tools whose name contains the given substring.
-- Detailed mode shows the full JSON Schema for a specific tool.
-
-### R-SEARCH-15: JSON operations
-
-The agent must be able to parse, query, validate, merge, and diff JSON data without external dependencies. This supports working with configuration files, API responses, and structured data that the agent encounters during its work.
-
-**Why:** Agents frequently work with JSON config files and structured data. Simple operations (extract a nested key, validate against a schema, diff two configs) should not require shelling out to `jq` or writing Python snippets.
-
-**Acceptance criteria:**
-- Parse mode validates JSON syntax and reports error position on failure.
-- Query mode supports dot/bracket path notation for nested access.
-- Diff mode shows added/removed/changed leaf paths between two JSON values.
-- Merge mode deep-merges two objects with right-hand-side-wins semantics.
+### Acceptance Criteria
+- Given an extraction request with cross-references enabled, when the symbol is found, then both the source code and the cross-reference data are returned in a single result
+- Given an extraction request with cross-references disabled (default), when the symbol is found, then only the source code is returned

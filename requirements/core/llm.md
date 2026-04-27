@@ -1,226 +1,187 @@
-# LLM Client Requirements
+# LLM Integration
 
-This document defines the requirements for the LLM client: the component responsible for making API calls to the language model, managing the conversation lifecycle, and executing multi-step tool loops.
-
-The LLM client answers one question: **how does the harness communicate with the model reliably, efficiently, and without losing context?**
+User stories for API resilience, conversation management, context optimization, and the tool execution loop.
 
 ---
 
-## 1. API Resilience
+# API Resilience
 
-### R-LLM-01: Automatic retry with exponential backoff on transient failures
+## US-01: As a cycle, I need transient API errors retried with exponential backoff so that momentary provider overloads or network glitches do not abort the entire run
 
-When the LLM API returns a transient error (rate limit, server overload, connection drop, timeout), the client must automatically retry with increasing delays between attempts, up to a maximum number of retries.
+API providers regularly return rate-limit, overload, and transient server errors that resolve on their own within seconds. The system must automatically retry these errors with increasing delays, while immediately propagating permanent errors (bad credentials, malformed requests) without wasting time on retries.
 
-**Why:** Transient API errors are normal in production -- a 429 rate-limit or 529 overload may resolve in seconds. Without automatic retry, every transient error would abort the entire agent run, wasting all prior work. Manual restart is impractical for unattended runs.
+### Acceptance Criteria
+- Given a rate-limit, overload, server error, connection failure, or timeout response from the provider, when the API call fails, then it is retried up to a configured maximum number of attempts
+- Given successive transient failures, when each retry is scheduled, then the delay between retries doubles (with a jitter factor to prevent synchronized retry storms across concurrent calls) up to a maximum delay cap
+- Given a non-transient error (authentication failure, bad request), when the API call fails, then the error is propagated immediately without any retry
+- Given all retry attempts exhausted, when the final attempt still fails, then the last error is propagated with a log entry stating the total number of attempts
 
-**Acceptance criteria:**
+## US-02: As a cycle, I need each API call governed by a per-call timeout so that a hung provider connection does not block the run indefinitely
 
-- Given a rate-limit (429) response, when the client retries, then it waits progressively longer between attempts (not a fixed interval).
-- Given a server overload (529) that resolves after the second retry, when the client retries, then the call succeeds on the third attempt and returns a normal response.
-- Given a transient error that persists through all retry attempts, when retries are exhausted, then the original error is raised (not swallowed).
-- Given a non-transient error (authentication failure, bad request), when it is received, then the client raises immediately without retry.
+Individual API calls can stall when the provider is severely overloaded or the network connection is half-open. A per-call wall-clock timeout ensures the system moves on (via retry or error propagation) rather than waiting forever.
 
-### R-LLM-02: Jittered retry timing to prevent thundering herd
+### Acceptance Criteria
+- Given an API call that does not complete within the configured timeout, when the timeout fires, then the call is treated as a transient error and eligible for retry
+- Given a normally completing API call, when the call finishes before the timeout, then the timeout has no effect
 
-Retry delays must include random jitter so that multiple concurrent calls that hit the same rate-limit window do not all retry at the same instant.
+## US-03: As an operator, I need concurrent API calls limited by a process-wide cap so that parallel execution paths do not overwhelm the provider's rate limit
 
-**Why:** Without jitter, parallel calls that all fail at time T will all retry at time T+delay, creating a synchronized burst that triggers another rate-limit. Jitter spreads retries across a time window, giving the API breathing room.
+Multiple execution paths (parallel evaluators, concurrent tool calls, planning tasks) can issue API calls simultaneously. Without a concurrency cap, the provider will start returning rate-limit errors for every call, degrading throughput rather than improving it.
 
-**Acceptance criteria:**
+### Acceptance Criteria
+- Given multiple concurrent tasks issuing API calls, when the concurrency cap is reached, then additional calls queue and wait for a slot rather than firing immediately
+- Given a configured concurrency limit below one, when the system starts, then the limit is clamped to one (preventing deadlock)
+- Given a configured concurrency limit above the maximum safe value, when the system starts, then the limit is clamped to the maximum
 
-- Given two concurrent calls that both fail at the same time, when they retry, then their actual wait times differ (not identical).
-- Given any retry, the actual wait time is within a bounded percentage of the nominal delay (not unbounded randomness).
+## US-04: As an operator, I need token usage and latency logged for every API call so that I can monitor cost and performance without consulting the provider dashboard
 
-### R-LLM-03: Per-call timeout protection
+Each API call should produce a structured log entry showing input tokens, output tokens, cache statistics (when available), model name, stop reason, and wall-clock latency. This is the primary observability signal for cost management and performance tuning.
 
-Every individual API call must be bounded by a configurable timeout. A call that exceeds the timeout must be cancelled and treated as a retryable error.
+### Acceptance Criteria
+- Given an API call that completes successfully, when the response is received, then a log entry is emitted containing token counts, stop reason, and latency
+- Given a response from a provider that supports prompt caching, when cache read or cache creation token counts are non-zero, then they are included in the log entry
+- Given a response from a provider that does not report cache statistics, when the log entry is formatted, then cache fields are omitted rather than showing zeros
 
-**Why:** A model that is silently hung (no response, no error) would block the agent indefinitely. The timeout ensures the system detects and recovers from silent failures.
+## US-05: As a cycle, I need suspiciously short responses without tool calls flagged with a warning so that truncated or failed generations are visible in the logs
 
-**Acceptance criteria:**
+A very short text response with no tool calls almost always indicates a problem: the model was truncated, hit a stop sequence prematurely, or received a context that left nothing meaningful to say. These near-empty responses look valid but carry no useful content, leading to downstream scoring failures if not caught early.
 
-- Given an API call that does not respond within the timeout, when the timeout expires, then the call is cancelled and a retryable timeout error is raised.
-- Given a normal API call that completes within the timeout, when it returns, then the timeout has no effect on the response.
-
-### R-LLM-04: Concurrency limiting across the process
-
-The total number of in-flight API calls must be capped by a configurable semaphore, regardless of how many concurrent tasks are running.
-
-**Why:** The agent architecture can spawn multiple concurrent LLM calls (parallel evaluators, debate rounds, planning). Without a process-wide cap, the provider's rate limit is hit immediately, causing cascading 429 errors and wasted retries.
-
-**Acceptance criteria:**
-
-- Given a concurrency cap of 4 and 8 tasks attempting simultaneous API calls, when the calls are dispatched, then at most 4 are in-flight at any time; the rest wait.
-- Given a misconfigured concurrency cap of 0, when the client initializes, then the cap is clamped to 1 (not deadlocked).
-- Given a misconfigured concurrency cap of 100, when the client initializes, then the cap is clamped to a safe maximum.
+### Acceptance Criteria
+- Given an API response whose text is shorter than the minimum plausible length and contains no tool calls, when the response is processed, then a warning is logged identifying the response length, stop reason, and model
+- Given an API response with tool calls (regardless of text length), when the response is processed, then no short-response warning is emitted
 
 ---
 
-## 2. Conversation Management
+# Conversation Management
 
-### R-LLM-05: Structural integrity of conversation messages
+## US-06: As a cycle, I need the conversation history pruned when it grows too large so that the provider's context window is not exceeded, which would cause a cryptic request error
 
-The conversation passed to the API must always satisfy the provider's structural requirements: no empty content arrays, and every tool-use block must have a matching tool-result block with the same identifier.
+Long tool loops accumulate large tool-result payloads that are re-sent with every API call. Without pruning, the conversation eventually overflows the model's context window, producing an opaque "prompt too long" error that is easily misdiagnosed as a schema problem.
 
-**Why:** The Anthropic API returns HTTP 400 on structurally invalid messages. These errors look identical to schema errors, causing operators to debug tool definitions when the real problem is a missing tool-result block. Structural integrity must be maintained by construction, not by hope.
+### Acceptance Criteria
+- Given a conversation whose estimated character size exceeds the pruning threshold, when pruning is triggered, then the text content of older tool-result blocks is shortened until the total size drops to the target level
+- Given a conversation undergoing pruning, when tool-result text is shortened, then the most recent conversation pairs are always preserved verbatim so the model retains its freshest context
+- Given a conversation undergoing pruning, when tool-result blocks are shortened, then no messages are removed or reordered (structural integrity required by the API is maintained)
+- Given the system prompt, when pruning runs, then the system prompt is never at risk because it is passed separately from the conversation messages
 
-**Acceptance criteria:**
+## US-07: As a cycle, I need old tool results proactively compacted into signal-preserving summaries so that context is reclaimed incrementally rather than only when the conversation hits a critical size
 
-- Given a model response that produces neither text nor tool calls, when the assistant message is appended, then it contains a synthetic placeholder so the content array is never empty.
-- Given a tool-use block with a specific ID, when the tool result is appended, then it carries the same ID.
-- Given multiple tool calls in a single turn, when results are appended, then they appear in the same order as the original tool-use blocks.
+Instead of waiting for the conversation to reach a dangerous size, older tool results should be replaced with compact stubs after the conversation has accumulated enough turns. This keeps context growth linear rather than unbounded, reducing both cost and latency.
 
-### R-LLM-06: Token usage logging
+### Acceptance Criteria
+- Given a conversation that has accumulated at least the minimum number of turns for compaction, when a new turn completes, then old tool-result blocks (beyond the protected recent window) are replaced with compact summaries
+- Given a tool result being compacted, when the summary is generated, then it preserves the original size, a content preview, and any high-signal lines (errors, test verdicts, scores, stack traces)
+- Given a tool result that is already shorter than the compaction threshold for its tool category, when compaction runs, then it is left unchanged
 
-Every API call must log input and output token counts when the provider reports them. Cache hit/miss information must be included when available.
+## US-08: As a cycle, I need tool results compacted with category-aware thresholds so that high-signal outputs (test results, lint errors) are preserved longer than low-signal outputs (file listings, directory searches)
 
-**Why:** Token usage is the primary cost signal for agent runs. Without per-call logging, operators cannot identify which phases or tools are consuming the most tokens, and cannot tune budgets effectively.
+Not all tool outputs are equally valuable. Test runner output containing pass/fail verdicts is critical for planning the next step, while a directory listing from five turns ago is almost never re-read. Compaction thresholds should reflect this difference.
 
-**Acceptance criteria:**
-
-- Given an API call that returns usage information, when the call completes, then a log entry is emitted containing input tokens, output tokens, and latency.
-- Given an API call with prompt caching, when cache read/creation counts are present, then they appear in the log entry.
-- Given an API call where usage information is absent (older SDK), when the call completes, then a log entry is still emitted with the available information (no crash).
-
-### R-LLM-07: Short/empty response detection
-
-When the model returns a very short text response with no tool calls, the system must log a warning. Such responses almost always indicate truncation, context overflow, or a failed generation -- not a valid empty answer.
-
-**Why:** A near-empty response looks like a valid result to downstream scoring, which silently returns zero. Without the warning, operators don't realize the model failed until they inspect artifacts hours later.
-
-**Acceptance criteria:**
-
-- Given a response shorter than 50 characters with no tool calls, when it is received, then a warning is logged indicating possible truncation, including the stop reason and model name.
-- Given a response shorter than 50 characters WITH tool calls, when it is received, then no warning is logged (tool calls are the primary output).
+### Acceptance Criteria
+- Given a high-signal tool output (test runner, evaluation, lint checker), when compaction is considered, then a generous character threshold is used before compaction triggers
+- Given a medium-signal tool output (shell commands, code analysis), when compaction is considered, then a moderate threshold is used
+- Given a low-signal tool output (file search, directory listing, log display), when compaction is considered, then an aggressive threshold is used
+- Given a shell command output that contains test or compilation indicators (pass/fail lines, traceback headers, exit codes), when compaction is considered, then it is promoted to high-signal treatment regardless of the tool category
 
 ---
 
-## 3. Context Window Optimization
+# Context Optimization
 
-### R-LLM-08: Proactive compaction of old tool results
+## US-09: As a cycle, I need file-read results cached within a single tool loop so that re-reading the same file does not inject duplicate multi-kilobyte payloads into the conversation
 
-After each tool-result message is appended, older tool-result messages must be replaced with compact, signal-preserving summaries. The most recent tool-result messages are preserved verbatim; older ones are replaced with signal-preserving stubs. Compaction must happen continuously, not just when the conversation is about to overflow.
+Tool loops commonly read the same file multiple times (read, edit, re-read to verify). Caching read results within one loop invocation avoids injecting identical content into the conversation repeatedly, directly reducing input-token growth per turn.
 
-**Why:** Each API call re-sends the entire conversation. Without compaction, a 30-turn loop with file reads accumulates 200K+ characters, causing input token costs to grow quadratically with turn count. Waiting until overflow to prune causes a sudden quality cliff as the model loses context mid-run.
+### Acceptance Criteria
+- Given a file that has been read once in the current loop, when the same file is read again with the same parameters, then the cached result is returned without a disk read
+- Given a file that has been written to during the current loop, when it is subsequently read, then the cache entry for that file is invalidated and a fresh read is performed
+- Given a batch read request where some paths have already been read this loop, when the batch is processed, then only the uncached paths are fetched from disk and a note is prepended listing the skipped paths
+- Given a batch read request where all paths have already been read this loop, when the batch is processed, then a hint is returned telling the model to review earlier results rather than re-reading
 
-**Acceptance criteria:**
+## US-10: As a cycle, I need a persistent scratchpad within the tool loop so that important findings survive conversation pruning and remain visible to the model on every subsequent turn
 
-- Given a conversation with many tool-result messages, when compaction runs, then the most recent tool-result messages are preserved verbatim and older tool-result messages are replaced with stubs.
-- Given a compacted tool-result message, when the model reads it, then it can see what tool was called, how many characters the original output was, a preview of the content, and any high-signal lines (errors, test results, scores).
+Conversation pruning can compact or remove the tool output where the model first learned a key fact. A scratchpad allows the model to explicitly save findings, which are re-injected into the system prompt on every turn, surviving any amount of conversation pruning.
 
-### R-LLM-09: Signal-aware compaction thresholds
+### Acceptance Criteria
+- Given a note saved to the scratchpad, when the next API call is made, then the note appears in the system prompt
+- Given multiple notes saved across different turns, when the system prompt is built, then all notes are present in the order they were saved
+- Given more notes than the configured maximum, when a new note is saved, then the oldest notes are evicted to stay within the cap
+- Given a note that exceeds the maximum note length, when it is saved, then it is truncated with a visible marker
 
-Different tool types must be compacted at different thresholds based on how much future value their output carries. The system uses three tiers plus sub-categories:
+## US-11: As a cycle, I need a budget introspection tool so that the model can see how many turns and tokens it has consumed and pace its work accordingly
 
-- **Low-signal** (approximately 200-char preview): Search and listing tools whose output has been consumed (e.g., grep, glob, directory listing). Within this tier, *list-output tools* (those returning structured lists such as glob results, directory listings, tree output, git log) receive no preview at all; *short-preview tools* (grep, git status, git diff) receive a brief preview (approximately 100 characters).
-- **Medium-signal** (approximately 1500-char preview): Tools that produce moderately reusable output such as shell commands, symbol extraction, and code analysis.
-- **High-signal** (approximately 2000-char preview): Test runners, linters, evaluators, and other tools whose output directly drives the next action.
+Without visibility into its own resource consumption, the model cannot make informed decisions about when to wrap up versus when to continue exploring. A budget tool provides live statistics (current turn, total tokens, tool calls, scratchpad size) so the model can self-regulate.
 
-**Why:** A `grep_search` result listing 50 file paths has low future value (the agent already decided which files to read). A `test_runner` result showing 3 failures has high future value (the agent needs those failure messages to fix the code). Uniform compaction either loses critical test output or retains useless file listings. The medium tier preserves enough context from shell and analysis output without consuming as much space as high-signal tools.
-
-**Acceptance criteria:**
-
-- Given output from a list-output tool (glob, directory listing, tree, git log), when compaction runs, then it is compacted with no content preview.
-- Given output from a short-preview tool (grep, git status, git diff), when compaction runs, then it is compacted with a brief preview (approximately 100 characters).
-- Given output from a medium-signal tool (shell commands, symbol extraction, code analysis), when it exceeds a medium threshold (approximately 1500 characters), then it is compacted with a moderately sized preview.
-- Given output from a test runner or linter, when it exceeds a high threshold (approximately 2000 characters), then it is compacted with more preserved signal lines.
-- Given bash output that contains test/compile/lint indicators (pytest summaries, tracebacks, syntax errors), when compaction runs, then it is promoted to high-signal treatment.
-
-### R-LLM-10: Emergency pruning on context window overflow
-
-When the total conversation size approaches the model's context window limit, the system must perform aggressive pruning of older tool results to bring the total below a safe target.
-
-**Why:** If the conversation exceeds the context window, the API returns HTTP 400 "prompt too long." This error message is indistinguishable from a schema error, and the agent has no way to recover. Emergency pruning prevents the overflow from ever occurring.
-
-**Acceptance criteria:**
-
-- Given a conversation that exceeds 300,000 characters, when pruning is triggered, then old tool results are truncated until the total drops to approximately 200,000 characters.
-- Given a conversation being pruned, when the system prompt and initial user message are present, then they are never modified (the system prompt is passed separately to the API and is physically unreachable by pruning).
-- Given pruning in progress, when tool-result blocks are truncated, then no messages are removed or reordered (structural integrity is preserved).
-
-### R-LLM-11: Scratchpad notes for surviving compaction
-
-The tool loop must support a scratchpad mechanism where the agent can save important findings that persist across compaction. Scratchpad notes must be re-injected into the system prompt on every subsequent turn.
-
-**Why:** Compaction necessarily discards information. If the agent discovers something critical in turn 3 (e.g., "the database schema uses snake_case"), that finding is lost when turn 3 is compacted. The scratchpad lets the agent explicitly preserve key insights.
-
-**Acceptance criteria:**
-
-- Given a scratchpad note saved in turn 5, when turn 12 is processed (and turn 5 has been compacted), then the note is still visible to the model in the system prompt.
-- Given more scratchpad notes than the maximum capacity, when a new note is saved, then the oldest notes are evicted and the newest are retained.
-- Given an empty scratchpad note, when it is submitted, then the tool returns an error (empty notes waste system prompt space).
+### Acceptance Criteria
+- Given a tool loop in progress, when the budget tool is called, then it returns the current turn number and maximum, cumulative input and output token counts, total tool calls, and scratchpad note count
+- Given the budget tool output, when the model reads it, then all values reflect the state as of the current turn (not stale data from an earlier turn)
 
 ---
 
-## 4. Tool Execution Loop
+# Tool Loop
 
-### R-LLM-12: Bounded tool loop with partial-completion reporting
+## US-12: As a cycle, I need a tool execution loop that alternates between model reasoning and tool execution until the model signals completion so that multi-step tasks can be executed autonomously
 
-The tool-use loop must enforce a configurable maximum number of turns. When the limit is reached, the loop must exit with a structured status report indicating that execution was incomplete.
+The core execution pattern is a loop: call the model, execute any tool calls it requests, feed results back, repeat until the model produces a final text response with no further tool calls. This loop is the fundamental mechanism for autonomous task execution.
 
-**Why:** Without a turn limit, a confused or looping model could make hundreds of API calls, consuming unbounded tokens. The partial-completion report is critical because downstream evaluators need to distinguish "finished successfully" from "cut off mid-flight" -- treating a partial run as complete produces false-positive evaluations.
+### Acceptance Criteria
+- Given a model response that contains tool calls, when the tools are executed, then their results are appended to the conversation and another model call is made
+- Given a model response that contains only text (no tool calls), when the response is processed, then the loop terminates and the text is returned as the final output along with the full execution log
+- Given a model response that contains both text and tool calls, when the response is processed, then the tool calls are executed (the text is retained in the conversation but the loop continues)
 
-**Acceptance criteria:**
+## US-13: As a cycle, I need a configurable turn budget for the tool loop so that a confused or looping model cannot run indefinitely and consume unbounded tokens
 
-- Given a max-turns limit of 30 and a model that keeps requesting tools, when turn 30 is reached, then the loop exits.
-- Given a loop that hits the turn limit, when the result is returned, then it includes a structured status indicating `PARTIAL`, the number of tool calls made, and the elapsed time.
-- Given a loop where the model stops requesting tools before the limit, when the last text response is received, then the loop exits immediately with the model's final text.
+Without a turn cap, a model that gets stuck in a read-edit-read cycle can run for hundreds of turns, consuming massive token budgets. A configurable maximum ensures the loop terminates and reports a partial status so the planner can adjust.
 
-### R-LLM-13: Parallel execution of read-only tools
+### Acceptance Criteria
+- Given a tool loop that reaches the maximum turn count, when the limit is hit, then the loop terminates and returns a structured partial-completion report indicating the loop was cut off
+- Given a partial-completion report, when it is returned, then it explicitly states the loop was cut off, how many tool calls were made, and that the plan was not fully executed, so downstream evaluation does not mistakenly treat an incomplete run as successful
 
-When the model requests multiple tool calls in a single turn, read-only tools (file reads, searches, git queries, static analysis) must be executed in parallel. Mutating tools (file writes, bash commands) must be executed sequentially.
+## US-14: As a cycle, I need read-only tool calls within a single turn executed in parallel so that turns with multiple independent reads complete faster without sacrificing safety for write operations
 
-**Why:** A typical turn requests 3-5 file reads. Executing them serially adds unnecessary latency (each read is I/O-bound, not CPU-bound). But file writes and shell commands must be serial because they have side effects that depend on execution order.
+A single model turn often requests several file reads, searches, or analyses simultaneously. These are safe to parallelize because they have no side effects. Write operations (file edits, shell commands) must remain sequential because their order matters and they share filesystem state.
 
-**Acceptance criteria:**
+### Acceptance Criteria
+- Given a model turn containing multiple read-only tool calls, when those tools are executed, then they run concurrently
+- Given a model turn containing write/mutating tool calls, when those tools are executed, then they run sequentially in the order requested
+- Given a model turn containing a mix of read-only and mutating calls, when the turn is processed, then read-only calls run in parallel first, followed by mutating calls in sequence
+- Given a tool call that fails with an exception during parallel execution, when the exception occurs, then it is caught and converted to an error result rather than crashing the entire batch
 
-- Given a turn with 4 read-only tool calls, when they are executed, then all 4 run concurrently (total time is approximately the duration of the slowest, not the sum).
-- Given a turn with 2 file writes, when they are executed, then they run in the order the model specified.
-- Given a turn with a mix of reads and writes, when they are executed, then all reads run in parallel first, then writes run sequentially (or reads and writes are correctly interleaved by dependency).
+## US-15: As an operator, I need a warning when the tool loop's cumulative output token spend exceeds a safety threshold so that I can identify and abort unproductive loops before they consume the full budget
 
-### R-LLM-14: File-read deduplication within a tool loop
+A tool loop that has spent many times its per-call token budget on output tokens is almost certainly spinning without making progress. An early warning (before the turn cap is hit) lets operators intervene.
 
-Within a single tool loop invocation, repeated reads of the same file (same path, offset, and limit) must return cached results without re-executing. File writes must invalidate the cache for the written path.
+### Acceptance Criteria
+- Given a tool loop whose cumulative output tokens exceed a multiple of the configured per-call token limit, when the threshold is crossed, then a warning is logged identifying the turn number, cumulative spend, and threshold
+- Given a tool loop whose cumulative output tokens remain below the threshold, when each turn completes, then no spend warning is emitted
 
-**Why:** Models frequently re-read files they already have in context (e.g., reading a file, editing it, then re-reading the original to verify). Each redundant read injects another multi-KB tool result into the conversation, accelerating context window exhaustion.
+## US-16: As an operator, I need a warning when a single tool turn takes unusually long so that I can spot model overload or degraded performance before the loop times out
 
-**Acceptance criteria:**
+A tool turn that takes much longer than normal suggests the provider is overloaded or the context window has grown very large. Logging this as a warning lets operators see performance degradation in real time.
 
-- Given a read of file X, followed by another read of file X with the same parameters, when the second read executes, then it returns the cached result (no disk I/O).
-- Given a read of file X, followed by a write to file X, followed by another read of file X, when the third read executes, then it reads from disk (cache was invalidated by the write).
-- Given a batch read of files [A, B, C] where A and B were already read individually, when the batch executes, then only C is fetched from disk.
+### Acceptance Criteria
+- Given a tool turn that takes longer than the stall threshold, when the turn completes, then a warning is logged identifying the turn number, elapsed time, and the threshold
+- Given a tool turn that completes within normal time, when the turn completes, then no stall warning is emitted
 
-### R-LLM-15: Token spend monitoring and stall detection
+## US-17: As a cycle, I need the tool loop to handle a model response with no text and no tool calls gracefully so that the conversation remains valid and the loop can continue or exit cleanly
 
-The tool loop must track cumulative token usage and per-turn latency, and warn when either exceeds a threshold.
+In rare edge cases, the model may produce an empty response (no text, no tool calls). The API requires non-empty message content, so the loop must inject a synthetic placeholder to maintain conversational integrity.
 
-**Why:** A runaway loop that makes 30 calls without progress is expensive but hard to detect from the outside. Token spend warnings let operators set up alerts, and stall detection flags turns where the model took abnormally long (indicating overload or context bloat).
+### Acceptance Criteria
+- Given a model response with neither text nor tool calls, when the response is processed, then a synthetic placeholder text block is injected into the assistant message
+- Given a synthetic placeholder injection, when it occurs, then a warning is logged so operators can see this degenerate condition
 
-**Acceptance criteria:**
+## US-18: As an operator, I need a structured summary logged when the tool loop completes so that I can see the total turns, tool calls, token usage, and elapsed time at a glance
 
-- Given cumulative output tokens exceeding 4x the configured max_tokens, when the threshold is crossed, then a warning is logged indicating the loop may be unproductive.
-- Given a single turn that takes more than 90 seconds, when it completes, then a warning is logged indicating possible model overload or context bloat.
+When the tool loop exits (either by model completion or turn cap), a summary log entry should capture the full loop's resource consumption for cost tracking and performance analysis.
 
-### R-LLM-16: Execution log for observability
+### Acceptance Criteria
+- Given a tool loop that completes normally (model signals done), when the loop exits, then an informational log entry is emitted with total turns, tool call count, cumulative input and output tokens, and elapsed time
+- Given a tool loop that hits the turn cap, when the loop exits, then a warning-level log entry is emitted with the same statistics plus the turn cap value
 
-Every tool call must be recorded in an execution log with the tool name, input parameters, output (or error), duration, and error status. Output in the log must be size-capped to prevent memory exhaustion.
+## US-19: As an operator, I need per-tool-call output in the execution log truncated to a reasonable size so that a single large file read does not cause unbounded memory growth in the debug log
 
-**Why:** The execution log is the primary debugging artifact. When an agent run produces wrong output, operators trace through the log to find which tool call went wrong. Without size capping, a single large file-read result can bloat the log to hundreds of MB.
+The execution log is a debugging aid, not an archive. When a tool produces very large output (e.g., reading a multi-thousand-line file), the log entry should keep the beginning and end of the output with a visible truncation marker in the middle.
 
-**Acceptance criteria:**
-
-- Given a tool call that succeeds, when the loop completes, then the execution log contains an entry with the tool name, input, output, and duration.
-- Given a tool call that fails, when the loop completes, then the execution log entry includes the error and is marked as an error.
-- Given a tool call with output exceeding 4000 characters, when it is logged, then the output is truncated symmetrically (head and tail preserved, middle replaced with a truncation marker).
-
-### R-LLM-17: Built-in context budget introspection tool
-
-The tool loop must provide a built-in `context_budget` tool that returns live loop statistics: turn count, tokens used, tool calls made, and scratchpad note count. The agent can call this tool at any point during the loop to query its own resource consumption.
-
-**Why:** Without visibility into its own resource usage, the agent cannot make informed decisions about when to stop exploring and start producing output. The context budget tool lets the agent self-regulate -- for example, noticing it has used 80% of its turn budget and switching from exploration to synthesis.
-
-**Acceptance criteria:**
-
-- Given a tool loop in progress, when the agent calls the `context_budget` tool, then it receives a response containing the current turn count, cumulative token usage, total tool calls made, and the number of scratchpad notes saved.
-- Given the `context_budget` tool, when it is called, then it returns current values (not stale or cached data from a previous turn).
+### Acceptance Criteria
+- Given a tool call whose output exceeds the per-entry size cap, when the execution log entry is written, then the output is truncated to the first and last halves of the cap with a marker showing how many characters were removed
+- Given a tool call whose output is within the cap, when the execution log entry is written, then the full output is preserved

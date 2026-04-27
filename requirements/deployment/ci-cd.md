@@ -1,192 +1,139 @@
-# CI/CD Pipeline
+# CI/CD
 
-This document covers the requirements for the autonomous deployment cycle: how code changes flow from agent commit to validated deployment, how bad deployments are rolled back, how agent configurations are managed, and how the operator can pause and resume the loop.
-
----
-
-## Self-Update Loop
-
-### Why the agent cannot apply its own changes
-
-Python loads modules at process startup. When the agent edits `harness/tools/bash.py`, the running process still uses the old version loaded into memory. The only way to apply the change is to restart the process. But the agent cannot safely restart itself -- it would need to validate the new code first, and if validation fails, it would need to roll back, which requires a process that is not itself broken.
-
-The CI pipeline solves this by acting as an external validator. The agent's job ends at "push and tag." The pipeline's job begins at "validate and restart." This separation means a bad code change cannot prevent its own rollback.
-
-### Scenario: Successful deployment cycle
-
-**Context:** The agent has completed its configured number of cycles, committed changes, pushed to the remote, and created a release tag matching the configured pattern.
-
-**Expected behavior:**
-
-1. GitHub Actions detects the new tag (matching a pattern like `harness-r*`).
-2. The workflow SSHs to the server and updates the repo checkout to the new tag.
-3. A smoke test runs on the server: syntax-check all Python files and validate that the agent config loads without error.
-4. On smoke pass, the workflow advances a "last-good" marker tag to the current tag and pushes it. This marker is the rollback target for future failures.
-5. The service is restarted, loading the new code.
-6. The agent begins a new run with the updated codebase.
-
-**Acceptance criteria:**
-
-- The workflow triggers only on tags matching the configured prefix pattern, not on every push
-- Concurrent deployments are serialized (only one deploy runs at a time), and in-progress deploys are never cancelled by a newer one
-- The smoke test runs on the actual server (not in the CI runner's environment), using the server's Python environment and the server's config file
-- The smoke test validates both syntax (`py_compile` on all harness Python files) and configuration (the agent config loads and its key fields are populated)
-- The last-good marker tag is advanced only after the smoke test passes, never before
-- The tag is force-pushed (it is a moving marker, not a historical record)
+User stories covering the self-update deployment pipeline, rollback, configuration management, pause/resume mechanisms, auto-tagging, and shell command safety.
 
 ---
 
-## Rollback Safety
+## US-01: As the CI pipeline, I need to deploy new code to the server whenever a release tag is pushed so that the agent always runs the latest version of itself
 
-### Why automatic rollback is essential
+The agent improves its own codebase, commits, and tags. Each pushed tag must trigger an automated deployment that brings the running server up to date with the newly committed code. This closes the self-improvement loop: the agent writes better code, and then runs on that better code.
 
-The agent writes its own code. A bad cycle can produce code that compiles but crashes at runtime, or code that breaks a module the smoke test does not cover. Without automatic rollback, a single bad tag would halt the loop until a human investigates. Automatic rollback to the last-good tag keeps the loop running while the bad tag is logged as a workflow failure for later investigation.
-
-### Scenario: Failed smoke test with rollback
-
-**Context:** The agent pushed a tag containing code that fails the smoke test (e.g., a syntax error in a file not covered by the agent's own hooks, or a config schema change that breaks loading).
-
-**Expected behavior:**
-
-1. The smoke test step fails.
-2. The workflow SSHs to the server and resets the repo checkout to the last-good marker tag.
-3. The service is restarted with the rolled-back code.
-4. The workflow exits with a failure status, making the bad tag visible in the GitHub Actions UI.
-5. The last-good marker tag is NOT advanced (it still points to the previous good tag).
-
-**Acceptance criteria:**
-
-- Rollback is automatic -- no human intervention required
-- The rollback target is always the last-good marker tag, not "the previous tag" (there may be multiple bad tags in sequence)
-- If the last-good marker tag does not exist (first-ever deployment was bad), the workflow fails loudly with an explicit message requiring manual intervention. It does not attempt to roll back to an unknown state.
-- The workflow failure is clearly marked in the CI UI so the operator can investigate the bad tag
-- The service is restarted even after rollback, so the loop continues with the known-good code
+### Acceptance Criteria
+- Given a tag matching the release naming convention is pushed to the repository, when the CI pipeline detects the push event, then a deployment job is triggered
+- Given a tag that does not match the release naming convention is pushed, when the CI pipeline evaluates the event, then no deployment is triggered
+- Given multiple tags are pushed in quick succession, when the CI pipeline processes them, then deployments are serialized (not run in parallel) to avoid race conditions on the server
 
 ---
 
-## Configuration Management
+## US-02: As the CI pipeline, I need to run a smoke test on the deployed code before restarting the service so that broken code is caught before it takes over the running agent
 
-### Why config is separated from code
+The agent is autonomous and self-modifying. Without a verification gate, a single bad commit could deploy code that crashes on startup, wasting the entire next work chunk. The smoke test must verify that the code is syntactically valid and that the configuration can be loaded.
 
-The agent config JSON contains environment-specific paths, API endpoint URLs, and references to secrets. These differ between the server, local development, and other target projects. Tracking server-specific config in git would leak server paths and API URLs into the public repo. Instead, a sanitised template is tracked, and the deploy workflow copies it to a gitignored server config at deploy time.
-
-### Scenario: Config propagation during deployment
-
-**Context:** An operator (or the agent itself) has updated the tracked config template with a new setting (e.g., adding a tool to `allowed_tools`, changing `max_cycles`).
-
-**Expected behavior:**
-
-1. The template change is committed and included in the next release tag.
-2. During deployment, the workflow copies the tracked template to the server config path.
-3. The service restarts and picks up the new settings.
-
-**Acceptance criteria:**
-
-- The server config file is gitignored and never committed
-- The tracked template contains no secrets (empty `api_key`, sanitised `base_url`, generic `workspace` path)
-- The deploy workflow always copies the template fresh -- it does not merge with an existing server config. The template is the single source of truth for config structure.
-- API keys and other secrets are provided via the environment file, not the config JSON
-
-### Scenario: Agent tool restrictions
-
-**Context:** The agent config specifies which tools the agent may use and which bash commands are denied.
-
-**What the config must support:**
-
-1. **Tool allowlist.** An explicit list of tool names the agent may invoke. An empty list means "all tools." This lets operators restrict capabilities per-project (e.g., disabling `batch_write` for models that cannot emit its schema correctly).
-
-2. **Bash command denylist.** A list of commands the agent may not execute through the bash tool. This prevents the agent from running destructive commands (`rm`, `shutdown`, `reboot`) or commands that conflict with the harness's own orchestration (`git` -- because the harness manages git operations).
-
-3. **Cycle verification hooks.** A configurable list of post-cycle checks that must pass before a commit is allowed. Different projects need different hooks (e.g., `import_smoke` is inappropriate for projects with heavy native dependencies that fail on import).
-
-**Acceptance criteria:**
-
-- Tool restrictions are enforced at the framework level, not by the LLM's compliance with instructions
-- The bash denylist blocks commands when embedded in pipes and chain operators (`&&`, `||`, `;`, `|`). Command substitution (`$(...)` and backticks) is not currently inspected -- this is a known limitation.
-- Hook configuration is per-project, not global -- different config files can specify different hook sets
+### Acceptance Criteria
+- Given the new code has been fetched to the server, when the smoke test runs, then it verifies that all source files compile without syntax errors
+- Given the new code has been fetched, when the smoke test runs, then it verifies that the server configuration file loads and parses successfully
+- Given the smoke test passes, when the pipeline proceeds, then the service is restarted on the new code
+- Given the smoke test fails, when the pipeline evaluates the result, then the service is NOT restarted and the pipeline proceeds to the rollback step
 
 ---
 
-## Pause and Resume
+## US-03: As the CI pipeline, I need to maintain a "last known good" marker that advances only after a successful smoke test so that rollback always has a safe target
 
-### Why manual pause is necessary
+If a deployment fails the smoke test, the server must revert to the most recent code version that was verified to work. A persistent marker (advanced only on success) provides this anchor point.
 
-The self-improvement loop is designed to run indefinitely, but operators need to inspect, debug, or manually intervene without permanently stopping the service or losing state.
-
-### Scenario: Operator pauses the loop
-
-**Context:** The operator wants to stop the loop after the current chunk finishes (not mid-cycle) to inspect the output.
-
-**Expected behavior:**
-
-1. The operator creates a stop marker file at a known path on the server.
-2. The agent finishes its current chunk (N cycles), commits, pushes, and tags as normal.
-3. The CI pipeline deploys as normal, but at the restart step, it detects the stop marker.
-4. Instead of restarting the service, the pipeline removes the marker and logs that the loop is paused.
-5. The service remains stopped. The operator can inspect logs, review commits, and decide whether to continue.
-
-**Acceptance criteria:**
-
-- The stop marker is a simple file presence check, not a config change or API call
-- The marker path is fixed and documented, not derived from config
-- The marker is consumed (deleted) when detected, so the operator does not need to clean it up before resuming
-- The loop pauses at a clean boundary (between chunks), not mid-cycle
-- Resuming requires only pushing a new tag or manually starting the service -- no special "resume" command
-
-### Scenario: Operator resumes the loop
-
-**Context:** The operator has finished inspection and wants the loop to continue.
-
-**Expected behavior:**
-
-1. The operator either pushes a new tag (triggering the CI pipeline which will restart the service) or manually starts the service via systemctl.
-2. The agent begins a new run from cycle 1 with fresh state.
-
-**Acceptance criteria:**
-
-- No persistent state from the pause survives into the resumed run (each run is independent)
-- Both resume methods (new tag push and manual service start) result in the same behavior
-
-### Scenario: In-process pause via pause file
-
-**Context:** The operator (or an external script) wants to pause the agent within a running process without stopping the service or waiting for the current chunk to finish. This complements the stop marker (which pauses between CI chunks) by providing a finer-grained pause within a running process.
-
-**Expected behavior:**
-
-1. The operator creates a `.harness.pause` file in the workspace root.
-2. The agent finishes its current cycle (it does not abort mid-cycle).
-3. The agent enters a sleep loop, checking periodically for the pause file's removal.
-4. When the `.harness.pause` file is removed, the agent resumes execution from the next cycle.
-
-**Acceptance criteria:**
-
-- The pause file is a simple file presence check (`.harness.pause` in the workspace root)
-- The agent completes its current cycle before pausing -- it does not interrupt mid-cycle
-- The agent resumes automatically when the pause file is removed, without requiring a process restart
-- This mechanism operates within a running process, unlike the stop marker which operates between CI-triggered chunks
+### Acceptance Criteria
+- Given the smoke test passes, when the pipeline completes the verification step, then the last-known-good marker is updated to point at the current release
+- Given the smoke test fails, when the pipeline evaluates the result, then the last-known-good marker is NOT updated (it retains its previous value)
+- Given the last-known-good marker exists, when a rollback is needed, then the server code is reset to the version indicated by the marker
 
 ---
 
-## Auto-Tagging
+## US-04: As the CI pipeline, I need to automatically roll back the server to the last known good version when a smoke test fails so that a bad self-improvement cycle does not break the loop
 
-### Why the agent creates its own release tags
+A failed smoke test means the latest code is defective. The server must revert to the last verified-good version immediately, without waiting for human intervention, to minimize downtime in the autonomous loop.
 
-The deployment pipeline is tag-triggered. The agent must create tags automatically at the end of each chunk to close the self-improvement loop. Without auto-tagging, a human would need to create a tag after every chunk, defeating the purpose of autonomous operation.
+### Acceptance Criteria
+- Given the smoke test failed and the last-known-good marker exists, when the rollback step runs, then the server code is reset to the last-known-good version
+- Given the smoke test failed and no last-known-good marker exists (first-ever deployment was bad), when the rollback step runs, then the pipeline aborts with a clear error message indicating that manual intervention is required
+- Given a rollback occurs, when the pipeline completes, then the overall pipeline is marked as failed so the event is visible in CI dashboards and notifications
 
-### Scenario: End-of-chunk tagging
+---
 
-**Context:** The agent has completed its configured number of cycles (e.g., 20). Auto-commit, auto-push, and auto-tag are all enabled.
+## US-05: As the CI pipeline, I need to propagate the tracked configuration template to the server's active configuration file during each deployment so that configuration changes committed to the repository take effect automatically
 
-**Expected behavior:**
+The server's active configuration file is not checked into version control (it may contain environment-specific paths). A tracked template in the repository serves as the canonical source. Each deployment copies the template to the active location, ensuring that any configuration changes the agent or operator commits propagate to the running instance.
 
-1. After the final cycle's commit, the framework creates a tag with a configured prefix and a monotonically increasing identifier (e.g., timestamp).
-2. The tag is pushed to the remote.
-3. The pushed tag triggers the CI pipeline.
+### Acceptance Criteria
+- Given the repository contains an updated configuration template, when the deployment runs, then the active server configuration file is overwritten with the template contents
+- Given the active configuration file did not previously exist, when the deployment runs, then the file is created from the template
+- Given the template has not changed, when the deployment runs, then the copy still executes (idempotent -- the result is the same file)
 
-**Acceptance criteria:**
+---
 
-- Tags are created only at the configured interval (e.g., every 20 cycles), not after every cycle
-- The tag prefix is configurable and matches the CI pipeline's trigger pattern
-- Tag names are unique and monotonically increasing (no collisions, no reuse)
-- Tag push uses the same remote and authentication as the regular push
-- If auto-push is disabled, auto-tag is also effectively disabled (a tag on a local-only commit cannot trigger CI)
+## US-06: As the CI pipeline, I need to synchronize the server's local branch to match the deployed tag so that the agent's subsequent auto-push operations target a real branch rather than a detached state
+
+The deployment fetches and checks out a specific tag. If the server's working tree is left in a detached state, the agent's auto-push at the end of its next work chunk would fail because there is no branch to push. The deployment must ensure the local branch tracks the deployed tag.
+
+### Acceptance Criteria
+- Given a new tag is being deployed, when the server code is updated, then the local main branch is reset to match the tag
+- Given the branch reset succeeds, when the agent later commits and pushes, then the push targets the branch (not a detached HEAD) and succeeds
+
+---
+
+## US-07: As the agent, I need to pause between cycles when a pause marker file exists in the workspace so that the operator can temporarily halt autonomous activity without killing the process
+
+Sometimes the operator needs the agent to stop making changes (e.g., to perform manual maintenance or review recent work) but does not want to terminate the process. A file-based pause signal lets the agent finish its current cycle cleanly and then wait until the signal is removed.
+
+### Acceptance Criteria
+- Given the pause marker file exists, when the agent finishes a cycle, then it enters a polling wait state and does not start the next cycle
+- Given the agent is in the paused wait state and the pause marker file is removed, then the agent resumes and starts the next cycle
+- Given the agent is in the paused wait state and a shutdown signal is received, then the agent exits cleanly rather than waiting indefinitely for the file to be removed
+- Given the pause marker file does not exist, when the agent finishes a cycle, then it proceeds to the next cycle immediately
+
+---
+
+## US-08: As the CI pipeline, I need to honor a stop marker file that prevents the service from restarting after a deployment so that the operator can halt the self-improvement loop at the next natural boundary
+
+The pause file (US-07) works within a running work chunk. The stop marker works between chunks: it tells the CI pipeline not to restart the service after deployment. This lets the operator schedule a graceful stop at the end of the current chunk without needing to be present at the exact moment the chunk finishes.
+
+### Acceptance Criteria
+- Given the stop marker file exists on the server, when the deployment pipeline reaches the service restart step, then it skips the restart, removes the marker, and logs that the loop is paused
+- Given the stop marker file does not exist, when the deployment pipeline reaches the restart step, then it restarts the service normally
+- Given the stop marker was consumed (removed after skipping restart), when the operator later wants to resume the loop, then they must manually start the service (the marker is a one-shot mechanism)
+
+---
+
+## US-09: As the agent, I need to automatically create a release tag at periodic checkpoints and push it to the remote so that each chunk of work triggers the self-update deployment pipeline
+
+The deployment pipeline is triggered by pushed release tags. The agent must create and push these tags at regular intervals (configured as a checkpoint action) to close the self-improvement loop. Without auto-tagging, completed work would sit un-deployed until a human intervenes.
+
+### Acceptance Criteria
+- Given auto-tagging is enabled and the configured checkpoint interval is reached, when the checkpoint runs, then a new tag with a sequential name is created at the current commit
+- Given the tag is created and tag-pushing is enabled, when the tag is created, then it is pushed to the configured remote, triggering the deployment pipeline
+- Given auto-tagging is disabled in configuration, when a checkpoint runs, then no tag is created
+
+---
+
+## US-10: As the agent, I need to automatically commit and push changes at the end of each cycle so that work is persisted and available for deployment before the process potentially crashes
+
+Each cycle produces code changes. If those changes are not committed and pushed promptly, a subsequent crash would lose them. Auto-commit and auto-push ensure that every completed cycle's work is safely stored in the remote repository.
+
+### Acceptance Criteria
+- Given auto-commit is enabled and a cycle produced changes, when the cycle completes, then all staged changes are committed with a descriptive message
+- Given auto-push is enabled and a commit was made, when the commit succeeds, then the current branch is pushed to the configured remote
+- Given the push fails (network issue, conflict), when the push attempt returns an error, then the failure is logged but does not crash the agent -- the next cycle can retry
+
+---
+
+## US-11: As the operator, I need a configurable denylist of shell commands that the agent is forbidden from executing so that dangerous operations are blocked even if the LLM decides to attempt them
+
+The agent has shell access for builds, tests, and package management. But certain commands (file deletion, system shutdown, raw disk operations) must never be executed by an autonomous agent. A configurable denylist provides a hard safety boundary that the LLM cannot override.
+
+### Acceptance Criteria
+- Given a command's leading program name matches an entry on the denylist, when the agent attempts to execute it, then the command is rejected with a clear permission error before any subprocess is created
+- Given a command uses shell chaining operators to hide a denied command after an allowed one, when the agent attempts to execute it, then every segment of the chained command is checked and the denied segment is caught
+- Given a command uses an absolute path to a denied program, when the agent attempts to execute it, then the path prefix is stripped and the base program name is matched against the denylist
+- Given the denylist is empty, when the agent executes any command, then no commands are blocked
+
+> **Known gap:** The denylist inspects the leading token of each shell-chained segment, but does not inspect arguments or nested command substitutions. A denied command embedded inside a substitution expression (e.g., passed as an argument via shell expansion) would bypass the check. This is a known limitation documented in the codebase.
+
+---
+
+## US-12: As the operator, I need the deployment pipeline to fail visibly when a smoke test fails so that the bad release is surfaced in CI dashboards and notifications
+
+A silent rollback that shows as a green pipeline would mask problems. The operator needs to know that a release was bad so they can investigate the defective code before more tags are pushed.
+
+### Acceptance Criteria
+- Given a smoke test fails and rollback completes, when the pipeline finishes, then the overall pipeline status is "failed"
+- Given the pipeline fails, when the CI system evaluates the result, then the failure is visible in dashboards and triggers any configured notifications
+- Given the pipeline failure message, when the operator reads it, then it identifies the specific tag that failed and advises investigation before pushing more releases

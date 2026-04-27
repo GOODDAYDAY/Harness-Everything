@@ -1,224 +1,253 @@
 # File Operations
 
-This document specifies what the agent must be able to do with files and what safety properties those operations must guarantee.
+User stories covering all file-level capabilities: reading, writing, editing, patching, searching/replacing within files, moving, copying, deleting, and directory operations.
 
-## Context
+**Actors:**
+- "As the agent" -- the agent performing file operations to accomplish tasks
+- "As a file operation" -- security and integrity constraints on file access
 
-The agent's primary output is modified source code. Every meaningful cycle involves reading files to understand context, editing files to make changes, and sometimes creating, moving, or deleting files as part of refactoring. File operations are the highest-volume tool category and the highest-risk: a botched write can corrupt a codebase, a path traversal can escape the workspace.
+---
 
-## Concern 1: Reading files
+## Reading Files
 
-### R-FILE-01: Read with line-range control
+## US-01: As the agent, I need to read a specific portion of a file by line range so that I consume only the context I need
 
-The agent must be able to read a file and specify which portion to retrieve (start line, number of lines). Returning entire files by default wastes context budget; the agent needs to read only the section it cares about.
+Reading an entire large file wastes context window budget. The agent specifies a starting line and a maximum number of lines to read, and receives only that slice with line numbers prepended for orientation.
 
-**Why:** LLM context windows are finite and expensive. A 3,000-line file read in full occupies context that could hold multiple smaller, targeted reads. Line-range control lets the agent read 50 lines around a function definition instead of the whole module.
+### Acceptance Criteria
+- Given a file and a line range, when the agent reads it, then only the requested lines are returned with 1-based line numbers
+- Given a starting line beyond the end of the file, when the agent reads it, then an error is returned indicating the valid range
+- Given a line count exceeding the file's length from the starting point, when the agent reads it, then lines up to the end of the file are returned without error
+- Given an extremely large line count request, when the agent reads it, then the request is rejected to prevent resource exhaustion
 
-**Acceptance criteria:**
-- The agent can request lines 100-150 of a file and receive exactly those lines.
-- Line numbers in the output are 1-based and match the file's actual line numbers.
-- Requesting an offset beyond the file's length returns an error indicating the offset exceeds the file length.
+## US-02: As the agent, I need to read multiple files in a single operation so that I save round-trips when exploring a codebase
 
-### R-FILE-02: Batch reading
+When the agent needs to examine several files at once (e.g., a class and its test file), a batch read returns all requested file contents in one call instead of requiring sequential single-file reads.
 
-The agent must be able to read multiple files in a single tool call. Each file in the batch uses the same line-range parameters and each is validated independently -- a failure on one file does not abort the others.
+### Acceptance Criteria
+- Given a list of file paths, when the agent performs a batch read, then the contents of all valid files are returned in one result
+- Given a list where some files do not exist, when the agent performs a batch read, then existing files are returned and missing files are reported as errors within the same result
 
-**Why:** Without batch reading, exploring a codebase costs one LLM round-trip per file. Reading 5 related files (a module, its tests, its config, two callers) takes 5 turns. Batch reading reduces this to 1 turn, which is critical because tool turns are the primary bottleneck in agent throughput.
+## US-03: As the agent, I need the file read result to include the file name and total line count so that I can orient myself within the file
 
-**Acceptance criteria:**
-- A single call can read up to 50 files.
-- If file 3 of 5 does not exist, files 1, 2, 4, 5 are still returned.
-- The per-file failure is reported inline (not as a top-level error that masks the successful reads).
-- Total output is capped to prevent a large batch from flooding the context window.
+Each read result includes a header showing which file was read, which lines are being shown, and the total number of lines in the file. This lets the agent decide whether to read more and from where.
 
-### R-FILE-03: File metadata without content
+### Acceptance Criteria
+- Given a file read, when the result is returned, then it includes the file name, the line range shown, and the total line count
 
-The agent must be able to retrieve file metadata (line count, byte size, last-modified time) without reading the file's content. This supports informed decisions about what line range and limit to use for a subsequent read.
+---
 
-**Why:** The agent cannot know whether to request `limit=50` or `limit=500` without knowing the file's size. A metadata-first call lets it calibrate its reads and avoid either under-reading (missing context) or over-reading (wasting budget).
+## Writing Files
 
-**Acceptance criteria:**
-- Metadata retrieval accepts multiple paths in one call.
-- The result includes at minimum: line count, byte size, and modification time.
-- The result does not include file content.
+## US-04: As the agent, I need to create a new file or completely replace an existing file's contents so that I can produce new artifacts
 
-## Concern 2: Writing files
+Writing places the provided content into the specified path, creating any missing parent directories automatically. This is an all-or-nothing operation: the entire prior content is replaced.
 
-### R-FILE-04: Full-file write with atomic semantics
+### Acceptance Criteria
+- Given a path that does not exist, when the agent writes content to it, then the file is created with the specified content and any missing parent directories are created
+- Given a path that already exists, when the agent writes content to it, then the file's entire content is replaced with the new content
+- Given a path outside the allowed directories, when the agent writes to it, then the operation is rejected with a permission error
 
-The agent must be able to create a new file or completely overwrite an existing file. The write must be atomic: the file either contains the new content entirely or remains unchanged. No partial writes that leave a truncated or corrupted file.
+## US-05: As the agent, I need to write multiple files in a single operation so that I save round-trips when producing several artifacts at once
 
-**Why:** A crash or timeout during a write must not leave the workspace in a half-written state. If the agent writes a 200-line module and the process is killed at line 100, the file should still contain either the old content or nothing (for a new file), not a truncated fragment that fails to parse.
+A batch write creates or overwrites multiple files in one call. Each file is handled independently -- a failure in one does not prevent the others from being written.
 
-**Acceptance criteria:**
-- Writing to a path whose parent directory does not exist creates the parent directory automatically.
-- If the write fails mid-way (simulated by e.g., disk full), the original file content is preserved.
-- Writes go through security validation (path confinement, phase restrictions) before writing. The primary write path uses direct file writing after validation; a secondary utility provides temp-file-then-rename semantics for callers that need atomicity guarantees.
+### Acceptance Criteria
+- Given a list of path-content pairs, when the agent performs a batch write, then each file is written independently and the result reports per-file success or failure
 
-### R-FILE-05: Batch writing
+## US-06: As a file operation, I need file writes to be atomic so that a crash mid-write does not leave a corrupted file
 
-The agent must be able to write multiple files in a single tool call. Writes to different paths run in parallel since they do not race. Per-file failures are reported without aborting the batch.
+Write operations first write to a temporary file in the same directory, then atomically replace the target. This ensures that readers never see a half-written file.
 
-**Why:** Scaffolding a new feature (module, test file, config, __init__ update) involves creating several files. Doing this one file per turn wastes turns. Batch writing handles the entire scaffolding in one round-trip.
+### Acceptance Criteria
+- Given a write operation that succeeds, when the file is read back, then it contains exactly the written content
+- Given a write operation that fails after the temporary file is created, when the failure is handled, then the temporary file is cleaned up and the original file is unchanged
 
-**Acceptance criteria:**
-- A single call can write up to 50 files.
-- Total content size per batch is capped to prevent memory exhaustion.
-- If file 2 of 4 fails (e.g., path outside allowed scope), files 1, 3, 4 are still written.
+---
 
-## Concern 3: Editing files (surgical modification)
+## Editing Files
 
-### R-FILE-06: Search-and-replace editing
+## US-07: As the agent, I need to perform a surgical search-and-replace within a single file so that I can modify code without rewriting the entire file
 
-The agent must be able to modify a file by specifying an exact string to find and its replacement. The match must be character-for-character exact (including whitespace and indentation). By default, the search string must appear exactly once in the file -- zero matches or multiple matches are errors.
+The agent provides the exact text to find and its replacement. By default the match must appear exactly once -- zero matches or multiple matches produce an error, forcing the agent to be precise.
 
-**Why:** Full-file write requires the agent to reproduce the entire file content, including parts it did not change. This wastes output tokens and risks accidentally dropping lines. Search-and-replace lets the agent specify only the changed portion, keeping edits minimal and reviewable.
+### Acceptance Criteria
+- Given a search string that appears exactly once, when the agent edits the file, then that occurrence is replaced and the file is saved
+- Given a search string that appears zero times, when the agent edits the file, then an error is returned indicating no match was found
+- Given a search string that appears multiple times without the replace-all flag, when the agent edits the file, then an error is returned showing how many times and on which lines the string appears
+- Given a search string that appears multiple times with the replace-all flag, when the agent edits the file, then all occurrences are replaced
 
-**Acceptance criteria:**
-- An edit where `old_str` does not appear in the file returns an error, not a no-op.
-- An edit where `old_str` appears more than once returns an error (unless `replace_all` is set).
-- Setting `replace_all=true` replaces every occurrence.
-- A `dry_run` mode shows what would change without writing to disk.
+## US-08: As the agent, I need to edit multiple files in a single operation so that related changes across files are applied together
 
-### R-FILE-07: Batch editing
+A batch edit applies independent search-and-replace operations to multiple files in one call. Each edit is applied independently -- a failure in one file does not prevent edits to other files.
 
-The agent must be able to apply multiple search-and-replace edits in a single tool call, potentially across multiple files. Edits are independent: one failing edit does not abort the rest. Edits to the same file run serially to avoid read-modify-write races; edits to different files may run in parallel.
+### Acceptance Criteria
+- Given a list of per-file edit instructions, when the agent performs a batch edit, then each file is edited independently and the result reports per-file outcomes
 
-**Why:** A coherent change often touches multiple files (rename a function in its definition, all call sites, and tests). Doing this one edit per turn costs N turns. Batch editing lands the entire change in one round-trip, and the serial-within-file guarantee prevents race conditions.
+## US-09: As the agent, I need a dry-run mode for edits so that I can preview what would change before committing
 
-**Acceptance criteria:**
-- A single call can apply up to 100 edits.
-- Edits to the same file are applied in the order they appear in the batch, each seeing the result of the previous one.
-- Partial failures are reported per-edit with the edit index, not as a single top-level error.
+When dry-run is enabled, the edit computes and reports the changes (which lines would be modified, added, or removed) without writing anything to disk.
 
-### R-FILE-08: Structured diff patching
+### Acceptance Criteria
+- Given a valid edit with dry-run enabled, when the agent previews it, then the preview shows the affected lines and no file is modified
+- Given an invalid edit with dry-run enabled (e.g., no match), when the agent previews it, then the same error as a real edit is returned
 
-The agent must be able to apply unified diff patches (the format produced by `git diff` or `diff -u`) to files. Each hunk is applied independently with configurable line-offset fuzz tolerance. Application is all-or-nothing per file: either all hunks for a file succeed, or none are written.
+---
 
-**Why:** When the agent has a clear picture of the before/after state (e.g., from planning or from a previous diff output), a unified patch is a more natural format than search-and-replace for multi-hunk changes. It also interoperates with git workflows.
+## Patching Files
 
-**Acceptance criteria:**
-- A multi-file patch applies each file section independently.
-- If a hunk cannot be located at its declared line number, the tool searches nearby lines (within fuzz tolerance) before failing.
-- Dry-run mode reports which hunks would apply and which would fail.
+## US-10: As the agent, I need to apply a unified diff (patch) to files so that I can make complex, multi-hunk changes efficiently
 
-### R-FILE-09: Multi-file regex find-and-replace
+The agent provides standard unified-diff text (the same format produced by diff tools). Each hunk is located in the target file and applied independently. The operation is all-or-nothing per file: either all hunks succeed or none are written.
 
-The agent must be able to apply a regex substitution across all files matching a glob pattern. This is the refactoring tool for symbol renames, import path updates, and bulk string corrections.
+### Acceptance Criteria
+- Given a valid single-file patch with a target path, when the agent applies it, then all hunks are applied in order and the file is written
+- Given a multi-file patch with file headers, when the agent applies it, then each file is patched independently and the result reports per-file outcomes
+- Given a hunk that cannot be located at its declared line number, when the agent applies the patch, then a configurable fuzz tolerance searches nearby lines before giving up
+- Given a patch with a hunk that cannot be located even with fuzz, when the agent applies it, then a clear error is returned identifying the failing hunk
 
-**Why:** Renaming a function that appears in 30 files via individual edit calls would cost 30 turns. A single regex find-and-replace does it in one call with a safety cap on the number of files affected.
+## US-11: As the agent, I need a dry-run mode for patches so that I can verify hunks apply cleanly before writing
 
-**Acceptance criteria:**
-- A safety cap limits the number of files changed per call (default 50). The agent must explicitly raise the cap for broader renames.
-- Dry-run mode reports which files would be changed and how many substitutions per file, without writing.
-- A `literal` mode escapes regex metacharacters so plain-string renames do not require manual escaping.
-- Every candidate file is path-checked before being read or written.
+When dry-run is enabled, the patch reports which hunks would apply, the resulting line counts, and (for single-file patches) the full resulting file content, without modifying any file.
 
-### R-FILE-10: AST-aware symbol rename
+### Acceptance Criteria
+- Given a valid patch with dry-run enabled, when the agent previews it, then the result shows hunk-by-hunk status and no file is modified
 
-The agent must be able to rename a Python symbol (function, class, variable, method) across the codebase using AST analysis, only touching actual code identifiers -- not occurrences in strings, comments, or unrelated scopes.
+---
 
-**Why:** Regex-based find-and-replace has false positives: renaming `run` to `execute` via regex would also change the word "run" inside docstrings and comments. AST-aware rename only modifies nodes in the parse tree that are actual identifier references.
+## Multi-file Search and Replace
 
-**Acceptance criteria:**
-- A rename of function `foo` to `bar` modifies definition sites, call sites, and import references, but not string literals or comments containing "foo."
-- Preview mode (default) shows what would change without writing.
-- The tool updates import statements (`from mod import foo` becomes `from mod import bar`).
+## US-12: As the agent, I need to perform a regex-based search-and-replace across many files so that I can rename symbols or fix patterns codebase-wide in one operation
 
-## Concern 4: File management (move, copy, delete)
+Unlike single-file editing, this operation applies a single regex substitution to every file matching a glob pattern. This makes bulk renames, import path updates, and repeated fixes efficient.
 
-### R-FILE-11: Move, copy, and delete
+### Acceptance Criteria
+- Given a regex pattern and a replacement string, when the agent runs the operation, then every matching file has substitutions applied and a per-file summary is returned
+- Given a literal flag, when the agent runs the operation, then the pattern is treated as a plain string with no regex metacharacter interpretation
+- Given no matching files, when the agent runs the operation, then a message reports zero matches without error
 
-The agent must be able to move (rename), copy, and delete individual files. All three operations validate both source and destination paths against the security boundary. Parent directories for destination paths are created automatically.
+## US-13: As the agent, I need a safety cap on multi-file replacements so that a badly anchored regex cannot accidentally rewrite the entire codebase
 
-**Why:** Refactoring involves restructuring the file tree: moving modules to new packages, copying templates, deleting obsolete files. These are basic operations the agent needs beyond read/write/edit.
+A configurable maximum limits how many files can be modified in a single replace operation. If the match count exceeds this cap, the operation stops and reports that the cap was reached, requiring the agent to explicitly raise the limit or narrow the scope.
 
-**Acceptance criteria:**
-- Moving a file to a destination whose parent directory does not exist creates the directory.
-- Deleting a file that does not exist returns an error, not a silent no-op.
-- Both source and destination of a move/copy are validated against allowed paths -- an agent cannot move a file from inside the workspace to outside it (or vice versa).
+### Acceptance Criteria
+- Given more matching files than the cap, when the agent runs the operation, then only files up to the cap are modified and a warning indicates how many additional files were skipped
+- Given the agent explicitly sets a higher cap, when the operation runs, then up to that higher limit of files may be modified
 
-## Concern 5: File safety boundary
+## US-14: As the agent, I need a dry-run mode for multi-file replacement so that I can verify scope and correctness before committing changes
 
-### R-FILE-12: Path confinement
+When dry-run is enabled, the operation reports which files would be changed, how many substitutions each would receive, and the first few matching lines per file, without writing anything.
 
-Every file operation must validate that the resolved path falls within the configured allowed directories. Path traversal sequences (`../`), symlinks that resolve outside the workspace, and absolute paths pointing outside allowed directories must all be rejected.
+### Acceptance Criteria
+- Given a dry-run replacement, when the agent previews it, then per-file match counts and sample matching lines are shown and no file is modified
 
-**Why:** An autonomous agent that can read and write arbitrary paths on the host filesystem is a security risk. Path confinement is the fundamental safety guarantee that makes unattended operation feasible.
+---
 
-**Acceptance criteria:**
-- A path containing `../../etc/passwd` is rejected regardless of the workspace location.
-- A symlink inside the workspace that points outside allowed directories is rejected.
-- The check uses the resolved (real) path, not the user-supplied string, to prevent TOCTOU attacks where a symlink is swapped after the check but before the operation.
+## File Operations (Delete, Move, Copy)
 
-### R-FILE-13: TOCTOU protection
+## US-15: As the agent, I need to delete a file so that I can remove obsolete or incorrect artifacts
 
-File path validation and the subsequent file operation (read, write, delete) must be atomic. Between the moment a path is validated and the moment the file is accessed, the path must not be swappable by a concurrent process.
+The agent provides a file path, and the file is removed after security validation.
 
-**Why:** A time-of-check/time-of-use race allows an attacker to replace a validated path with a symlink to a sensitive file between the validation step and the actual file operation. Atomic validation-and-operation prevents this.
+### Acceptance Criteria
+- Given an existing file within allowed directories, when the agent deletes it, then the file is removed
+- Given a non-existent file, when the agent tries to delete it, then an error is returned
+- Given a file outside allowed directories, when the agent tries to delete it, then a permission error is returned
 
-**Acceptance criteria:**
-- File operations use `O_NOFOLLOW` or equivalent mechanisms to prevent symlink swaps between validation and access.
-- The inode of the opened file is verified to match the inode seen during validation.
-- If inode verification fails (path changed between check and use), the operation is rejected with a security error.
+## US-16: As the agent, I need to move or rename a file so that I can reorganize the codebase structure
 
-### R-FILE-14: Character-level path security
+The agent provides source and destination paths. The file is moved atomically when possible, with a copy-then-delete fallback for cross-device moves.
 
-Paths must be checked for null bytes (which truncate paths at the OS level) and Unicode homoglyphs (visually similar characters that can spoof ASCII paths). Both checks run before any OS-level path resolution.
+### Acceptance Criteria
+- Given valid source and destination paths, when the agent moves a file, then the file appears at the destination and no longer exists at the source
+- Given a destination whose parent directory does not exist, when the agent moves a file, then the parent directory is created automatically
+- Given a cross-device move, when the agent moves a file, then a copy-then-delete fallback succeeds transparently
 
-**Why:** Null bytes in `"safe/path\x00/../../etc/shadow"` may cause the OS to see only `"safe/path"` while the application sees the full string. Homoglyphs like Cyrillic "a" (U+0430) look identical to ASCII "a" but resolve to different filesystem entries, enabling path spoofing.
+## US-17: As the agent, I need to copy a file so that I can create a variant without losing the original
 
-**Acceptance criteria:**
-- A path containing a null byte is rejected before any file operation.
-- A path containing Cyrillic or Greek look-alike characters is rejected with a message identifying the offending character.
-- NFKC normalization is applied: paths that change under normalization (indicating compatibility characters like superscripts or ligatures) are rejected.
+The agent provides source and destination paths. The file is duplicated, preserving metadata (timestamps, permissions).
 
-### R-FILE-15: Phase-scoped write restrictions
+### Acceptance Criteria
+- Given valid source and destination paths, when the agent copies a file, then the destination contains the same content and the source is unchanged
+- Given a destination whose parent directory does not exist, when the agent copies a file, then the parent directory is created automatically
 
-When a phase specifies `allowed_edit_globs`, write operations must be restricted to paths matching those glob patterns. Read operations are never restricted by phase scope -- only writes.
+---
 
-**Why:** Different phases of a run may have different scopes. A "fix tests" phase should only be allowed to edit test files, not production code. Phase scoping is an additional layer of confinement beyond the workspace-level allowed paths.
+## Directory Operations
 
-**Acceptance criteria:**
-- A write to `harness/core/config.py` is rejected during a phase whose globs are `["tests/**"]`.
-- A read of `harness/core/config.py` during the same phase succeeds (reads are unrestricted).
-- An empty or missing glob list means no phase restriction (all workspace paths are writable).
+## US-18: As the agent, I need to list the contents of a directory so that I can understand what files and subdirectories exist at a location
 
-## Concern 6: Directory operations
+The agent provides a directory path and receives a list of entries with type indicators (file or directory) and file sizes.
 
-### R-FILE-16: Directory listing, creation, and tree view
+### Acceptance Criteria
+- Given a valid directory path, when the agent lists it, then all entries are returned sorted alphabetically with type and size information
+- Given a non-existent or non-directory path, when the agent lists it, then an error is returned
 
-The agent must be able to list directory contents (with file type and size), create directories (including parents), and generate tree-view representations of directory structures.
+## US-19: As the agent, I need to create a directory (including any missing parents) so that I can set up directory structures before writing files
 
-**Why:** Understanding project layout is a prerequisite to meaningful code changes. The agent needs to see what files exist, where they are, and how they are organized before it can navigate to the right file.
+The agent provides a directory path. All missing intermediate directories are created automatically.
 
-**Acceptance criteria:**
-- Directory listing shows file type (file vs directory), file size, and file name.
-- Directory creation is idempotent -- creating an already-existing directory is not an error.
-- Tree view respects depth limits to prevent unbounded output on deep directory structures.
+### Acceptance Criteria
+- Given a path with missing intermediate directories, when the agent creates the directory, then all levels are created
+- Given a path that already exists as a directory, when the agent creates it, then no error is raised (idempotent)
 
-## Concern 7: Diff and comparison
+## US-20: As the agent, I need to view a directory tree so that I can understand the hierarchical structure of a codebase at a glance
 
-### R-FILE-17: File-to-file and file-to-text diff
+The agent provides a root directory and a maximum depth. The result is a visual tree showing the nesting structure with directory and file entries.
 
-The agent must be able to produce unified diffs comparing two files or comparing a file against a provided text string. The output format must be compatible with the patch tool.
+### Acceptance Criteria
+- Given a root directory and a depth limit, when the agent requests the tree, then directories and files are displayed in a hierarchical tree format up to the specified depth
+- Given hidden entries (names starting with dot), when the tree is rendered, then they are excluded from the output
 
-**Why:** The agent needs to verify its own changes ("did my edit produce the expected result?"), compare versions of a file, and detect regressions. The diff output also feeds into the patch tool for round-trip workflows.
+---
 
-**Acceptance criteria:**
-- Diffing identical content reports "no differences" explicitly, not an empty string.
-- Output is capped at a configurable number of lines to prevent large diffs from flooding the context.
-- The output format is standard unified diff accepted by the patch tool.
+## File Comparison
 
-## Concern 8: Persistent notes (scratchpad)
+## US-21: As the agent, I need to see a unified diff between two files, or between a file and a text string, so that I can verify what changed or what still needs to change
 
-### R-FILE-18: Context-surviving notes
+The agent can compare two existing files, or compare a file against an expected text string. The output is standard unified-diff format, directly compatible with the patch tool.
 
-The agent must be able to save short text notes that survive conversation pruning. Notes are re-injected into the system prompt on every subsequent turn so the agent retains critical information even after old tool results are evicted from the context window.
+### Acceptance Criteria
+- Given two files, when the agent diffs them, then a unified diff is returned showing additions and removals
+- Given a file and an expected text string, when the agent diffs them, then a unified diff is returned showing how the file differs from the expected state
+- Given two identical inputs, when the agent diffs them, then a message explicitly states there are no differences
+- Given a very large diff, when the output exceeds the line cap, then it is truncated with a notice
 
-**Why:** Conversation pruning removes old messages to stay within the context budget. Without scratchpad notes, the agent loses findings from early in a cycle (file locations, design decisions, bug descriptions) and wastes turns re-discovering them.
+---
 
-**Acceptance criteria:**
-- A saved note appears in the system prompt on the next turn.
-- Notes have a per-note size cap to prevent context pollution.
-- Notes are per-cycle; a new cycle starts with a clean scratchpad.
+## Security Constraints
+
+## US-22: As a file operation, I need to reject any path that resolves outside the allowed directories so that the agent cannot access unauthorized parts of the filesystem
+
+Every file operation validates the target path against a configured list of allowed directories. Paths that resolve (after symlink resolution and normalization) outside these directories are rejected.
+
+### Acceptance Criteria
+- Given a path within the allowed directories, when it is validated, then it passes and the resolved absolute path is returned
+- Given a path that resolves outside allowed directories (via "..", symlinks, or absolute path), when it is validated, then a permission error is returned
+- Given a relative path, when it is validated, then it is resolved relative to the workspace root before checking
+
+## US-23: As a file operation, I need to reject paths containing security-sensitive characters so that path injection attacks are prevented
+
+Paths containing null bytes, homoglyph characters, or other attack vectors are rejected before any filesystem access occurs.
+
+### Acceptance Criteria
+- Given a path containing a null byte, when it is validated, then a security error is returned
+- Given a path containing homoglyph characters, when it is validated, then a security error is returned
+
+## US-24: As a file operation, I need to prevent time-of-check-to-time-of-use (TOCTOU) attacks so that a path verified as safe is still safe when accessed
+
+Path validation and file access are performed atomically where possible. Symlinks are not followed unless explicitly allowed, and file identity is verified via inode after opening to detect path swaps.
+
+### Acceptance Criteria
+- Given a symlink within the workspace, when it is accessed without symlink resolution enabled, then the operation is rejected
+- Given a file that is swapped between validation and access, when the atomic validation detects the mismatch, then the operation is rejected with a security violation error
+
+## US-25: As a file operation, I need to enforce phase-scoped edit restrictions so that the agent can only modify files permitted by the current execution phase
+
+When the configuration specifies edit-scope glob patterns for the current phase, write operations are restricted to files matching those patterns. Read operations are never restricted by phase scope.
+
+### Acceptance Criteria
+- Given phase edit globs and a write to a file matching the globs, when the operation runs, then it succeeds
+- Given phase edit globs and a write to a file outside the globs, when the operation runs, then a scope error is returned identifying the mismatch
+- Given no phase edit globs configured, when any write operation runs, then no scope restriction is applied
+- Given a read operation on a file outside the phase edit globs, when the operation runs, then it succeeds (reads are unrestricted)

@@ -1,193 +1,163 @@
 # Execution and System
 
-This document specifies the agent's capabilities for executing commands, running tests, interacting with git, making network requests, and evaluating code -- along with the safety constraints that bound each capability.
+User stories covering capabilities for running shell commands, evaluating Python snippets, running tests, querying git state, and searching the web.
 
-## Context
+**Actors:**
+- "As the agent" -- the agent executing commands and queries to accomplish tasks
+- "As a file operation" -- security constraints on execution (reused for consistency with the domain's security actor)
 
-The tools in this domain are the most powerful and the most dangerous. A shell command can install packages or delete the filesystem. A network request can exfiltrate data. A test runner can execute arbitrary code. These tools exist because the agent needs them to do its job (build, test, deploy), but every one operates under constraints that limit blast radius.
+---
 
-The guiding principle: **dedicated tools over generic shell**. Every operation that has a dedicated tool (reading files, searching, running tests, linting) should use that tool, not `bash`. The shell is a last resort for operations that have no dedicated tool -- builds, installs, custom scripts.
+## Shell Execution
 
-## Concern 1: Shell execution
+## US-01: As the agent, I need to execute shell commands in the workspace directory so that I can run builds, install packages, and perform system operations that have no dedicated tool
 
-### R-EXEC-01: Shell command execution with denylist
+Shell execution is a last-resort capability for operations like package installation, build commands, custom scripts, and git push -- tasks that no specialized tool handles. The command runs in the workspace directory with captured output.
 
-The agent must be able to execute shell commands in the workspace directory. A configurable denylist prevents execution of specific dangerous commands. The denylist is checked against the first token of every command segment (split on `&&`, `||`, `;`, `|`, `&`), so chained commands cannot bypass the check.
+### Acceptance Criteria
+- Given a shell command, when the agent executes it, then the command runs in the workspace directory and stdout, stderr, and exit code are returned
+- Given a command that exits with a non-zero code, when the result is returned, then it is marked as an error and both stdout and stderr are included
+- Given a command that runs longer than the timeout, when the timeout expires, then the command is killed, the child process is cleaned up, and a timeout error is returned
 
-**Why:** The agent needs shell access for builds (`make`, `cargo build`), package management (`pip install`), and operations that have no dedicated tool. The denylist prevents the most dangerous commands (e.g., `rm -rf`, `chmod`, `shutdown`) from being executed even if the LLM hallucinates them.
+## US-02: As a file operation, I need shell commands checked against a denylist so that dangerous commands cannot be executed by the agent
 
-**Acceptance criteria:**
-- A command like `echo hi && rm -rf /` is rejected because `rm` appears in the denylist, even though `echo` does not.
-- The denylist check strips path prefixes: `/usr/bin/rm` matches a denylist entry for `rm`.
-- Quoted tokens are handled correctly: `"rm -rf /"` as a single quoted argument does not match `rm` as a leading token.
-- A command not in the denylist executes normally and returns stdout, stderr, and exit code.
+A configurable denylist of command names prevents the agent from running destructive or unauthorized commands. The check inspects every segment of a chained command (separated by shell operators like && or ||) so that hiding a denied command after a benign one is caught.
 
-### R-EXEC-02: Command timeout
+### Acceptance Criteria
+- Given a denied command as the first token, when the agent tries to execute it, then a permission error is returned naming the denied command
+- Given a denied command chained after a benign command (e.g., via && or ||), when the agent tries to execute it, then the entire command is rejected
+- Given a denied command invoked with a full path (e.g., /usr/bin/rm), when the agent tries to execute it, then the base name is matched against the denylist and the command is rejected
+- Given an empty or absent denylist, when any command is executed, then no denylist check is applied
 
-Every shell command must have a configurable timeout (default 60 seconds). When a command exceeds its timeout, the child process is killed and the agent receives a timeout error.
+---
 
-**Why:** A hanging build or an infinite loop in a script would stall the entire agent indefinitely. Timeouts ensure the agent always gets control back and can decide how to proceed.
+## Python Evaluation
 
-**Acceptance criteria:**
-- A command that runs for longer than the timeout is killed and returns a timeout error.
-- The killed process is reaped (no zombie processes left behind).
-- The timeout is per-invocation, not cumulative.
+## US-03: As the agent, I need to execute a Python code snippet in an isolated subprocess so that I can verify imports, check return values, and run quick assertions without full test overhead
 
-### R-EXEC-03: Shell is last resort
+The agent provides a Python snippet that runs in a fresh subprocess with the workspace automatically on the import path. The tool captures stdout, stderr, and the return value of the last expression separately, giving structured output.
 
-The shell tool's description and schema must actively discourage use for operations that have dedicated tools. Reading files via `cat`, searching via `grep`, running tests via `pytest`, and linting via `ruff` should all use their dedicated tools.
+### Acceptance Criteria
+- Given a Python snippet, when the agent evaluates it, then stdout, stderr, and the exit code are returned as separate sections
+- Given a snippet whose last statement is an expression (not an assignment), when the agent evaluates it, then the expression's representation is returned as a distinct return value
+- Given a snippet that imports a workspace module, when the agent evaluates it, then the import succeeds because the workspace is on the import path
 
-**Why:** Dedicated tools provide better output formatting (structured results vs. raw stdout), better error handling (parsed errors vs. stderr blobs), security validation (path checks), and resource caps (output truncation). Using `bash` for these tasks bypasses all of these benefits.
+## US-04: As the agent, I need Python evaluation to enforce a tight timeout so that infinite loops or expensive operations are caught quickly
 
-**Acceptance criteria:**
-- The tool description explicitly lists which dedicated tools should be used instead of bash for common operations.
-- This is a documentation/guidance requirement, not a runtime enforcement -- the agent can still use bash for anything not in the denylist.
+The default timeout for snippet evaluation is shorter than for general shell commands, and it is clamped to a maximum to prevent the agent from setting an unreasonably long timeout.
 
-## Concern 2: Python code evaluation
+### Acceptance Criteria
+- Given a snippet that runs an infinite loop, when the timeout expires, then the subprocess is killed and a timeout error is returned with guidance about common causes
+- Given a timeout request exceeding the maximum, when the snippet is evaluated, then the timeout is clamped to the maximum
 
-### R-EXEC-04: Python snippet execution in isolated subprocess
+## US-05: As the agent, I need Python evaluation output to be truncated to a configured limit so that verbose scripts do not flood my context window
 
-The agent must be able to execute Python snippets in a subprocess (never `exec()` in the harness process itself). The subprocess must have the workspace on `sys.path` so workspace modules are importable. The output must separate stdout, stderr, and the return value of the last expression.
+Output from the snippet is capped at a configurable maximum character count. When truncation occurs, the exit code trailer is preserved so the agent always knows whether the snippet succeeded.
 
-**Why:** The agent sometimes needs to verify behavior, test an import, compute a value, or inspect runtime data that static analysis cannot reveal. Subprocess isolation ensures that a buggy snippet cannot corrupt the harness process's state, block the event loop, or leak memory.
+### Acceptance Criteria
+- Given output exceeding the character limit, when the result is returned, then it is truncated with a notice and the exit code is still visible
+- Given output within the character limit, when the result is returned, then it is shown in full
 
-**Acceptance criteria:**
-- The snippet runs in a fresh subprocess with `cwd=workspace` and workspace prepended to `PYTHONPATH`.
-- stdout, stderr, and the return value are reported separately.
-- Output is truncated to a configurable character limit (default 4,000) to prevent context flooding.
-- A tight default timeout (30 seconds) prevents runaway scripts.
-- The snippet has no stdin (connected to `/dev/null`).
+---
 
-### R-EXEC-05: Python eval is not sandboxed
+## Test Running
 
-The Python eval tool executes arbitrary Python code. It does not sandbox the interpreter, restrict imports, or prevent filesystem access. It is suitable for development/CI use but must not be used in untrusted-user contexts.
+## US-06: As the agent, I need to run tests and receive structured results so that I can programmatically determine what passed, failed, and why
 
-**Why:** Full sandbox isolation (seccomp, namespace isolation, etc.) would add significant complexity and platform-specific dependencies for marginal benefit in the intended use case (developer's own machine, CI pipeline). The tool documents this limitation explicitly rather than providing a false sense of security.
+The agent provides a test path and optional arguments. The tool invokes the test framework, parses the output, and returns structured data: total/passed/failed/error/skipped counts, per-test outcomes, and condensed failure tracebacks sized to fit a context window.
 
-**Acceptance criteria:**
-- The tool's documentation states that it is not sandboxed.
-- The workspace must be set (basic guard), but no further access restrictions are enforced on the subprocess.
+### Acceptance Criteria
+- Given a test directory, when the agent runs tests, then the result includes counts (passed, failed, error, skipped, total) and per-test outcomes with test identifiers
+- Given test failures, when the result is returned, then condensed failure tracebacks are included showing the assertion or error for each failure
+- Given all tests passing, when the result is returned, then the result is not marked as an error (test failures are informational, not tool errors)
 
-## Concern 3: Test execution
+## US-07: As the agent, I need test results in either human-readable or structured data format so that I can choose based on downstream needs
 
-### R-EXEC-06: Structured test runner
+The test runner supports both a compact text format (designed for LLM context) and a JSON format (for programmatic processing).
 
-The agent must be able to run pytest and receive structured results: total/passed/failed/error/skipped counts, per-test outcomes, and condensed failure tracebacks. This is preferred over running pytest via bash.
+### Acceptance Criteria
+- Given a text format request, when tests complete, then the output includes a summary line, per-test outcome symbols, and failure sections in a compact format
+- Given a JSON format request, when tests complete, then the output is valid JSON with counts, per-test results, and failure details
 
-**Why:** Raw pytest output is verbose and noisy -- the agent must parse it mentally to determine pass/fail status. Structured output gives the agent a summary it can act on immediately ("1 test failed, here is the traceback") without wasting context on passed-test noise.
+## US-08: As the agent, I need the test runner to handle tool-level vs. test-level failures differently so that I know when the tool itself broke vs. when tests simply failed
 
-**Acceptance criteria:**
-- Returns summary counts: total, passed, failed, error, skipped.
-- Returns per-test outcomes (test name + status).
-- Returns condensed failure tracebacks (not full verbose tracebacks that consume excessive context).
-- Supports extra pytest arguments (e.g., `-x` for fail-fast, `-k` for keyword selection).
-- Respects a configurable timeout (default 120 seconds).
-- Test path is validated against allowed paths.
-- Supports both text and JSON output formats.
+Test failures (exit code indicating failed assertions) are reported as informational results, not tool errors. Only infrastructure failures (interrupted, internal errors, usage errors) are reported as tool errors.
 
-## Concern 4: Lint checking
+### Acceptance Criteria
+- Given tests that fail due to assertion errors, when the result is returned, then it is marked as a non-error result (the agent should read the failures, not treat the tool as broken)
+- Given an infrastructure failure (e.g., test collection error), when the result is returned, then it is marked as a tool error
 
-### R-EXEC-07: Structured lint diagnostics
+## US-09: As the agent, I need the test runner to respect a timeout so that stuck tests do not block the agent indefinitely
 
-The agent must be able to run a linter (ruff) on specific files or directories and receive structured diagnostics: file, line, column, rule code, and message per diagnostic. Supports auto-fix mode for safely fixable issues and rule selection.
+A configurable timeout kills the test process if it runs too long. The child process is properly cleaned up to avoid zombie processes.
 
-**Why:** Running `ruff` via bash returns raw text output that the agent must parse. Structured diagnostics let the agent identify the exact location and rule for each issue and decide whether to fix it manually or use auto-fix. This is especially useful after editing code to catch newly introduced issues before the commit hook.
+### Acceptance Criteria
+- Given a test suite that hangs, when the timeout expires, then the test process is killed and a timeout error is returned
+- Given a test suite that completes within the timeout, when the result is returned, then it includes the execution duration
 
-**Acceptance criteria:**
-- Each diagnostic includes file path, line number, column, rule code, and human-readable message.
-- Auto-fix mode applies only fixes that ruff marks as safely fixable.
-- Rule selection lets the agent check specific categories (e.g., unused imports only).
-- File paths are validated against allowed paths.
-- Output is capped to prevent a heavily-linted codebase from flooding the context.
+---
 
-## Concern 5: Git operations
+## Git Queries
 
-### R-EXEC-08: Read-only git status, diff, and log
+## US-10: As the agent, I need to check the working tree status so that I can see which files are modified, staged, or untracked
 
-The agent must be able to read git working-tree status, view diffs (staged and unstaged), and view commit history. These are read-only operations with no side effects.
+The agent can query the current state of the workspace's git working tree, receiving a summary of file statuses.
 
-**Why:** The agent needs to understand the current state of the working tree to make informed decisions: what files have changed, what is staged for commit, what the recent commit history looks like. These are the git equivalent of the search tools.
+### Acceptance Criteria
+- Given a git repository, when the agent queries status, then all modified, staged, added, deleted, and untracked files are listed with their status codes
+- Given a non-git workspace, when the agent queries status, then a git error is returned
 
-**Acceptance criteria:**
-- `git status` returns a short-format summary.
-- `git diff` supports viewing staged changes separately from unstaged changes.
-- `git log` returns recent commit history.
-- All git commands run with a timeout (30 seconds) and in the workspace directory.
-- A failed git command (e.g., not a git repository) returns an error result, not an exception.
+## US-11: As the agent, I need to see file-level diffs from git so that I can understand exactly what has changed since the last commit
 
-### R-EXEC-09: Git write operations via bash
+The agent can view unstaged changes (default) or staged changes, optionally limited to a specific file or directory.
 
-Git operations that modify state (commit, push, branch, checkout, merge) are performed via the bash tool, not via dedicated git write tools. This is a deliberate design decision.
+### Acceptance Criteria
+- Given unstaged changes, when the agent queries diff, then the unified diff of all unstaged modifications is returned
+- Given the staged flag, when the agent queries diff, then only staged (cached) changes are shown
+- Given a specific file path, when the agent queries diff, then only changes to that file are shown
 
-**Why:** Git write operations are orchestrated by the agent loop (which manages commit messages, hook gating, and push policy), not by individual tools. Providing dedicated write tools would create a bypass path around the framework's commit controls. The bash tool's denylist can selectively restrict dangerous git operations if needed.
+## US-12: As the agent, I need to view the recent commit log so that I can understand the history and evolution of the codebase
 
-**Acceptance criteria:**
-- No dedicated tools exist for `git commit`, `git push`, `git checkout`, or `git merge`.
-- The agent can perform these operations via bash when appropriate.
-- The framework's commit orchestration (in the agent loop) is the canonical path for making commits.
+The agent specifies how many commits to view and whether to use a compact one-line format.
 
-## Concern 6: Network access
+### Acceptance Criteria
+- Given a commit count, when the agent queries the log, then that many recent commits are shown
+- Given the one-line format flag, when the agent queries the log, then each commit is shown as a single line with hash and message
 
-### R-EXEC-10: Web search
+## US-13: As the agent, I need git commands to respect a timeout so that slow or hanging git operations do not block me indefinitely
 
-The agent must be able to search the web (via DuckDuckGo) and fetch individual web pages. This tool is optional -- not registered by default -- because it requires outbound network access.
+Git operations enforce a timeout. If a git command takes too long (e.g., on a very large repository), it is killed and an error is returned.
 
-**Why:** The agent may need to look up API documentation, error messages, or library usage patterns that are not present in the codebase. Web search provides this capability when enabled. It uses the DuckDuckGo HTML endpoint (no API key required) and pure stdlib for zero external dependencies.
+### Acceptance Criteria
+- Given a git command that exceeds the timeout, when the timeout expires, then the git process is killed and a timeout error is returned
 
-**Acceptance criteria:**
-- Search returns a ranked list of title + URL + snippet entries.
-- Page fetch returns cleaned text (HTML stripped, boilerplate collapsed), not raw HTML.
-- Long pages are truncated to a configurable character limit.
-- Network errors return error results, not exceptions.
-- The tool is not registered by default; it must be explicitly enabled via `extra_tools`.
-- No JavaScript rendering -- only static HTML content is fetchable.
+---
 
-### R-EXEC-11: Generic HTTP client
+## Web Search
 
-The agent must be able to send HTTP requests (GET, POST, PUT, DELETE, PATCH, HEAD) with custom headers and body. This tool is optional -- not registered by default -- because it requires outbound network access.
+## US-14: As the agent, I need to search the web so that I can find documentation, error explanations, and solutions to problems I encounter
 
-**Why:** The agent may need to interact with APIs (check a service status, post a webhook, fetch structured data). This is a general-purpose escape hatch for network interactions beyond web search.
+The agent provides a search query and receives a ranked list of results with titles, URLs, and text snippets. No API key is required.
 
-**Acceptance criteria:**
-- Supports all standard HTTP methods.
-- Automatically sets `Content-Type: application/json` when a dict body is provided.
-- Response bodies are truncated to a configurable character limit.
-- Network errors, HTTP errors, and timeouts return error results, not exceptions.
-- The tool is not registered by default; explicit opt-in required.
+### Acceptance Criteria
+- Given a search query, when the agent searches, then results with titles, URLs, and snippets are returned
+- Given a query with no results, when the search completes, then a message indicates no results were found with a suggestion to rephrase
+- Given a network error, when the search fails, then a descriptive error is returned without raising an exception
 
-## Concern 7: Operational safety constraints (cross-cutting)
+## US-15: As the agent, I need to fetch and read the text content of a web page so that I can read documentation or reference material
 
-### R-EXEC-12: All subprocess operations use async I/O
+The agent provides a URL and receives the page's content converted to clean plain text (HTML tags stripped, boilerplate removed). Long pages are truncated to fit within a context budget.
 
-Every tool that runs a subprocess (bash, test runner, python eval, git, lint) must use async subprocess APIs or thread-pool executors. Blocking the asyncio event loop is prohibited.
+### Acceptance Criteria
+- Given a valid URL, when the agent fetches it, then the page content is returned as clean plain text with HTML tags and boilerplate removed
+- Given a page exceeding the character limit, when the content is returned, then it is truncated with a head-and-tail excerpt preserving both the beginning and end of the page
+- Given an invalid URL (not starting with http/https), when the agent tries to fetch it, then a validation error is returned
+- Given a network or HTTP error, when the fetch fails, then a descriptive error is returned
 
-**Why:** The harness is async throughout. A blocking subprocess call would freeze all concurrent operations (including timeout enforcement). Async subprocess ensures the event loop remains responsive.
+## US-16: As the agent, I need web search to be an opt-in capability so that offline or air-gapped environments are not affected by its availability
 
-**Acceptance criteria:**
-- All subprocess-spawning tools use `asyncio.create_subprocess_exec` or `asyncio.create_subprocess_shell`.
-- File I/O operations use `asyncio.to_thread` to avoid blocking.
-- No tool's `execute` method contains synchronous `subprocess.run` or `os.system` calls.
+Web search requires network access and is not registered by default. It must be explicitly enabled via configuration so that environments without network access are not burdened with an unusable tool in their schema.
 
-### R-EXEC-13: Process cleanup on timeout
-
-When a subprocess is killed due to timeout, the child process must be reaped (waited on) to prevent zombie processes and asyncio transport warnings.
-
-**Why:** On POSIX systems, a killed child process remains as a zombie until its parent waits on it. Accumulating zombies wastes PID table entries and triggers asyncio warnings about unclosed transports.
-
-**Acceptance criteria:**
-- After killing a timed-out process, `proc.wait()` is called.
-- No zombie processes remain after a timeout.
-- The timeout error message includes the timeout duration.
-
-### R-EXEC-14: Output truncation on all execution tools
-
-Every tool that can produce unbounded output must enforce a character or line cap. The cap must be configurable where appropriate but must have a default that prevents context flooding.
-
-**Why:** A `grep` that matches 10,000 lines, a test suite with 500 test results, or a subprocess that prints a build log -- any of these can consume the agent's entire context window if uncapped. Output truncation is a safety net for context budget management.
-
-**Acceptance criteria:**
-- Bash tool output includes stdout + stderr + exit code, capped by the subprocess output size.
-- Test runner output includes a summary even when the full test list is truncated.
-- Python eval output is capped at its configured character limit (default 4,000).
-- Lint output is capped at its configured character limit.
-- Truncated output includes a note indicating truncation occurred.
+### Acceptance Criteria
+- Given a default tool registry, when the agent lists available tools, then web search is not present
+- Given an explicit opt-in for web search in the configuration, when the agent lists available tools, then web search is available

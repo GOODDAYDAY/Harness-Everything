@@ -1,185 +1,222 @@
 # Prompts Domain
 
-The prompts domain governs the text that directs LLM evaluators and the meta-review advisor. These prompts are the highest-leverage surface in the entire harness: a one-word change in a rubric propagates through every evaluation of every cycle of every future run. The requirements here describe what the prompts must accomplish, not how they are worded.
-
-Two source files comprise this domain:
-
-- `harness/prompts/dual_evaluator.py` -- four prompt templates that drive the dual-isolated evaluation system.
-- `harness/prompts/agent_meta_review.py` -- one system prompt and one user template that drive periodic strategic reviews.
+This domain covers the evaluation and meta-review prompt templates used by the harness. There are two evaluation modes (code-change and reasoning-only), each with two perspectives (quality and impact/safety), plus a periodic meta-review and a notes compression mechanism.
 
 ---
 
-## Evaluator Prompts
+## US-01: As the evaluator, I need to assess code-change proposals on four weighted dimensions so that scoring reflects the relative importance of correctness over style
 
-The dual evaluation system runs two independent LLM calls per cycle. Two of the four prompts evaluate cycles that produced code changes; two evaluate cycles where the agent explored but changed nothing. The system selects the appropriate pair based on whether a git diff exists.
+A code-change evaluator must score every proposal across four dimensions with fixed weights: correctness at 40%, completeness at 30%, specificity at 20%, and architecture fit at 10%. The final score is the weighted average of these four dimension scores minus any applicable penalties. This weighting ensures that a proposal which is correct but vaguely written scores higher than one which is specific but wrong.
 
-### Why two perspectives exist
-
-A single evaluator cannot reliably judge both "is this code correct?" and "will this change break something else?" Correctness evaluation anchors on the diff itself; diffusion evaluation assumes the diff is correct and asks about ripple effects. Keeping these perspectives isolated prevents a halo effect where one strong dimension inflates the other.
-
-### Why reasoning-mode prompts exist separately
-
-A cycle with no code changes is not inherently bad -- the agent may have explored the codebase and left valuable notes. But a cycle with no changes and no exploration is wasted compute. The reasoning-mode prompts must judge the quality of thinking rather than the quality of code, which requires entirely different evaluation dimensions and a different scoring scale.
+### Acceptance Criteria
+- Given a code-change proposal, when the evaluator produces a score, then the output contains individual dimension scores (each 0-10) and an explicit weighted arithmetic calculation
+- Given dimension scores A, B, C, D, when the weighted average is computed, then the formula is (A x 0.40) + (B x 0.30) + (C x 0.20) + (D x 0.10) minus penalties
+- Given any evaluation, when the final score is reported, then it is rounded to one decimal place
 
 ---
 
-### Scenario: Code-change evaluation (Basic perspective)
+## US-02: As the evaluator, I need a decision tree that anchors scores to concrete evidence gates so that borderline proposals are scored consistently
 
-**Context:** The agent has completed a cycle that modified files. The framework invokes the basic evaluator with the git diff, source context, and any static analysis findings.
+Without structured anchoring, evaluators tend to cluster scores around the middle of the scale. The evaluator must apply a sequential gate system: proposals that fail to name specific code entities cannot exceed 4.0; those without major functionality cannot exceed 5.5; those without edge-case handling and testability evidence cannot exceed 6.5; and those not ready for code review cannot exceed 7.5. Half-point scores are reserved for borderline cases where evidence exists for both sides of a gate.
 
-**What the prompt must accomplish:**
-
-1. **Structured multi-dimensional scoring.** The evaluator must assess four distinct dimensions -- correctness, completeness, specificity, and architecture fit -- each scored independently on a 0-10 scale. A single overall "this is good" judgment is insufficient; the agent needs to know which dimension to improve.
-
-2. **Weighted composition with explicit arithmetic.** The final score must be a weighted average of the four dimensions (correctness weighted heaviest, architecture fit lightest), computed with visible arithmetic. This prevents the evaluator from "gut-feeling" a score that contradicts its own dimensional analysis.
-
-3. **Anti-inflation.** Scores of 9 or 10 must require the evaluator to state a concrete reason why the output is near-perfect. Without this constraint, LLM evaluators trend toward high scores because complimenting is easier than criticising.
-
-4. **Anti-deflation.** Scores below 4 must require evidence of a concrete defect -- a specific wrong line, missing function, or broken assumption. Without this constraint, an overly cautious evaluator can tank scores for stylistic preferences.
-
-5. **Anchoring through a decision tree.** The prompt must define a gate-based decision tree that forces the evaluator to answer binary questions in sequence (e.g., "Does it name specific files/functions? No -> score at most 4.0"). This prevents evaluators from jumping to a score without systematically working through the criteria.
-
-6. **Penalty mechanics.** The prompt must define explicit point deductions for objectively bad signals (no concrete code references cited, required sections missing, known static analysis errors). Penalties are applied after the weighted average and cannot reduce the score below 0.
-
-7. **Prior-round comparison.** When a "Prior Best" from a previous evaluation round is present, the evaluator must compare against it dimension-by-dimension and note improvement or regression. Repeating a defect already flagged in the prior best incurs an additional penalty. This drives iterative improvement rather than oscillation.
-
-8. **Actionable output structure.** The evaluator must produce its output in a fixed section format: analysis per dimension, top defect, actionable feedback, what-would-make-10/10, and the final score. This structure exists so downstream consumers (the agent's notes, the meta-review) can reliably parse the feedback.
-
-**Acceptance criteria:**
-
-- The evaluator never produces a score without showing the weighted arithmetic that derived it
-- Scores of 9+ always include an explicit justification sentence
-- Scores below 4 always cite a specific defect (file, function, or line)
-- The decision tree gates are applied in order; a "no" at gate 1 caps the score regardless of later gates
-- Static analysis ERROR findings from the prompt context trigger a penalty; the evaluator cannot give a high score to code that fails to compile
-- When prior best is present, the delta section appears before the analysis; when absent, the delta section is omitted entirely
-- The output includes exactly the sections specified, in order, with no extras
+### Acceptance Criteria
+- Given a proposal that does not reference any specific file or function, when scored, then the score must be 4.0 or below
+- Given a proposal that names code entities but lacks working major functionality, when scored, then the score must be between 4.5 and 5.5
+- Given a proposal that works but lacks edge-case coverage or testability evidence, when scored, then the score must be between 6.0 and 6.5
+- Given a proposal that is fully achieved and review-ready, when scored, then the score must be 8.0 or above
+- Given a half-point score, when the evaluation is produced, then evidence for both the passing and failing side of the relevant gate must be cited
 
 ---
 
-### Scenario: Code-change evaluation (Diffusion perspective)
+## US-03: As the evaluator, I need anti-inflation and anti-deflation rules so that extreme scores are only assigned with explicit justification
 
-**Context:** Same cycle as above, but this evaluator assesses second-order effects rather than direct correctness.
+Scores at the extremes (very high or very low) carry outsized influence on strategic decisions. A score of 9 or 10 must include an explicit statement of what specifically makes the proposal near-perfect; if the evaluator cannot name a concrete reason, the maximum score is 8. Conversely, a score below 4 must cite a specific defect -- a wrong line, missing function, or broken assumption -- and must not penalize heavily for style or missing tests alone.
 
-**What the prompt must accomplish:**
-
-1. **Assume correctness, assess consequences.** The diffusion evaluator must take the proposal as implemented correctly and judge what happens beyond the directly touched code: caller breakage, maintenance burden, emergent behaviour under load, rollback difficulty.
-
-2. **Containment-focused scoring scale.** A high diffusion score (9-10) means "negligible systemic impact, trivial rollback." A low score (0-2) means "catastrophic cascade, irreversible damage." The scale runs in the same direction as the basic evaluator (higher is better), but measures containment safety rather than code quality. A 10 means negligible systemic impact; a 0 means catastrophic cascade.
-
-3. **Gate-based anchoring for systemic risk.** The prompt must define gates around public API changes, cross-file coordination requirements, rollback complexity, and module containment. These gates prevent the evaluator from hand-waving away systemic risk.
-
-4. **Concrete caller identification.** The evaluator must name specific callers visible in the source context, not abstract about "code that depends on this." Vague diffusion analysis provides no actionable signal.
-
-5. **Anti-inflation and anti-deflation symmetric with basic.** The same discipline applies: near-perfect scores need justification, and low scores need evidence. Manufacturing negative findings to appear thorough is explicitly prohibited.
-
-6. **Prior-round regression tracking.** Reintroducing a risk already identified as the KEY RISK in the prior best incurs an extra penalty. Regression on a known risk is worse than a fresh risk.
-
-7. **Mitigation-oriented output.** The output must include concrete mitigations, not just problems. Each mitigation should name a file, function, and the specific guard needed.
-
-**Acceptance criteria:**
-
-- The evaluator never assesses whether the code is correct -- it assumes correctness and evaluates impact
-- Every caller impact analysis names at least one specific caller from the source context, or explicitly states none are visible
-- The KEY RISK section uses the format "FILE::function -- scenario -> mitigation" when a risk exists
-- Static analysis ERROR findings trigger a penalty even in diffusion evaluation (broken code makes impact analysis meaningless)
-- Rollback safety assessment considers persisted format changes, not just code revert difficulty
+### Acceptance Criteria
+- Given a score of 9 or 10, when the evaluation is produced, then it must contain an explicit justification naming what makes the proposal exceptional
+- Given a score below 4, when the evaluation is produced, then it must cite at least one concrete defect with a specific location or construct
+- Given a proposal with only stylistic issues and no functional defects, when scored, then the score must be 4 or above
 
 ---
 
-### Scenario: Reasoning-only evaluation (Basic perspective)
+## US-04: As the evaluator, I need to apply fixed penalties for specific structural failures so that missing references and absent sections always reduce the score
 
-**Context:** The agent completed a cycle with no code changes. The framework invokes the reasoning-mode basic evaluator.
+Certain failures are so fundamental that they must always cost points regardless of other qualities. The evaluator must deduct 3 points when no concrete code entity from the source context is cited, 2 points when a required section of the task is entirely absent, and 1 point for each static analysis error that was already surfaced in the evaluation context. The score floor after penalties is zero.
 
-**What the prompt must accomplish:**
-
-1. **Judge exploration quality, not code quality.** The scoring dimensions shift entirely: exploration thoroughness, judgment quality, direction discovery, and information density replace correctness/completeness/specificity/architecture.
-
-2. **Detect zero-effort cycles.** An agent that reads zero files and declares "mission complete" must score at most 1-2. The prompt must make this explicit so the evaluator does not reward confident-sounding but empty output.
-
-3. **Value useful notes.** An agent that explored thoroughly and left concrete findings for the next cycle (specific files, patterns, next steps) should score well even though no code changed. The scoring guide must recognize that good exploration is productive work.
-
-4. **Penalise stale repetition.** If the agent's output is essentially identical to the previous cycle's, a penalty applies. This catches agents stuck in a loop of "nothing to do" declarations.
-
-5. **Penalise pure text generation.** If no tool calls were made, the agent generated text without actually looking at the codebase, which deserves a penalty.
-
-**Acceptance criteria:**
-
-- The evaluator does not penalise the absence of code changes -- that is the expected condition for this prompt mode
-- An agent with zero tool calls always receives at least a -2 penalty
-- The scoring guide explicitly distinguishes between "explored and correctly concluded nothing to change" (score 6+) and "declared nothing to change without exploring" (score 3 or below)
+### Acceptance Criteria
+- Given a proposal that cites no file, function, or class from the source context, when scored, then a 3-point penalty is applied
+- Given a proposal that omits an entire required section, when scored, then a 2-point penalty is applied
+- Given a context containing N static analysis errors, when scored, then an N-point penalty is applied (1 per error)
+- Given penalties that would push the score below zero, when the final score is computed, then it is clamped to zero
 
 ---
 
-### Scenario: Reasoning-only evaluation (Diffusion perspective)
+## US-05: As the evaluator, I need to compare proposals against a prior best when one exists so that improvement or regression across rounds is tracked
 
-**Context:** Same no-code-change cycle, but assessed for systemic trajectory risk.
+In multi-round evaluation, knowing whether a new proposal improves on the previous best is as important as the absolute score. When a prior best is present in the context, the evaluator must compare dimension-by-dimension and label each as improved, regressed, or unchanged with a reason. Additionally, if a proposal repeats a defect that was already flagged as the top defect of the prior best, an extra 1-point penalty on the correctness dimension must be applied -- repeating a known issue is worse than introducing a new one.
 
-**What the prompt must accomplish:**
-
-1. **Detect stagnation patterns.** The evaluator must look across recent cycle history: a single empty cycle after major work is healthy (score 7+), but three consecutive empty cycles with similar notes is alarming (score 4 or below).
-
-2. **Assess opportunity cost.** The evaluator must consider what improvements exist that the agent is not pursuing -- missing tests, error handling, documentation, performance. If obvious improvements exist, the "nothing to do" conclusion is wrong.
-
-3. **Evaluate trajectory health.** Based on agent notes and recent history, will the next cycle be productive, or will it repeat the same empty pattern? The evaluator must make a forward-looking judgment.
-
-4. **Penalise consecutive inaction.** Three or more consecutive cycles with no code changes trigger an automatic penalty. Notes without concrete next steps trigger another.
-
-**Acceptance criteria:**
-
-- The evaluator considers cycle history, not just the current cycle in isolation
-- Stagnation risk scoring distinguishes between "one pause after productive work" and "stuck in a loop"
-- Opportunity cost analysis names specific areas of the codebase being neglected, not generic suggestions
+### Acceptance Criteria
+- Given a prior best in the context, when the evaluation is produced, then a delta section appears showing the direction of change for each dimension
+- Given no prior best in the context, when the evaluation is produced, then the delta section is omitted entirely
+- Given a proposal that repeats the prior best's identified top defect, when scored, then correctness loses an additional 1 point beyond normal scoring
 
 ---
 
-### Cross-cutting requirements for all evaluator prompts
+## US-06: As the evaluator, I need a structured output format with specific labeled sections so that downstream consumers can reliably parse results
 
-These requirements apply to all four evaluator prompt templates.
+Evaluation output must follow a rigid structure so that automated systems can extract scores, defects, and feedback. The required sections for code-change evaluation are: an optional delta-vs-prior section, an analysis section with per-dimension breakdowns, a top defect section identifying the single most critical issue, actionable feedback with prioritized fixes, a statement of what would make the proposal perfect, and the final numeric score.
 
-1. **Mode selection must be automatic and correct.** The framework selects code-change or reasoning-mode prompts based on whether a git diff exists. The prompts themselves do not need to handle mode detection, but they must not produce nonsensical output if invoked in the wrong mode (e.g., a code evaluator receiving an empty diff should not crash the evaluation).
-
-2. **Score must be parseable.** Every prompt must produce a `SCORE: X.X` line that can be extracted by a simple regex. The score is always rounded to one decimal place. This is a hard contract with the evaluation engine's score parser.
-
-3. **Dimensional weights must sum to 1.0.** Each prompt's dimension weights (e.g., 0.40 + 0.30 + 0.20 + 0.10 = 1.00) must be mathematically consistent. The evaluator shows its arithmetic, so incorrect weights would produce visible contradictions.
-
-4. **Prompts must not leak into each other.** The basic and diffusion evaluators run in isolated LLM calls. Neither prompt should reference or anticipate the other's output. This isolation is what makes dual evaluation meaningful -- if one evaluator knew what the other said, the two scores would not be independent.
+### Acceptance Criteria
+- Given any code-change evaluation, when the output is produced, then it contains at minimum: analysis with four scored dimensions, top defect, actionable feedback, what-would-make-this-perfect, and score
+- Given the score line, when parsed, then it contains exactly one numeric value rounded to one decimal place
+- Given the actionable feedback section, when produced, then items are numbered and reference specific locations and changes needed
 
 ---
 
-## Meta-Review Prompt
+## US-07: As the evaluator, I need to assess reasoning-only cycles (no code changes) on exploration-oriented dimensions so that cycles without commits are still meaningfully scored
 
-The meta-review runs periodically (every N committed cycles, configurable) and serves a fundamentally different purpose from per-cycle evaluation: it identifies patterns across multiple cycles and produces strategic direction adjustments.
+When an agent cycle produces no code changes, the standard code-quality dimensions are irrelevant. Instead, the evaluator must score across four reasoning-specific dimensions: exploration thoroughness at 35% (did the agent actively investigate the codebase), judgment quality at 30% (is the conclusion evidence-based), direction discovery at 20% (did the agent identify valuable next steps), and information density at 15% (does the output contain new information versus repetition).
 
-### Why meta-review exists
+### Acceptance Criteria
+- Given an agent cycle with no code changes, when evaluated in reasoning mode, then the four dimensions are exploration thoroughness, judgment quality, direction discovery, and information density
+- Given dimension scores, when the weighted average is computed, then the formula is (A x 0.35) + (B x 0.30) + (C x 0.20) + (D x 0.15) minus penalties
+- Given an agent that read zero files and declared completion, when scored on exploration thoroughness, then it receives 0 on that dimension
+- Given an agent whose conclusion lacks supporting evidence, when scored on judgment quality, then it receives 3 or below on that dimension
 
-Per-cycle evaluation tells the agent "this specific change was good/bad." But it cannot tell the agent "you've been editing the same file for five cycles and ignoring tests" or "your scores are dropping because you stopped reading code before editing." Pattern recognition across cycles requires a broader view, which is the meta-review's job.
+---
 
-### Scenario: Strategic direction adjustment
+## US-08: As the evaluator, I need reasoning-mode penalties for stale repetition and passive behavior so that agents that loop without progress are penalized
 
-**Context:** The framework has accumulated score history, git deltas, and agent notes from the last several cycles. It invokes the meta-review to produce guidance that will be injected into subsequent cycles' system prompts.
+An agent that produces the same "nothing to do" output cycle after cycle, or that generates text without actually using any tools to explore, is consuming resources without value. The evaluator must deduct 3 points when the agent's output is essentially identical to the previous cycle's, and 2 points when no tool calls were made (pure text generation without exploration).
 
-**What the prompt must accomplish:**
+### Acceptance Criteria
+- Given an agent whose output closely matches the previous cycle, when scored, then a 3-point penalty is applied for stale repetition
+- Given an agent that made no tool calls during the cycle, when scored, then a 2-point penalty is applied for lack of exploration
+- Given both conditions simultaneously, when scored, then both penalties apply (total 5 points deducted)
 
-1. **Concrete pattern identification.** The meta-review must name specific files, functions, and metrics -- not "the agent should try harder." If scores are declining, it must diagnose the root cause (e.g., "Completeness has been below 6 for 3 cycles because the agent is not running tests after edits").
+---
 
-2. **Acknowledge success.** If scores are consistently high (8+), the meta-review must recognise this and suggest stretch goals or new focus areas rather than manufacturing problems.
+## US-09: As the evaluator, I need to assess the second-order safety impact of code-change proposals so that downstream and systemic risks are surfaced
 
-3. **Detect exhausted directions.** If the agent's notes show repeated cycles with no code changes, the current direction is exhausted. The meta-review must propose entirely new focus areas based on unexplored parts of the codebase -- not repeat the same guidance.
+Beyond whether a change is correct, a separate evaluation must assess consequences beyond the directly touched code. This impact evaluator assumes the proposal is correctly implemented and focuses on four dimensions: caller impact at 35% (how callers and dependents are affected), maintenance debt at 30% (ongoing cost imposed), emergent behavior at 20% (non-obvious effects at scale or under stress), and rollback safety at 15% (difficulty of reverting in production). Higher scores indicate safer, more contained changes.
 
-4. **Graceful degradation without scores.** If no evaluation scores are available (e.g., evaluation is disabled in config), the meta-review must still function, basing its analysis on git deltas and agent notes instead.
+### Acceptance Criteria
+- Given any code-change proposal, when assessed for impact, then four dimensions are scored: caller impact, maintenance debt, emergent behavior, and rollback safety
+- Given dimension scores, when the weighted average is computed, then the formula is (A x 0.35) + (B x 0.30) + (C x 0.20) + (D x 0.15) minus penalties
+- Given a change that is purely internal to one module with no external dependencies, when assessed, then it receives a high score (7 or above) indicating safety
+- Given a change that modifies a public API used by many callers without providing compatibility shims, when assessed, then it receives a low score (4 or below) indicating risk
 
-5. **Structured six-section output.** The meta-review must produce exactly six sections: Progress Summary, Score Trend, Recurring Issues, What Worked, Gaps, and Direction Adjustment. This structure ensures all relevant angles are covered and the output is predictable for the agent consuming it.
+---
 
-6. **Brevity constraint.** The output must stay under 500 words because the agent reads this every cycle until the next review. Verbose guidance wastes context window on every subsequent cycle.
+## US-10: As the evaluator, I need an impact-specific decision tree so that containment and rollback safety are assessed consistently
 
-7. **Actionable direction adjustment.** The Direction Adjustment section must contain concrete instructions for the next 3-5 cycles: "Focus on X before moving to Y," "Stop doing Z," "The weakest dimension is A, prioritise it by doing B." Generic advice like "write better code" is useless.
+The impact evaluator must apply its own sequential gate system, distinct from the quality evaluator's gates. Changes that modify a public API or contract used by three or more callers without a compatibility shim cannot exceed 4. Changes requiring coordinated modifications across multiple files cannot exceed 6. Changes where rollback requires data migration or format versioning cannot exceed 5. Changes whose effects are provably bounded to a single module score 7 or above.
 
-**Acceptance criteria:**
+### Acceptance Criteria
+- Given a change to a public API used by three or more callers with no shim, when assessed, then the score is 4 or below
+- Given a change requiring coordinated edits in two or more files to be safe, when assessed, then the score is 6 or below
+- Given a change where rollback requires data migration, when assessed, then the score is 5 or below
+- Given a change whose effects are provably bounded to one module, when assessed, then the score is 7 or above
 
-- The meta-review names specific files, functions, or metrics in at least three of its six sections
-- When scores are consistently high, the output acknowledges success rather than inventing problems
-- When consecutive empty cycles are detected, the Direction Adjustment section proposes new focus areas, not repetitions of the current direction
-- When no score history is available, the Score Trend section explicitly states this and the analysis shifts to git delta and notes
-- The output contains exactly six sections with the specified headings
-- The Direction Adjustment section contains at least two concrete instructions with specific targets (files, dimensions, or behaviours)
+---
+
+## US-11: As the evaluator, I need impact-mode penalties for pre-existing static analysis errors so that broken code is not given misleadingly optimistic safety scores
+
+When static analysis has already found errors in the changed code, second-order analysis built on that broken foundation would produce artificially optimistic impact scores. The impact evaluator must deduct 1 point per static analysis error already surfaced in the evaluation context, ensuring that objectively broken code is not rated as safe to deploy.
+
+### Acceptance Criteria
+- Given N static analysis errors in the evaluation context, when the impact score is computed, then N points are deducted (1 per error)
+- Given no static analysis errors, when the impact score is computed, then no error-based penalty is applied
+- Given penalties that would push the score below zero, when the final score is computed, then it is clamped to zero
+
+---
+
+## US-12: As the evaluator, I need to track impact-dimension deltas against a prior best so that regression on known risks is penalized more severely
+
+When a prior best exists, the impact evaluator must compare each dimension and note the direction of change. If a proposal reintroduces a risk that was already identified as the key risk of the prior best, the caller impact dimension loses an additional point. Regression on a previously identified and mitigated risk is a more serious failure than encountering a fresh risk.
+
+### Acceptance Criteria
+- Given a prior best in the context, when the impact evaluation is produced, then a delta section appears with direction labels for each of the four impact dimensions
+- Given a proposal that reintroduces the prior best's key risk, when scored, then caller impact loses an additional 1 point
+- Given no prior best, when the impact evaluation is produced, then the delta section is omitted
+
+---
+
+## US-13: As the evaluator, I need a structured impact output format with risk-focused sections so that mitigations can be actioned
+
+The impact evaluation output must follow a rigid structure: an optional delta-vs-prior section, an analysis section with per-dimension scores and arithmetic, a key risk section identifying the single most significant second-order concern with a concrete mitigation, numbered actionable mitigations, a statement of what architectural or systemic change would eliminate the primary risk, and the final numeric score.
+
+### Acceptance Criteria
+- Given any impact evaluation, when the output is produced, then it contains: analysis with four scored dimensions, key risk, actionable mitigations, what-would-make-this-perfect, and score
+- Given the key risk section, when a score is below 9, then it identifies a specific scenario and a concrete mitigation step
+- Given a score of 9 or above, when the key risk section is produced, then it may state "none"
+
+---
+
+## US-14: As the evaluator, I need to assess the safety of reasoning-only cycles from a systems perspective so that stagnation and missed opportunities are detected
+
+When an agent produces no code changes, a separate systems-level evaluation must determine whether inaction is justified and what second-order effects this has on project trajectory. This evaluator scores four dimensions: stagnation risk at 35% (is the agent entering a repetitive loop), opportunity cost at 30% (what improvements exist but are not being pursued), strategic value at 20% (did the exploration add value despite no code output), and trajectory health at 15% (is the project heading toward productive cycles or repeating empty patterns). Higher scores indicate that inaction is justified and the project is healthy.
+
+### Acceptance Criteria
+- Given an agent cycle with no code changes, when assessed from a systems perspective, then four dimensions are scored: stagnation risk, opportunity cost, strategic value, and trajectory health
+- Given a single empty cycle after major work, when assessed for stagnation risk, then it receives a high score (8 or above) indicating low risk
+- Given three or more consecutive empty cycles with similar notes, when assessed for stagnation risk, then it receives a low score (4 or below) indicating high risk
+- Given obvious improvements that exist but the agent claims nothing to do, when assessed for opportunity cost, then the conclusion is flagged as incorrect
+
+---
+
+## US-15: As the evaluator, I need reasoning-mode impact penalties for sustained inaction and vague planning so that chronically idle agents are scored down
+
+Sustained inaction and lack of concrete planning signal that the agent has lost direction. The impact evaluator for reasoning-only cycles must deduct 2 points when this is the third or more consecutive cycle with no code changes, and 1 point when the agent's notes fail to mention any concrete next steps.
+
+### Acceptance Criteria
+- Given the third consecutive cycle with no code changes, when scored, then a 2-point penalty is applied
+- Given that the agent's notes contain no concrete next steps, when scored, then a 1-point penalty is applied
+- Given a first or second empty cycle with concrete next steps documented, when scored, then neither penalty applies
+
+---
+
+## US-16: As the meta-reviewer, I need to analyze score trends and agent history at periodic checkpoints so that strategic direction can be adjusted before problems compound
+
+The meta-reviewer operates on a periodic schedule (every N cycles) and receives evaluation scores from recent cycles, a git history delta, and the agent's accumulated notes. Its purpose is to identify patterns, diagnose recurring issues, and produce a concise strategic direction adjustment. When scores are consistently high, it should suggest stretch goals. When scores are dropping, it should diagnose root causes and propose corrective actions. When the agent has repeated cycles with no code changes, it must recognize that the current direction is exhausted and propose entirely new focus areas.
+
+### Acceptance Criteria
+- Given consistently high scores (8 or above), when the meta-review is produced, then it acknowledges success and suggests stretch goals or new focus areas
+- Given declining scores, when the meta-review is produced, then it diagnoses a specific root cause and proposes a concrete corrective action
+- Given repeated cycles with no code changes, when the meta-review is produced, then the direction adjustment proposes entirely new focus areas drawn from unexplored parts of the codebase
+- Given no evaluation scores available, when the meta-review is produced, then analysis focuses on git delta and agent notes instead of score trends
+
+---
+
+## US-17: As the meta-reviewer, I need to produce output in six mandatory sections so that the agent receives structured, actionable guidance
+
+The meta-review output must contain exactly six sections: a progress summary listing concrete deliverables (files changed, features added, bugs fixed), a score trend analysis calling out consistently weak dimensions, recurring issues naming specific patterns or areas, what worked (approaches that produced the highest scores), gaps (important work being neglected), and a direction adjustment with concrete instructions for the next batch of cycles. The entire output must stay under 500 words because the agent reads it every cycle until the next review.
+
+### Acceptance Criteria
+- Given any meta-review, when the output is produced, then it contains exactly six sections: progress summary, score trend, recurring issues, what worked, gaps, and direction adjustment
+- Given the direction adjustment section, when produced, then it contains specific actionable instructions (not generic advice) for the next batch of cycles
+- Given any meta-review, when the output is produced, then the total word count is under 500
+
+---
+
+## US-18: As the meta-reviewer, I need to compress accumulated agent notes into a concise topical summary so that context stays lean without losing critical knowledge
+
+Over many cycles, per-cycle notes accumulate and become too large for the agent to read efficiently each cycle. The notes compressor must distill old notes into a summary that preserves key decisions and rationale, important codebase findings, accomplishments, recurring problems, and the trajectory of the work. It must discard redundant repetitions, routine status updates, raw individual score numbers, and tool call timing details. The output must be organized by topic (not by cycle number) and stay under 800 words.
+
+### Acceptance Criteria
+- Given accumulated notes from many cycles, when compressed, then the summary preserves key decisions, codebase findings, accomplishments, recurring problems, and work trajectory
+- Given the compressed output, when organized, then it uses topical headers (not cycle-number headers)
+- Given any compression, when the output is produced, then the total word count is under 800
+- Given redundant findings repeated across multiple cycles, when compressed, then they appear only once in the summary
+- Given raw individual score numbers in the notes, when compressed, then they are discarded (only trends are preserved)
+
+---
+
+## US-19: As the evaluator, I need the reasoning-only output format to be simpler than the code-change format so that the evaluation focuses on what matters for exploration cycles
+
+Reasoning-only evaluations deal with agent behavior rather than code artifacts, so the output structure is streamlined. The required sections are: analysis with four dimension scores and arithmetic, a top issue identifying the single most important thing the agent should have done differently, actionable feedback describing what the agent should do next and what exploration was missed, and the final numeric score. There is no delta-vs-prior section and no what-would-make-this-perfect section.
+
+### Acceptance Criteria
+- Given a reasoning-only evaluation, when the output is produced, then it contains: analysis, top issue, actionable feedback, and score
+- Given a reasoning-only evaluation, when the output is produced, then it does not contain a delta-vs-prior section or a what-would-make-this-perfect section
+- Given the actionable feedback section in a reasoning-only evaluation, when produced, then it includes what the agent should do next cycle and what exploration was missed

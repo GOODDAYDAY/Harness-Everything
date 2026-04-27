@@ -1,205 +1,125 @@
-# Verification Hooks Requirements
+# Verification Hooks
 
-This document defines the requirements for verification hooks: the post-execution quality gates that validate the agent's changes before they are committed.
-
-Verification hooks answer one question: **did the agent break anything, and should its changes be accepted?**
-
-The hooks form a pipeline that runs after each execution phase. They are the last line of defense between an LLM-generated code change and a permanent commit. Without them, the agent can silently introduce syntax errors, undefined references, broken imports, and failing tests that propagate to subsequent rounds and compound into unrecoverable states.
+User stories for the pluggable post-execution verification hooks that gate or advise commit decisions. All hooks run after the agent's execution phase completes and before changes are committed.
 
 ---
 
-## 1. Hook Pipeline Architecture
+# Hook Framework
 
-### R-HOOK-01: Ordered hook execution with gating
+## US-01: As a cycle, I need verification hooks to produce a structured pass/fail result with output and error details so that downstream logic can make commit decisions and surface diagnostics consistently
 
-Hooks must execute in a defined order. Certain hooks are designated as "gates" -- if a gating hook fails, all subsequent hooks in the pipeline are skipped and the phase's changes are not committed.
+Every hook must return a uniform result structure containing a pass/fail verdict, a human-readable output (on success), and error details (on failure). This consistency lets the runner process all hooks identically without hook-specific handling.
 
-**Why:** Running a test suite after a syntax error wastes time and produces misleading output (hundreds of import failures that mask the real problem). Gating ensures that cheap, fast checks (syntax, imports) run first and block expensive checks (tests) when the basics are broken.
+### Acceptance Criteria
+- Given a hook that finds no issues, when it completes, then it returns a passing result with a descriptive success message
+- Given a hook that finds issues, when it completes, then it returns a failing result with error details describing what went wrong
 
-**Acceptance criteria:**
+## US-02: As a cycle, I need certain hooks designated as commit-gating so that their failure prevents the commit and suppresses subsequent hooks, while advisory hooks run regardless
 
-- Given a syntax error in a modified file, when the hook pipeline runs, then the syntax check fails, subsequent hooks (import smoke, static analysis, tests) are skipped, and the commit does not occur.
-- Given all gating hooks passing, when the pipeline continues, then non-gating hooks (e.g., test suite) run and their failure is reported but does not block the commit.
+Some hooks catch errors severe enough that committing would be dangerous (syntax errors, broken imports). These must block the commit and skip remaining hooks. Other hooks (like test suites) are informational and should not prevent the commit even if they fail.
 
-### R-HOOK-02: Structured hook results
-
-Every hook must return a structured result containing: a pass/fail status, output text (for display/logging), and an error description (for diagnostics). Hooks must never raise unhandled exceptions -- all failures must be captured in the result structure.
-
-**Why:** An unhandled exception in a hook would crash the entire agent run. A missing error description forces operators to grep through raw logs. Structured results enable automated monitoring, dashboards, and trend analysis across runs.
-
-**Acceptance criteria:**
-
-- Given a hook that encounters an internal error (e.g., the linter binary crashes), when it completes, then it returns a failing result with a descriptive error, not an unhandled exception.
-- Given a hook that passes, when the result is inspected, then it contains both the pass status and descriptive output (e.g., "All syntax checks passed").
+### Acceptance Criteria
+- Given a commit-gating hook that fails, when the hook pipeline processes the result, then the commit is blocked and no subsequent hooks in the same phase are executed
+- Given an advisory (non-gating) hook that fails, when the hook pipeline processes the result, then the failure is recorded but the commit proceeds and subsequent hooks still run
 
 ---
 
-## 2. Syntax Checking
+# Syntax Verification
 
-### R-HOOK-03: Compile-time syntax validation of all modified Python files
+## US-03: As a cycle, I need all source files matching configured patterns compiled to check for syntax errors so that a syntactically broken file is caught before it is committed
 
-After the agent modifies files, all Python files matching configured glob patterns must be compiled to bytecode to verify syntactic correctness.
+A syntax error in a committed file will break the next execution cycle entirely. Compiling every matching file is a cheap, zero-dependency check that catches the most catastrophic class of errors.
 
-**Why:** The LLM frequently produces syntactically invalid Python (unmatched parentheses, invalid indentation, stray characters from conversation context). A syntax error that reaches the repository will break every subsequent import and tool invocation, cascading into a complete agent failure in the next round.
-
-**Acceptance criteria:**
-
-- Given a Python file with a missing closing parenthesis, when syntax checking runs, then the hook fails with an error message naming the file and describing the syntax error.
-- Given a workspace with 50 valid Python files, when syntax checking runs, then it passes and reports success.
-- Given custom glob patterns (e.g., `["src/**/*.py"]`), when syntax checking runs, then only files matching those patterns are checked.
-
-### R-HOOK-03a: Syntax check is a gating hook
-
-Syntax checking must be designated as a gating hook. Its failure must prevent all downstream hooks and the commit.
-
-**Why:** There is no point running import checks, static analysis, or tests when the code cannot even parse. Every downstream check will produce noise errors that obscure the root cause.
+### Acceptance Criteria
+- Given a workspace with all syntactically valid source files, when the syntax check runs, then it passes with a success message
+- Given a workspace containing a file with a syntax error, when the syntax check runs, then it fails with an error message identifying the file and the nature of the syntax error
+- Given custom file patterns configured for the syntax check, when the check runs, then only files matching those patterns are checked
+- Given the default configuration, when the syntax check runs, then all files matching the default source pattern are checked
 
 ---
 
-## 3. Import Validation
+# Import Smoke Test
 
-### R-HOOK-04: Subprocess-based import smoke test
+## US-04: As a cycle, I need critical modules imported in a fresh subprocess so that import errors and load-time failures are caught before the commit, not during the next execution cycle
 
-After the agent modifies code, the configured modules must be importable in a fresh Python subprocess. The test must run in a separate process, not in the current process.
+A syntax check only catches parse-level errors. Import smoke testing catches a broader class of failures: missing dependencies, circular imports, undefined names at module scope, and broken class definitions that only surface when the module is actually loaded. Running in a subprocess ensures the test is not masked by already-cached modules in the current process.
 
-**Why:** The harness's own process has already imported all modules. A broken import would be masked by Python's module cache (`sys.modules`). Only a fresh subprocess reveals the actual import-time behavior. This is especially critical in self-improvement mode, where the agent edits the harness's own source -- a broken import would prevent the next round from starting at all.
+### Acceptance Criteria
+- Given all configured modules importable without error, when the import smoke test runs, then it passes with a message indicating how many modules were checked
+- Given a module that raises an error on import, when the import smoke test runs, then it fails with the error output (truncated to a reasonable length)
+- Given the subprocess hangs beyond the configured timeout, when the timeout fires, then the subprocess is killed and the hook reports a timeout failure
+- Given the Python interpreter is not found at the expected path, when the hook attempts to launch the subprocess, then it fails with a clear error rather than an unhandled exception
 
-**Acceptance criteria:**
+## US-05: As a cycle, I need configurable smoke-call statements executed after imports so that runtime-only errors hidden inside function bodies are caught before commit
 
-- Given a module that was importable before the agent's changes and is still importable after, when the import smoke test runs, then it passes.
-- Given a module where the agent deleted a function that is referenced at import time, when the import smoke test runs in a fresh subprocess, then it fails with the import error.
-- Given the import smoke test, when it runs, then it uses the same Python interpreter and virtual environment as the harness itself (not a system `python` that may have different packages).
+Some errors only manifest when a specific function is called, not when the module is imported. Smoke calls are arbitrary statements that exercise critical code paths (e.g., calling a validator function) to catch these runtime-only failures before they reach production.
 
-### R-HOOK-04a: Import smoke test is a gating hook
+### Acceptance Criteria
+- Given smoke-call statements configured for the hook, when the import smoke test runs, then each statement is executed after the imports complete
+- Given a smoke-call statement that raises an error, when the hook processes the subprocess output, then the hook fails with the error details
 
-Import validation must be designated as a gating hook. If imports are broken, downstream tests and commits are meaningless.
+## US-06: As a cycle, I need the import smoke test to exercise tool class loading when the workspace is the harness itself so that a refactoring that breaks tool registration is caught immediately
 
-### R-HOOK-05: Runtime smoke calls for deferred errors
+When the harness is improving its own source code, a broken tool class or missing registration will prevent the next cycle from starting. Exercising the tool registry build as part of the import smoke test catches this specific failure mode.
 
-Beyond top-level imports, the smoke test must support executing configurable runtime expressions that exercise code paths where errors hide inside function bodies (NameError, AttributeError).
-
-**Why:** Python's lazy evaluation means a `NameError` inside a function body is not caught at import time. The 2026-04-19 `validate_calibration_anchors` incident demonstrated this: `import` succeeded, but the first evaluator call crashed because a referenced helper was never defined. Runtime smoke calls catch these deferred errors.
-
-**Acceptance criteria:**
-
-- Given a smoke call that invokes a function referencing an undefined name, when the import smoke test runs, then it fails with the NameError (not at import time, but at call time).
-- Given no configured smoke calls, when the import smoke test runs, then it only checks imports (backward compatible).
-
-### R-HOOK-06: Import smoke timeout protection
-
-The import smoke subprocess must be bounded by a configurable timeout. A hung import (e.g., a module that makes a network call at import time) must not block the hook pipeline indefinitely.
-
-**Why:** Some modules perform I/O at import time (connecting to databases, downloading models). If the network is down, the import hangs forever. The timeout ensures the hook pipeline continues.
-
-**Acceptance criteria:**
-
-- Given an import that hangs for longer than the timeout, when the timeout expires, then the subprocess is killed and the hook returns a failing result with "timed out."
-- Given a normal import that completes within the timeout, when the import smoke test runs, then the timeout has no effect.
+### Acceptance Criteria
+- Given the workspace is the harness's own source directory, when the import smoke test runs, then it includes a step that builds the tool registry
+- Given the workspace is an external project, when the import smoke test runs, then the tool registry build step is skipped
 
 ---
 
-## 4. Static Analysis
+# Static Analysis
 
-### R-HOOK-07: Undefined name detection (F821)
+## US-07: As a cycle, I need changed files checked for undefined names, redefined names, and unused imports so that semantic errors that pass syntax checking are caught before commit
 
-After the agent modifies files, all changed Python files must be checked for references to undefined names.
+Syntax checking misses errors like calling a function that was never defined, accidentally redefining a variable, or importing a module that is never used (often a sign of a merge artifact). Static analysis catches these higher-level errors that will cause runtime failures or indicate code quality problems.
 
-**Why:** The LLM frequently writes calls to functions it never defined, references variables from a different scope, or hallucinates helper functions. These produce NameError at runtime but are invisible at import time (they are inside function bodies). Static analysis catches them before commit.
+### Acceptance Criteria
+- Given changed files with no static analysis findings, when the check runs, then it passes with a message indicating how many files were checked
+- Given a changed file containing a reference to an undefined name, when the check runs, then it fails with the specific finding
+- Given no changed files in the current phase, when the check runs, then it passes immediately (the check is scoped to changed files, not the whole tree)
 
-**Acceptance criteria:**
+## US-08: As a cycle, I need the static analysis hook to gracefully degrade when no analysis tool is installed so that the build is not blocked on a fresh environment without development dependencies
 
-- Given a Python file containing a call to `validate_results()` where no such function is defined or imported, when static analysis runs, then the hook fails with an error identifying the undefined name and the file.
-- Given a Python file where all referenced names are properly defined or imported, when static analysis runs, then the hook passes.
+On a fresh installation or a minimal deployment, the analysis tool may not be installed. The hook should log a warning and pass (with an advisory message) rather than failing the build, so that the absence of a development dependency does not prevent the harness from functioning.
 
-### R-HOOK-08: Scoped checking -- only changed files
-
-Static analysis must run only on files that were changed in the current phase, not the entire codebase.
-
-**Why:** Running a full-codebase lint on every commit is slow and produces pre-existing warnings that drown out new issues. The agent is only responsible for errors it introduced.
-
-**Acceptance criteria:**
-
-- Given 3 changed files and 100 unchanged files with pre-existing warnings, when static analysis runs, then only the 3 changed files are checked.
-- Given no changed Python files in the current phase, when static analysis runs, then it passes immediately with no work done.
-
-### R-HOOK-09: Graceful degradation when no linter is installed
-
-If no supported linting tool (ruff, pyflakes) is available in the current environment, static analysis must pass with a warning, not fail.
-
-**Why:** Blocking the build because a development tool is missing creates a chicken-and-egg problem on fresh installs and prevents local development on minimal environments. The hook should encourage installing the tool but not require it.
-
-**Acceptance criteria:**
-
-- Given an environment where neither ruff nor pyflakes is installed, when static analysis runs, then it passes but the output includes a warning naming the missing tools and how to install them.
-- Given an environment where ruff is installed, when static analysis runs, then ruff is preferred over pyflakes.
-
-### R-HOOK-09a: Static analysis is a gating hook
-
-Static analysis must be designated as a gating hook when a linter is available. Undefined names detected by static analysis prevent the commit.
+### Acceptance Criteria
+- Given neither the primary nor fallback analysis tool is installed, when the hook runs, then it passes with a warning message recommending installation, and the advisory message is recorded in the error field
+- Given the primary analysis tool is installed, when the hook runs, then it uses the primary tool
+- Given only the fallback tool is installed, when the hook runs, then it uses the fallback tool
 
 ---
 
-## 5. Test Execution
+# Test Execution
 
-### R-HOOK-10: Automated test suite execution
+## US-09: As a cycle, I need the project's test suite executed after changes so that regressions are detected before the change is considered complete
 
-The hook pipeline must support running the project's test suite (via pytest) against a configurable test directory.
+Running the test suite is the strongest automated signal of whether a change broke existing behavior. Test results feed back into the evaluation and planning process so the agent can fix regressions in subsequent iterations.
 
-**Why:** Syntax correctness and import validity do not guarantee behavioral correctness. Tests verify that the agent's changes produce the expected behavior. Running tests after every phase catches regressions before they accumulate.
-
-**Acceptance criteria:**
-
-- Given a test suite where all tests pass, when the pytest hook runs, then it returns a passing result with the test output.
-- Given a test suite where 2 tests fail, when the pytest hook runs, then it returns a failing result with the failure details.
-- Given a configurable test path, when it is set to `tests/unit/`, then only tests in that directory are executed.
-
-### R-HOOK-10a: Test failure does not gate the commit by default
-
-Test execution must NOT be a gating hook by default. Test failures are reported but do not block the commit.
-
-**Why:** In some phases (e.g., "add new tests"), the agent is expected to create tests that initially fail. Gating the commit on test passage would prevent the agent from committing the test file, which is the intended output of the phase.
-
-### R-HOOK-11: Test execution timeout
-
-The test subprocess must be bounded by a configurable timeout. Tests that hang (infinite loops, deadlocks) must not block the hook pipeline.
-
-**Acceptance criteria:**
-
-- Given a test that enters an infinite loop, when the timeout expires, then the subprocess is killed, resources are cleaned up, and the hook returns a failing result with "timed out."
+### Acceptance Criteria
+- Given all tests pass, when the test hook runs, then it returns a passing result with the full test output
+- Given one or more tests fail, when the test hook runs, then it returns a failing result with the test output (including failure details and tracebacks)
+- Given the test runner is not installed, when the hook runs, then it fails with a clear "not found" error
+- Given the test suite exceeds the configured timeout, when the timeout fires, then the subprocess is killed and the hook reports a timeout failure
 
 ---
 
-## 6. Commit Automation
+# Version Control Commit
 
-### R-HOOK-12: Conditional commit after successful gating hooks
+## US-10: As a cycle, I need changes committed to configured repositories with a structured commit message so that every execution phase produces a traceable commit
 
-After all gating hooks pass, the hook pipeline must support automatically committing changes to configured repositories with a structured commit message.
+After verification hooks pass, changes should be committed with a message that identifies the execution round, phase, and (optionally) evaluation scores. This creates a reviewable history of the agent's work that can be audited, compared, or reverted.
 
-**Why:** Manual commits between phases break the automation loop. Automatic commits create a recoverable history: if a later phase breaks the code, the operator can revert to the last good commit without re-running previous phases.
+### Acceptance Criteria
+- Given one or more configured repositories with changes, when the commit hook runs, then each repository receives a commit with a message identifying the round and phase
+- Given a repository directory that does not exist, when the commit hook runs, then that repository is skipped with a note and the remaining repositories are still processed
+- Given a git command that times out, when the timeout fires, then the failure is recorded and the remaining repositories are still processed
 
-**Acceptance criteria:**
+## US-11: As a cycle, I need commit messages optionally enriched with evaluation metadata so that the commit history captures not just what changed but how well it scored and why
 
-- Given all gating hooks passed, when the commit hook runs, then changes in configured repositories are staged and committed.
-- Given a repository path that does not exist, when the commit hook runs, then that repository is skipped with a diagnostic message (not a crash).
+Rich commit metadata (scores, file lists, critique summaries, inner-round statistics) turns the git log into a searchable record of the agent's quality trajectory. This is essential for post-run analysis and for understanding which iterations actually improved the code.
 
-### R-HOOK-13: Rich commit metadata
-
-Commit messages must optionally include structured metadata: round number, phase name, evaluation score, files changed, critique summaries, and tool usage statistics.
-
-**Why:** When reviewing git history, operators need to quickly assess what each automated commit accomplished and how well it scored. A bare `[harness] R3 phase_2` tells nothing about quality; a commit with score, file list, and evaluator critiques lets the operator triage without opening artifacts.
-
-**Acceptance criteria:**
-
-- Given rich metadata mode enabled, when a commit is created, then the commit message includes the round number, phase name, score, list of modified files (up to 10, with overflow count), inner-round scores, and evaluator critique summaries (truncated to prevent excessively long messages).
-- Given rich metadata mode disabled, when a commit is created, then the commit message is a concise one-liner with round and phase identification only.
-
-### R-HOOK-14: Commit timeout and error isolation
-
-Each git operation (add, commit) must be individually bounded by a timeout. A failure in one repository must not prevent commits to other configured repositories.
-
-**Why:** Git operations on large repositories or network-mounted filesystems can hang. A single hung commit must not block the entire pipeline or prevent commits to other, healthy repositories.
-
-**Acceptance criteria:**
-
-- Given two configured repositories where one hangs during `git add`, when the timeout expires, then the hung repository is reported as failed and the other repository is committed normally.
-- Given a git commit that fails (e.g., nothing to commit), when the error occurs, then it is captured in the result and the hook continues to the next repository.
+### Acceptance Criteria
+- Given rich metadata mode is enabled, when the commit message is built, then it includes the evaluation score in the subject line and a body containing the changes summary, modified files list, inner-round scores, tool usage, and evaluator critiques
+- Given rich metadata mode is disabled, when the commit message is built, then it contains only the round and phase identifier
+- Given a modified files list longer than the display limit, when the commit body is built, then only the first entries are shown with a count of how many more were omitted

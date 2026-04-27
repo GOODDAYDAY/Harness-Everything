@@ -1,129 +1,128 @@
-# Agent Git Operations -- Requirements
+# Agent Git Operations
 
-The git operations layer handles all interactions with git repositories on behalf of the agent loop. The agent itself never runs git commands directly -- all git operations are mediated by the framework to ensure consistency, safety, and structured commit messages.
-
----
-
-## R-GIT-01: Auto-commit after verified cycles
-
-When auto-commit is enabled and all gating hooks pass, the framework must stage the cycle's changed files and commit them. The commit must happen only after verification (hooks) and evaluation (scoring), so that commit messages can include quality metadata.
-
-**Why:** The agent produces incremental changes every cycle. Without auto-commit, changes accumulate as unstaged modifications that can be lost on process restart, and there is no history to diff, revert, or review. Gating on hooks ensures that only verified code enters the git history.
-
-**Acceptance criteria:**
-- After a cycle where hooks pass and files were changed, `git add -- <changed files>` and `git commit` succeed in each configured repository.
-- After a cycle where hooks fail, no commit is created. The changes remain in the working tree for the next cycle to fix.
-- When no files were changed in a cycle, the staging step reports success (vacuously) and the commit proceeds (as an `--allow-empty` commit with cycle metadata).
-- Staging or commit failures are logged but do not crash the agent loop. The cycle continues to the Persist and Control phases.
+User stories for auto-commit, multi-repo, commit messages, staging, push, tagging, and squash.
 
 ---
 
-## R-GIT-02: Multi-repository support
+## Staging
 
-The framework must support committing to multiple repositories per cycle. This covers scenarios where the agent modifies both a primary codebase and a supporting repository (e.g., a shared library).
+### US-01: As a cycle, I need only the files I actually changed to be staged for commit, so that unrelated workspace modifications are not accidentally committed
 
-**Why:** Some project configurations have the target codebase and harness output in different git repositories, or the agent operates on a monorepo with multiple nested git roots. Each repository needs its own stage-commit sequence.
+After the agent's tool-use dialogue completes and verification passes, the framework stages only the specific files that the agent's tools modified. This prevents stale or unrelated changes from leaking into the cycle's commit.
 
-**Acceptance criteria:**
-- The `commit_repos` configuration accepts a list of paths (absolute or relative to workspace).
-- Each path is resolved at startup. Invalid paths (non-existent directories) are logged as warnings and excluded.
-- Stage and commit operations run independently per repository. A failure in one repository does not prevent operations in others.
+#### Acceptance Criteria
+- Given the agent modified three specific files during its cycle, when staging runs, then only those three files are added to the index
+- Given staging fails in any repository, when the failure is detected, then the commit is skipped and a warning is logged
+- Given the agent made no file changes, when staging is considered, then the staging step is skipped gracefully
 
----
+### US-02: As a cycle, I need staging skipped when verification hooks fail, so that broken code is never committed
 
-## R-GIT-03: Structured commit messages
+When any gating verification hook fails, the cycle's changes should not be staged or committed. The hook failure reasons are recorded for the agent to learn from in the next cycle.
 
-Every commit message must follow a consistent format that includes the cycle number, a one-line summary, and structured metadata lines for metrics, evaluation scores, and hook status.
-
-**Why:** Commit messages are the primary audit trail. Operators read them in `git log`, CI scripts parse them, and the meta-review system analyzes them. A consistent format makes all of these reliable. Without structure, commit messages would be whatever the LLM happened to say, which varies wildly in quality and format.
-
-**Acceptance criteria:**
-- The commit message title starts with `[harness] agent: cycle N` followed by a summary derived from the agent's output.
-- When the agent's output is truncated (tool loop cut off), the summary falls back to a diff-based description (file names and diff stat).
-- The commit body includes `metrics:`, `eval:`, and `hooks:` lines when the corresponding data is available.
-- The title is capped at a reasonable length to avoid line-wrapping issues in git tooling.
+#### Acceptance Criteria
+- Given a gating hook failed, when the staging decision is made, then staging is skipped
+- Given a gating hook failed, when the cycle proceeds, then the hook failure reasons are logged and included in the cycle notes
 
 ---
 
-## R-GIT-04: Selective file staging
+## Commit Messages
 
-The framework must stage only the files that were actually changed by the current cycle's tool calls, not blindly `git add -A`. Changed files are determined from the tool execution log.
+### US-03: As a cycle, I need a structured commit message that includes the cycle number, a content summary, metrics, evaluation scores, and hook status, so that the version control history is self-documenting
 
-**Why:** `git add -A` would stage unrelated changes that happened to be in the working tree -- operator scratch files, other processes' output, or files from a previous failed cycle. Selective staging ensures each commit contains exactly the changes the agent made in that cycle.
+Each commit message follows a consistent format: a title line with the cycle number and a brief description of what changed, followed by a body with metrics, evaluation scores, and hook outcomes. This makes the git log a standalone record of the agent's progress and quality.
 
-**Acceptance criteria:**
-- Only paths that appear in the tool execution log as write/edit targets are staged.
-- Paths are passed to `git add -- <paths>`, not `git add -A` or `git add .`.
-- If the tool log contains paths that don't exist on disk (deleted files), git handles them correctly via `git add --`.
-
----
-
-## R-GIT-05: Auto-push to remote
-
-When auto-push is enabled, the framework must push the committed branch to a configured remote after each successful commit. The remote name and branch are configurable.
-
-**Why:** In production deployments, the agent runs on a remote server and the operator monitors progress by pulling from the remote. Without auto-push, the operator must SSH into the server to see the agent's work. Auto-push also enables CI/CD pipelines to trigger on each commit.
-
-**Acceptance criteria:**
-- After a successful commit, `git push <remote> <branch>` runs in each configured repository.
-- Push failures are logged as warnings but do not crash the loop or prevent subsequent cycles.
-- Auto-push is off by default (safe for local/sandboxed development).
+#### Acceptance Criteria
+- Given a cycle completed successfully, when the commit message is built, then the title contains the cycle number and a summary derived from the agent's output
+- Given metrics, evaluation scores, and hook results are available, when the commit message is built, then each appears on its own line in the message body
+- Given the agent's output was truncated by the tool loop, when the commit message is built, then a diff-based summary is used instead of the truncated text
 
 ---
 
-## R-GIT-06: Periodic cycle tagging
+## Auto-Commit
 
-At configurable intervals (every N committed cycles), the framework must create a git tag on the current HEAD with a structured name that includes the cycle number and short SHA. Tags can optionally be pushed to the remote.
+### US-04: As a cycle, I need changes automatically committed after staging, so that each cycle's work is atomically captured in version control
 
-**Why:** Tags provide stable reference points in the git history. They enable deploy workflows (CI triggers on tag push), milestone tracking (tag every 10 cycles), and easy rollback (`git reset --hard harness-r-50-a3f5d2c`). The structured name makes tags sortable and identifiable.
+When auto-commit is enabled, the framework commits the staged changes with the structured commit message. Each cycle becomes one atomic commit, making it easy to review, revert, or squash individual cycles.
 
-**Acceptance criteria:**
-- Tags are created when `(cycle_number) % interval == 0`. Setting the interval to 0 disables tagging entirely.
-- The tag name follows the format `<prefix>-<cycle_number>-<short_sha>`, e.g., `harness-r-10-a3f5d2c`.
-- Tags are created with `-f` (force) to handle re-runs that might produce the same tag name.
-- When tag push is enabled, `git push <remote> <tag_name>` runs after tag creation.
-- Tag creation or push failures are logged but do not crash the loop.
+#### Acceptance Criteria
+- Given auto-commit is enabled and staging succeeded, when the commit runs, then a single commit is created containing all staged changes
+- Given auto-commit is disabled, when the cycle completes, then no commit is created regardless of staging status
+- Given the commit operation fails, when the failure is detected, then a warning is logged and the cycle proceeds
 
 ---
 
-## R-GIT-07: Diff and history queries
+## Multi-Repo
 
-The framework must be able to query git for staged diffs, HEAD hashes, commit history, and diff stats. These queries serve evaluation (staged diff as evaluator input), meta-review (git log + diffstat for trend analysis), and commit message construction.
+### US-05: As a cycle, I need staging and committing to operate across multiple configured repositories, so that projects with submodules or companion repos are supported
 
-**Why:** Multiple parts of the framework need git data: the evaluator needs the diff to score, the meta-review needs the history to analyze trends, and the commit message builder needs diffstat for fallback summaries. Centralizing these queries avoids duplicated subprocess management and ensures consistent truncation (large diffs are capped to prevent memory issues).
+The agent may work across multiple git repositories simultaneously (for example, a main project and a submodule). Staging and committing are performed in each configured repository, ensuring all repositories stay in sync.
 
-**Acceptance criteria:**
-- Staged diff output is truncated to a configurable maximum (e.g., 30K characters) to prevent memory exhaustion on large changes.
-- HEAD hash queries return a short hash (10 characters) for use in tag names and review baselines.
-- History queries support a `since_hash..HEAD` range for delta reporting.
-- All git queries handle errors gracefully (return empty strings or empty lists) rather than raising exceptions.
-
----
-
-## R-GIT-08: Squash safety
-
-The smart squash operation (grouping and combining related commits) must be atomic: if the rebase fails at any point, the repository must be left in exactly the state it was in before the squash attempt. No partial squash states should be possible.
-
-**Why:** Squash uses `git rebase -i`, which can fail due to merge conflicts, invalid todo sequences, or unexpected repository states. A half-completed rebase leaves the repository in a detached state that the agent cannot recover from. Atomicity ensures the worst case is "squash didn't happen" rather than "repository is broken".
-
-**Acceptance criteria:**
-- A failed rebase is followed by `git rebase --abort`.
-- `git rebase --abort` is attempted even when the rebase process throws an unexpected exception (cleanup in finally block).
-- Temporary files used by the rebase (todo script, editor script) are cleaned up in all cases (success, failure, exception).
-- After a failed squash, the HEAD hash is unchanged from before the attempt.
+#### Acceptance Criteria
+- Given two repositories are configured, when staging runs, then changes are staged in both repositories
+- Given two repositories are configured, when committing runs, then the same commit message is used in both
+- Given a configured repository path does not exist, when repository paths are resolved, then a warning is logged and that path is skipped
 
 ---
 
-## R-GIT-09: Squash group validation
+## Push
 
-Before executing a squash, the framework must validate that the LLM-proposed commit groups are contiguous, cover all commits in the range, and use valid SHA references. Invalid groupings must be rejected without attempting the rebase.
+### US-06: As the agent, I need to optionally push commits to a remote after each cycle, so that remote repositories stay current during long-running missions
 
-**Why:** The squash groups come from an LLM, which may produce invalid JSON, reference non-existent SHAs, propose non-contiguous groups (which would reorder commits), or omit some commits. Executing a rebase with bad groups would corrupt the history.
+When auto-push is enabled, each successful commit is immediately pushed to the configured remote and branch. This keeps remote mirrors up to date and enables other systems to observe the agent's progress in real time.
 
-**Acceptance criteria:**
-- Groups must be ordered oldest-first, and the flattened SHA order must match the actual commit order.
-- All SHAs in the groups must match (by prefix) actual commits in the range.
-- Short SHAs from the LLM are normalized to full hashes before execution.
-- Groups missing required fields (`shas`, `message`) are rejected.
-- Single-commit groups are valid but do not trigger actual squashing (no rebase needed if all groups are singletons).
-- Commit messages in groups that don't start with the expected prefix are automatically prefixed.
+#### Acceptance Criteria
+- Given auto-push is enabled and a commit succeeded, when the push runs, then the current branch is pushed to the configured remote
+- Given auto-push is disabled, when a commit succeeds, then no push is attempted
+- Given the push fails, when the failure is detected, then a warning is logged but the cycle proceeds
+- Given multiple repositories are configured, when push runs, then each repository is pushed independently
+
+---
+
+## Tagging
+
+### US-07: As the agent, I need to create a version tag at each periodic checkpoint, so that checkpoint states are easy to find and reference later
+
+At each periodic checkpoint, if tagging is enabled, the framework creates a tag at the current commit. The tag name encodes the checkpoint identifier and a short commit hash for uniqueness. Tags can optionally be pushed to the remote.
+
+#### Acceptance Criteria
+- Given auto-tag is enabled, when a periodic checkpoint runs, then a tag is created at the current commit
+- Given auto-tag is enabled and tag pushing is enabled, when a tag is created, then it is pushed to the configured remote
+- Given auto-tag is disabled, when a periodic checkpoint runs, then no tag is created
+- Given this is the startup checkpoint, when tagging is considered, then no tag is created (tags only apply to periodic checkpoints)
+
+---
+
+## Squash
+
+### US-08: As the agent, I need recent commits grouped and squashed by semantic meaning at checkpoint time, so that the version history stays clean and reviewable
+
+Over many cycles, the agent creates many small commits. At each periodic checkpoint, if squashing is enabled, the framework analyses the recent commits and groups them by logical theme. Each group is squashed into a single commit with a descriptive message, keeping the history clean without losing the semantic boundaries between different areas of work.
+
+#### Acceptance Criteria
+- Given auto-squash is enabled and recent commits exist, when a checkpoint runs, then the commits are analysed and grouped by semantic similarity
+- Given the analysis produces multi-commit groups, when squashing executes, then each group becomes a single commit with a combined message
+- Given the analysis determines all commits are independent, when the result is evaluated, then no squash is performed
+- Given the squash operation encounters a conflict, when the error is detected, then the operation is cleanly aborted and the original history is preserved
+- Given auto-push is enabled, when squashing is considered, then squashing is disabled to avoid rewriting pushed history
+
+### US-09: As the agent, I need squash failures to be cleanly recoverable, so that a failed squash never leaves the repository in a broken state
+
+Squashing rewrites commit history, which is inherently risky. If the rebase fails for any reason (conflicts, unexpected state), the framework must abort the rebase and leave the repository exactly as it was before the attempt.
+
+#### Acceptance Criteria
+- Given the squash rebase fails, when the failure is detected, then the rebase is aborted and the repository returns to its pre-squash state
+- Given an unexpected error occurs during squashing, when the error is caught, then an abort is attempted and the failure is logged
+- Given the squash succeeds, when the operation completes, then the new commit history is consistent and the temporary files are cleaned up
+
+---
+
+## Diff Queries
+
+### US-10: As a cycle, I need the staged diff available before committing, so that the evaluator can assess the actual code changes
+
+The evaluator needs to see the concrete code changes the agent made, not just the agent's description of what it did. By reading the staged diff before committing, the evaluator receives the actual change content.
+
+#### Acceptance Criteria
+- Given changes are staged, when the diff is retrieved, then the full staged diff content is returned
+- Given the diff is very large, when it is retrieved, then it is truncated to a manageable size with a truncation notice
+- Given no changes are staged, when the diff is retrieved, then an empty result is returned

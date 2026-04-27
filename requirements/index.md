@@ -9,9 +9,9 @@
 
 | Domain | Path | Description |
 |:---|:---|:---|
-| core | requirements/core/ | LLM communication, configuration loading, workspace security, and run lifecycle management |
-| agent | requirements/agent/ | Autonomous multi-cycle execution, persistent memory, mission control, and commit orchestration |
-| evaluation | requirements/evaluation/ | Dual-isolated quality scoring, meta-review analysis, and score-driven feedback loops |
-| tools | requirements/tools/ | File operations, search, shell access, code analysis, and the tool registry/dispatch system |
-| prompts | requirements/prompts/ | Evaluator rubrics, meta-review templates, and prompt assembly for each LLM interaction |
-| deployment | requirements/deployment/ | Server provisioning, systemd service management, CI/CD tag-triggered deploy, and self-improvement loop |
+| core | requirements/core/ | Configuration, LLM communication, workspace security, verification hooks, and run lifecycle |
+| agent | requirements/agent/ | Autonomous multi-cycle execution, persistent memory, evaluation, and commit orchestration |
+| evaluation | requirements/evaluation/ | Dual-isolated quality scoring, static analysis, and score-driven feedback |
+| tools | requirements/tools/ | File operations, search, code analysis, shell access, and the tool dispatch framework |
+| prompts | requirements/prompts/ | Evaluator rubrics, meta-review templates, and scoring dimension definitions |
+| deployment | requirements/deployment/ | Server provisioning, systemd service, CI/CD pipeline, and self-improvement loop |

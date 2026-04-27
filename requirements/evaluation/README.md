@@ -1,101 +1,75 @@
 # Evaluation Domain
 
-The evaluation domain answers one question: **"Was this cycle's output actually good?"**
+The evaluation domain provides objective, fact-based quality signals that ground scoring in verifiable evidence rather than subjective opinion. It has three sub-areas:
 
-An autonomous coding agent runs in cycles -- debate (propose), implement (execute), reasoning (explore without changing code). After each cycle, the system must judge whether the output advanced the project. This judgment drives the next cycle: a high score means "keep going in this direction," a low score means "try something different."
-
-Evaluation has two layers that serve fundamentally different purposes:
-
-1. **Static analysis** provides objective ground truth -- syntax errors, broken imports, disappeared symbols. These are facts, not opinions.
-2. **LLM-based dual evaluation** provides subjective quality judgment -- is the reasoning sound? are edge cases covered? does the change create systemic risk? These require intelligence, and intelligence requires calibration.
-
-The two layers feed into each other: static analysis findings are injected into the LLM evaluator's prompt so that subjective judgment is anchored by objective evidence. An evaluator cannot give a high score to code that objectively fails to compile.
+1. **Static Analysis** -- deterministic, non-LLM code checks that surface objective defects (syntax errors, broken imports, missing symbols, structural regressions).
+2. **Metrics** -- quantitative measures of scoring quality itself, ensuring evaluators differentiate meaningfully between submissions.
+3. **Dual Evaluator** -- two independent scoring perspectives that combine into a single quality signal (covered in `dual-evaluator.md`).
 
 ---
 
 ## Static Analysis
 
-### Why deterministic checks exist alongside LLM evaluation
+### US-01: As the static analyzer, I need to verify that every changed file is syntactically valid, so that objectively broken code is caught before any subjective review begins
 
-LLMs hallucinate. An LLM evaluator can read broken code and declare it correct. Static analysis provides an un-gameable floor: if `py_compile` says the syntax is wrong, the syntax is wrong, regardless of what the LLM thinks.
+A file that cannot be parsed by the language runtime is broken by definition. This check must run before all other analysis steps because downstream checks (imports, symbols) rely on a parseable file.
 
-### Scenario: Syntax validation
+#### Acceptance Criteria
+- Given a set of changed files, when any file contains a syntax error, then an error-level finding is reported with the file path and line number
+- Given a set of changed files, when all files are syntactically valid, then no syntax-related findings are produced
+- Given a file that fails to compile for an unexpected reason, then a warning-level finding is reported instead of crashing the analysis
 
-A cycle writes three Python files. One of them has a missing colon on line 47.
+### US-02: As the static analyzer, I need to detect imports that reference modules not available in the environment or workspace, so that missing dependencies are surfaced as warnings
 
-**Expected behavior:**
-- The system runs `py_compile` on all three files
-- The broken file produces an ERROR finding with the file path and line number
-- The other two files pass silently
-- The report summary reads "1 error(s), 0 warning(s), 2 file(s) clean [3 checked, 0 skipped]"
+An import of a module that does not exist in the standard library, installed packages, or the project workspace is likely a mistake. However, it may also be an intentional new dependency, so this is a warning rather than a hard error.
 
-**Acceptance criteria:**
-- Every `.py` file in the changed set is compiled; non-Python files are counted as skipped, not silently ignored
-- A syntax error always produces an ERROR-level finding, never a warning
-- The finding includes the file path and line number extracted from the compiler output
-- Files that do not exist on disk are skipped with a count, not an exception
+#### Acceptance Criteria
+- Given a changed file that imports a module not found in stdlib, installed packages, or workspace, then a warning-level finding is reported
+- Given a changed file that imports a module available in the standard library, then no finding is reported for that import
+- Given a changed file that imports a sibling module within the workspace, then no finding is reported for that import
+- Given a file with a syntax error, then import checks are skipped for that file to avoid duplicate reporting
 
-### Scenario: Import and symbol verification
+### US-03: As the static analyzer, I need to verify that each named symbol imported from a workspace module actually exists in that module, so that typos and stale references are caught as errors
 
-A cycle adds `from harness.core.llm import LLMCLient` (typo -- the real class is `LLM`).
+When code imports a specific symbol from a known module and that symbol does not exist, it will fail at runtime. This is a stronger signal than a missing module and warrants an error-level finding.
 
-**Expected behavior:**
-- The system parses all imports via AST (no actual importing -- no side effects)
-- It resolves `harness.core.llm` to a file in the workspace and parses that file's top-level names
-- `LLMCLient` is not among them; the system produces an ERROR finding
-- For modules outside the workspace (stdlib, pip packages), the system checks only whether the top-level module is findable, not whether every symbol exists (too expensive and fragile)
+#### Acceptance Criteria
+- Given a file that imports a named symbol from a workspace module, when that symbol exists as a top-level definition, assignment, or re-export, then no finding is reported
+- Given a file that imports a named symbol from a workspace module, when that symbol does not exist in that module, then an error-level finding is reported listing the symbol and the available exports
+- Given a file that imports a name that corresponds to a sub-module or sub-package of the target, then no finding is reported
+- Given a star import, then the symbol check is skipped for that import
 
-**Acceptance criteria:**
-- An import of a module that exists nowhere (not stdlib, not installed, not in workspace) produces a WARN finding
-- An import of a specific symbol from a workspace module that does not export that symbol produces an ERROR finding
-- The system never imports a module to check it -- all checks are AST-based or use `importlib.util.find_spec`
-- Re-exports via `__init__.py` are recognized (a package that does `from .submodule import Foo` exports `Foo`)
+### US-04: As the static analyzer, I need to detect when top-level definitions disappear from a file after execution, so that accidental deletions of classes or functions are flagged as potential regressions
 
-### Scenario: Structural regression detection
+If a top-level class or function that existed before execution is no longer present afterward, callers that depend on it will break. This is surfaced as a warning because the removal may be intentional.
 
-A cycle edits `harness/tools/bash.py` and accidentally deletes the `BashTool` class definition.
+#### Acceptance Criteria
+- Given a file that existed before execution and has a pre-execution snapshot, when a top-level definition is removed, then a warning-level finding is reported naming the disappeared symbol
+- Given a newly created file with no pre-execution snapshot, then no structural regression check is performed
+- Given a file where all previous top-level definitions are still present, then no structural regression finding is reported
 
-**Expected behavior:**
-- The system compares top-level class/function names before and after
-- `BashTool` existed before but is absent after; the system produces a WARN finding
-- New names that appear are not flagged (additions are not regressions)
+### US-05: As the static analyzer, I need to produce a structured report that the evaluator can inject into its prompt, so that LLM-based scoring is grounded in objective facts
 
-**Acceptance criteria:**
-- Structural comparison only runs when a "before" snapshot is available; new files are skipped
-- Only top-level names are compared (nested functions/classes are not tracked)
-- Removed names produce WARN, not ERROR -- the removal may be intentional
+The report must be machine-readable and human-readable, summarizing all findings in a format the evaluator can consume directly. Error-level findings must be called out as automatic failure conditions.
 
-### Report formatting for LLM consumption
-
-The static report is formatted as a markdown block with a summary line and a table of findings. This format exists because the LLM evaluator reads it as part of its prompt context.
-
-**Acceptance criteria:**
-- When no Python files were changed, the report is empty (no markdown block at all)
-- When all files pass, the report says so explicitly with a one-line confirmation
-- ERROR findings trigger a bold warning that the evaluator "MUST FAIL this execution"
-- Pipe characters in file paths and messages are escaped to avoid breaking the markdown table
+#### Acceptance Criteria
+- Given a completed analysis run, when there are findings, then the report includes a summary line with error count, warning count, and clean file count
+- Given a completed analysis run, when there are findings, then the report renders a table with level, file, line, and description for each finding
+- Given a completed analysis run with error-level findings, then the report includes an explicit instruction that the reviewer must fail the evaluation
+- Given no changed files to analyze, then the report produces an empty output block
+- Given non-Python files in the changed set, then those files are counted as skipped and excluded from checks
 
 ---
 
 ## Metrics
 
-### Why scoring discrimination matters
+### US-06: As the evaluator, I need a measure of how well scores in the critical middle range are differentiated from each other, so that I can detect when scoring collapses into a narrow band and fails to distinguish between meaningfully different submissions
 
-The hardest scores to assign are in the 4-7 range. A score of 2 (obviously broken) and a score of 9 (obviously excellent) are easy. But the difference between a 5.0 (specific but incomplete) and a 6.0 (working code with gaps) is where evaluator quality shows.
+The middle range of the scoring scale is where most submissions land and where discrimination matters most. If all scores cluster tightly, the evaluation is not providing useful signal. The spread of scores in this range quantifies differentiation quality.
 
-If an evaluator gives everything in the middle range the same score, it provides no signal for the system to improve. Discrimination in the critical range is the single most important metric for evaluator health.
-
-### Scenario: Measuring evaluator discrimination
-
-Over 20 evaluation cycles, the system collects all scores that fell in the 4.0-7.0 range.
-
-**Expected behavior:**
-- The system computes the sample standard deviation (N-1 denominator) of these scores
-- A healthy evaluator produces a standard deviation of at least 0.5 (scores are spread out)
-- An evaluator that gives everything 5.5 produces a standard deviation near 0 (alarm signal)
-
-**Acceptance criteria:**
-- Uses sample standard deviation (N-1), not population standard deviation (N), because the sample sizes are small (typically 5-15 scores in the critical range)
-- Returns 0.0 when fewer than 2 scores fall in the critical range (cannot compute deviation from a single point)
-- Invalid or non-numeric score entries are silently skipped, not exceptions
-- The critical range is 4.0-7.0 inclusive on both ends
+#### Acceptance Criteria
+- Given a set of evaluations with two or more scores in the middle range, then a spread metric is calculated and returned as a non-negative number
+- Given a set of evaluations with fewer than two scores in the middle range, then the metric returns zero to indicate insufficient data
+- Given a set of evaluations where the input is not a list, then a type error is raised
+- Given evaluation entries with missing or non-numeric scores, then those entries are silently skipped without affecting the calculation
+- Given a set of evaluations using sample-based statistics, then the metric accounts for small sample sizes by using an unbiased estimator

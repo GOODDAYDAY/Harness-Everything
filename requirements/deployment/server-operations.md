@@ -1,171 +1,111 @@
 # Server Operations
 
-This document covers the requirements for running Harness-Everything as a persistent service on a remote server: process management, crash recovery, health monitoring, and disk space management.
+User stories covering the systemd service lifecycle, crash recovery, health monitoring, and disk cleanup.
 
 ---
 
-## Service Management
+## US-01: As the operator, I need the agent to run as a managed background service so that it starts automatically on boot and can be controlled with standard system commands
 
-### Why systemd
+The self-improvement loop must run as a long-lived background process managed by the operating system's service supervisor. This ensures the loop survives terminal disconnections, starts on reboot, and provides a uniform interface for start/stop/status operations.
 
-The harness is a long-running Python process that must survive server reboots, transient crashes, and bad code deployments. systemd provides process supervision, automatic restart, log management, and user-level service isolation without requiring root access.
-
-### Scenario: Normal service lifecycle
-
-**Context:** The operator deploys Harness-Everything to a server and enables the service.
-
-**Expected behavior:**
-
-1. The service starts after network is available (the harness needs to reach LLM API endpoints and git remotes).
-2. The agent process runs `main.py` with a server-specific config JSON. The config file is gitignored and created by the deploy workflow from a tracked template.
-3. All stdout and stderr are appended to a single log file. The log file path is fixed and known, not scattered across journald or multiple files. This enables simple `tail -f` monitoring.
-4. The agent runs its configured number of cycles, commits, pushes, and tags. When all cycles complete, the process exits cleanly (code 0).
-5. After a clean exit, the service remains inactive until the CI pipeline restarts it with the new code. This is intentional -- the agent should not auto-restart on clean exit because the whole point is to load the new code.
-
-**Acceptance criteria:**
-
-- The service is a user-level unit (runs without root, under the deploy user's session)
-- The working directory is the repo checkout on the server
-- Environment variables (API keys, config overrides) come from a separate environment file, not from the service unit or the repo
-- Log output goes to a single rotating file, not to journald alone
-- Clean exit (code 0) does not trigger a restart
+### Acceptance Criteria
+- Given the service is enabled, when the server boots, then the agent process starts automatically without manual intervention
+- Given the service is running, when the operator issues a stop command, then the agent process terminates within a bounded grace period
+- Given the service is stopped, when the operator issues a start command, then the agent process launches and begins executing work cycles
 
 ---
 
-## Crash Recovery
+## US-02: As the operator, I need the service to wait for network availability before starting so that the agent can reach its LLM provider and git remote
 
-### Why multi-layered recovery
+The agent depends on external network services (LLM API, git remote). Starting before the network is ready would cause immediate failures and waste retry budget.
 
-A single retry policy is insufficient for an autonomous self-modifying agent. The agent can crash for transient reasons (API timeout, OOM) or for persistent reasons (the code it just wrote is broken). These require different recovery strategies:
-
-- **Transient failures** should be retried quickly (systemd restart-on-failure).
-- **Persistent failures** should be abandoned after a few attempts (systemd start-limit) to avoid burning API credits on a crash loop.
-- **Abandoned state** should be recovered by an external monitor (heartbeat cron) that waits, resets the failure counter, and tries again -- because the CI pipeline may have deployed a fix in the meantime.
-
-### Scenario: Transient crash and recovery
-
-**Context:** The agent process crashes mid-cycle due to an API timeout.
-
-**Expected behavior:**
-
-1. systemd detects the non-zero exit code and waits a cooldown period before restarting.
-2. The process restarts and begins a fresh run (not a resume -- each run starts from cycle 1 with a new run directory).
-3. If the same crash happens again, systemd retries up to a configured limit.
-4. After the retry limit is exhausted within a time window, systemd marks the service as failed and stops trying.
-
-**Acceptance criteria:**
-
-- Restart delay is at least 30 seconds to avoid hammering a rate-limited API
-- The retry limit is at most 3 attempts within a 10-minute window
-- After hitting the limit, the service enters `failed` state and does not restart on its own
-
-### Scenario: Zero-work catastrophe detection
-
-**Context:** The agent process runs, completes its cycles, but makes zero tool calls -- it generated text without actually examining or modifying the codebase. This can happen when the LLM is confused by a broken system prompt or when the API returns malformed responses.
-
-**Expected behavior:**
-
-1. `main.py` detects that cycles ran but total tool calls were zero.
-2. The process exits with a non-zero exit code (distinct from both clean exit and unhandled exception) so that systemd treats it as a failure, not a success.
-3. This triggers the normal crash recovery path (retry, then heartbeat recovery).
-
-**Acceptance criteria:**
-
-- The exit code for zero-work catastrophe is distinct from normal crash (code 2, not code 1)
-- The detection criterion is: at least one cycle completed AND total tool calls across all cycles is zero
-- A run where zero cycles completed (immediate startup crash) does not trigger this path -- it triggers normal crash recovery instead
+### Acceptance Criteria
+- Given the server is booting, when the network is not yet available, then the service delays its start until connectivity is established
+- Given the network becomes available, when the service starts, then the agent can successfully reach external APIs on its first attempt
 
 ---
 
-## Health Monitoring
+## US-03: As the operator, I need the agent process to read its credentials from a separate environment file so that secrets are decoupled from the service definition and the codebase
 
-### Why a heartbeat exists
+API keys and other secrets must not live in the service unit file, the source repository, or the agent config file. A dedicated external file keeps secrets out of version control and allows rotation without redeploying code.
 
-systemd's restart-on-failure has a fatal flaw for long-running autonomous systems: the start-limit is permanent until manually reset. If the agent crashes three times in quick succession (e.g., a bad deploy), systemd gives up forever. Without an external monitor, the self-improvement loop halts until a human notices and runs `systemctl reset-failed`.
-
-The heartbeat script is that external monitor.
-
-### Scenario: Recovery from exhausted restart limit
-
-**Context:** The agent crashed three times in 10 minutes. systemd has marked the service as failed and will not restart it. The heartbeat cron runs every 30 minutes.
-
-**Expected behavior:**
-
-1. The heartbeat script checks whether the service is in `failed` state.
-2. If failed, it resets the failure counter and attempts a restart.
-3. Success or failure of the restart attempt is logged to syslog under a dedicated tag.
-
-**Acceptance criteria:**
-
-- The heartbeat runs on a fixed cron schedule (every 30 minutes)
-- It logs every action to syslog with a tag that distinguishes it from the agent's own logs
-- It does not restart a service that is actively running (only `failed` state triggers action)
-- If the restart attempt itself fails, this is logged but does not cause the heartbeat script to exit with an error (it will try again next cron tick)
-
-### Scenario: Zombie clean-exit detection
-
-**Context:** The agent exited cleanly (code 0) but the last run produced no real work -- the best score across all cycles fell below a safety threshold. The service is in `inactive` state (not `failed`), so systemd will not restart it and the normal crash recovery path does not apply.
-
-**Expected behavior:**
-
-1. The heartbeat script detects the service is `inactive` (not running, not failed).
-2. It checks the most recent run's summary to determine the best score.
-3. If the best score is below a zombie threshold (a value well below any plausibly healthy run), it restarts the service.
-4. If the best score is healthy, the inactive state is normal (waiting for CI to restart with new code) and no action is taken.
-
-**Note:** The current summary is written as Markdown (`final_summary.md`), not JSON. The JSON-based zombie detection logic in the heartbeat script is non-functional (dead code) because no `summary.json` is ever produced.
-
-**Acceptance criteria:**
-
-- The zombie threshold is set low enough that a run with even one productive cycle would not trigger it (a threshold of 1.0 when healthy runs score 5+ is appropriate)
-- The script attempts to read a summary from the most recent run directory (sorted by modification time). The current implementation looks for a JSON summary that the agent does not produce -- the agent writes `final_summary.md` instead.
-- If no summary file exists, no action is taken (the run may still be in progress in a different form)
-- The detection is defensive: any failure to read or parse the summary results in no action, not a crash
+### Acceptance Criteria
+- Given the environment file exists with valid credentials, when the service starts, then the agent authenticates successfully using those credentials
+- Given the environment file is missing or malformed, when the service starts, then the agent fails immediately with a clear error rather than running unauthenticated
 
 ---
 
-## Disk Management
+## US-04: As the operator, I need the service to redirect all output to a rotating log file so that diagnostic history is preserved without filling system journal storage
 
-### Why automated cleanup
+The agent produces continuous output across many hours. Writing to the system journal would accumulate unbounded storage. A dedicated log file can be size-managed independently.
 
-Each run produces a `run_*` directory in the output folder containing cycle artifacts, evaluation results, and metrics. These are valuable for debugging recent runs but become dead weight after a week. Without cleanup, the output directory grows by 1-2 GB per day and will exhaust disk space within weeks on a typical cloud instance.
-
-### Scenario: Routine cleanup of old runs
-
-**Context:** The cleanup script runs daily via cron.
-
-**Expected behavior:**
-
-1. The script finds all `run_*` directories in the output folder older than a retention period.
-2. It deletes them entirely (the directories and all contents).
-3. It logs the count of deleted directories to syslog.
-4. If no directories are old enough, it exits silently.
-
-**Acceptance criteria:**
-
-- The retention period is at least 7 days (enough to investigate recent failures)
-- Only directories matching the `run_*` pattern are deleted -- other files in the output directory are untouched
-- The search is shallow (maxdepth 1) to avoid accidentally deleting files inside a current run
-- If the output directory does not exist, the script exits cleanly without error
-- The cleanup runs at a low-traffic time (e.g., 04:00) to avoid contention with active runs
-- Deletion count is logged to syslog under a dedicated tag
+### Acceptance Criteria
+- Given the service is running, when the agent produces stdout or stderr output, then that output is appended to the designated log file rather than the system journal
+- Given the log file exists, when new output is written, then it is appended (not overwritten) so that previous entries are preserved
 
 ---
 
-## Environment Setup
+## US-05: As the operator, I need the service to automatically retry on crash with a bounded number of attempts so that transient failures self-heal but persistent bad code does not loop forever
 
-### Scenario: Server filesystem layout
+A single crash (out-of-memory, transient API error) should not stop the loop permanently. But if the agent crashes repeatedly in quick succession, it likely has a code defect, and unlimited restarts would waste resources and fill logs with identical failures.
 
-**Expected layout:**
+### Acceptance Criteria
+- Given the agent process crashes once, when the service supervisor detects the failure, then it waits a cooldown period and restarts the process
+- Given the agent process crashes repeatedly, when the number of crashes within the rate-limit window exceeds the allowed burst count, then the supervisor stops attempting restarts and marks the service as failed
+- Given the agent exits cleanly (success code), when the service supervisor evaluates the exit, then no automatic restart occurs because a clean exit means the work chunk is complete
 
-1. The repo checkout lives at a fixed path on the server.
-2. A Python virtual environment exists outside the repo (not committed, not inside the workspace).
-3. An environment file containing API keys and other secrets lives outside the repo, in a user config directory.
-4. The server-specific agent config JSON is gitignored. The deploy workflow creates it by copying a tracked template.
-5. A logs directory exists for the service's output file.
+---
 
-**Acceptance criteria:**
+## US-06: As the operator, I need the agent to signal a catastrophic exit when it completes cycles but produces no actual work so that the service supervisor treats this as a failure requiring recovery
 
-- The virtual environment, environment file, and server config are all outside the git working tree
-- The environment file is readable only by the deploy user (not world-readable)
-- The deploy workflow does not assume the virtual environment or environment file exist -- it only manages the repo checkout and the config copy
+An agent run that finishes its cycles without making a single tool call is effectively broken -- it consumed time and API credits but accomplished nothing. This must be distinguishable from a legitimate clean exit so the crash-recovery mechanisms can intervene.
+
+### Acceptance Criteria
+- Given the agent finishes at least one cycle, when zero tool calls were made across all cycles, then the process exits with a failure code
+- Given the agent finishes cycles with at least one tool call, when the process exits, then it uses the success code regardless of whether the changes were large or small
+- Given the agent exits with the catastrophic failure code, when the service supervisor evaluates the exit, then it counts this toward the crash retry budget (same as a genuine crash)
+
+---
+
+## US-07: As the operator, I need a scheduled health check that automatically recovers the service after it exhausts its crash retry budget so that a brief period of bad code does not halt the loop for hours
+
+Once the service supervisor gives up after repeated crashes, nothing else will restart the service until a human intervenes. A periodic health check must detect this "failed and stuck" state and attempt recovery, because the next deployed code version may have already fixed the underlying defect.
+
+### Acceptance Criteria
+- Given the service is in a failed state (crash budget exhausted), when the health check runs, then it resets the failure counter and attempts to start the service
+- Given the health check successfully restarts the service, when the restart completes, then the event is logged to the system log for auditability
+- Given the health check fails to restart the service, when the restart attempt fails, then the failure is logged and the health check exits without further action (the next scheduled run will try again)
+
+---
+
+## US-08: As the operator, I need the health check to detect "zombie clean exits" where the service stopped normally but the last run produced no meaningful work so that the loop resumes even when the failure bypasses the crash-retry mechanism
+
+A zero-work exit is supposed to use a failure exit code (see US-06), but defense in depth requires a second detection path. If a code regression causes zero-work runs to exit with a success code, the service stops cleanly and the crash-retry mechanism never fires. The health check must independently detect this and restart the service.
+
+### Acceptance Criteria
+- Given the service is inactive (not failed) and the most recent run output indicates a quality score below the minimum threshold, when the health check runs, then it restarts the service
+- Given the service is inactive and no run output exists, when the health check runs, then it takes no action (there is nothing to evaluate)
+- Given the service is actively running, when the health check runs, then it takes no action
+
+> **Known issue:** The zombie detection branch looks for a JSON summary file in the run output directory. However, the agent currently writes Markdown-format summaries, not JSON. This means the zombie detection path is effectively dead code -- it will never find a matching file, and the branch will never fire. The primary defense (failure exit code from US-06) remains functional.
+
+---
+
+## US-09: As the operator, I need old run output directories to be automatically deleted after a retention period so that the server disk does not fill up over days of continuous operation
+
+Each completed run produces tens of megabytes of output. With the loop firing roughly every 30 minutes, output accumulates at 1-2 GB per day. Without cleanup, the disk fills within weeks.
+
+### Acceptance Criteria
+- Given run output directories older than the retention period exist, when the cleanup job runs, then those directories are deleted and the count is logged
+- Given no run output directories exceed the retention period, when the cleanup job runs, then no directories are deleted and no log entry is created
+- Given the output root directory does not exist, when the cleanup job runs, then it exits silently without error
+
+---
+
+## US-10: As the operator, I need the cleanup job to run on a daily schedule so that disk usage stays bounded without manual intervention
+
+The cleanup must be automated and periodic. Running it once per day is sufficient because the daily accumulation rate is manageable and a single missed run would not cause immediate disk pressure.
+
+### Acceptance Criteria
+- Given the cleanup job is scheduled, when the scheduled time arrives each day, then the cleanup executes automatically
+- Given the cleanup job was missed (server was down), when the server comes back up and the next scheduled time arrives, then the cleanup runs and handles the accumulated backlog in a single pass

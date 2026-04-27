@@ -1,169 +1,98 @@
-# Path Security Requirements
+# Security
 
-This document defines the requirements for path security: the mechanisms that prevent the LLM-driven agent from accessing, modifying, or exfiltrating files outside the designated workspace.
-
-Path security answers one question: **can the agent touch only what it is allowed to touch, even if the model actively tries to escape?**
-
-The threat model assumes the LLM is untrusted. It may produce arbitrary path strings, including crafted Unicode, null bytes, symlinks, hardlinks, and TOCTOU race attempts. The security layer must defend against all of these without relying on the model's good behavior.
+User stories for workspace containment and path security. All stories use the actor "As a file operation" because these checks are enforced at the boundary of every filesystem access, regardless of which higher-level component initiated the access.
 
 ---
 
-## 1. Workspace Containment
+# Workspace Containment
 
-### R-SEC-01: Path resolution before access control
+## US-01: As a file operation, I need my target path verified against the list of allowed directories so that no tool can read or write files outside the designated workspace
 
-All path access checks must resolve the path to its real, absolute filesystem location (following symlinks, resolving `.` and `..`) before comparing against the allowed-paths list. The comparison must never operate on the raw, user-supplied string.
+Every file access must be checked against the configured allowed directories. This is the primary security boundary preventing the agent from accessing or modifying files it should not touch (system files, other projects, sensitive data outside the workspace).
 
-**Why:** A raw string comparison allows trivial escapes. The path `./workspace/../../../etc/passwd` starts with `./workspace` and would pass a naive prefix check, but resolves to `/etc/passwd`. Symlinks inside the workspace can point anywhere. Only the resolved path reveals the true target.
+### Acceptance Criteria
+- Given a path that resolves to a location inside an allowed directory, when the path check runs, then the operation is permitted
+- Given a path that resolves to a location outside all allowed directories, when the path check runs, then the operation is denied
+- Given a path that equals an allowed directory exactly (not a child of it), when the path check runs, then the operation is permitted
+- Given a path containing symlinks, when the path check runs, then symlinks are resolved to their real targets before the containment check, preventing symlink-escape attacks where a link inside the workspace points to a file outside it
 
-**Acceptance criteria:**
+## US-02: As a file operation, I need allowed paths outside the workspace to trigger an operator warning so that unintentional broad access is surfaced during configuration review
 
-- Given a path `workspace/../../../etc/passwd`, when access is checked, then it is rejected because the resolved path is outside the workspace.
-- Given a symlink `workspace/link -> /etc/shadow`, when access is checked on `workspace/link`, then it is rejected because the resolved target is outside the workspace.
-- Given a path `workspace/subdir/../file.py` where `file.py` exists in the workspace root, when access is checked, then it is allowed (the resolved path is inside the workspace).
+It is valid but unusual to configure allowed paths that extend beyond the workspace root. When this happens, a warning should be logged so operators can confirm the expanded access is intentional rather than a configuration mistake.
 
-### R-SEC-02: Null byte injection prevention
+### Acceptance Criteria
+- Given an allowed path that is not a child of the workspace directory, when the configuration is loaded, then a warning is logged naming both the allowed path and the workspace
+- Given all allowed paths within the workspace, when the configuration is loaded, then no warning is emitted
 
-Path strings containing null bytes must be rejected before any OS-level operation is performed.
+## US-03: As a file operation, I need reads performed atomically with race-condition protection so that a symlink swapped between validation and reading cannot bypass the containment check
 
-**Why:** A null byte (`\x00`) terminates C strings. A path like `/workspace/safe\x00/../../etc/passwd` passes the Python string prefix check (it starts with `/workspace/safe`) but the OS truncates at the null byte and operates on `/workspace/safe`, which may or may not be the intended target. On some systems, the behavior is undefined.
+A time-of-check-to-time-of-use (TOCTOU) attack can swap a symlink target between the moment the path is validated and the moment the file is opened. Atomic reads eliminate this race window by opening the parent directory first, then opening the file relative to that directory descriptor, and verifying consistency throughout.
 
-**Acceptance criteria:**
+### Acceptance Criteria
+- Given a file inside the workspace, when an atomic read is performed, then the parent directory is opened and its identity verified against expectations before the file is opened relative to it
+- Given a file whose parent directory descriptor does not match the expected path (possible TOCTOU swap), when the consistency check runs, then the read is denied
+- Given a file opened via atomic read, when the opened descriptor is verified, then its device and inode are compared against the expected file to detect last-moment swaps
+- Given a file that is a symlink, when an atomic read is attempted, then the symlink is not followed (if the platform supports it), preventing redirect-to-target attacks
 
-- Given a path containing a null byte at any position, when it is validated, then it is rejected with a clear error message before any file operation is attempted.
+## US-04: As a file operation, I need files with multiple hard links rejected so that a hard link inside an allowed directory pointing to a file outside cannot bypass containment
 
-### R-SEC-03: Control character rejection
+A hard link creates a second directory entry for the same underlying file. If an attacker creates a hard link inside the allowed directory that points to a sensitive file outside it, a naive containment check would pass because the link's path is inside the workspace, but the actual data resides outside.
 
-Path strings containing any ASCII control character (0x00-0x1F, 0x7F) must be rejected.
+### Acceptance Criteria
+- Given an opened file whose inode has more than one hard link, when the link-count check runs, then the read is denied
+- Given an opened file whose inode has exactly one hard link, when the link-count check runs, then the read proceeds normally
 
-**Why:** Control characters in paths cause unpredictable behavior across operating systems and terminals. Tab characters can split tokens in shell commands, carriage returns can overwrite displayed paths in logs, and escape sequences can manipulate terminal output to hide the real path being accessed.
+## US-05: As a file operation, I need the real path of the opened file verified against allowed directories after opening so that no indirection technique (symlink, hard link, mount bind) can bypass containment
 
-**Acceptance criteria:**
+Even after all pre-open checks, the definitive verification is comparing the file descriptor's real location against the allowed paths. This is the last line of defense using platform-specific mechanisms to determine where the open descriptor actually points.
 
-- Given a path containing a tab character, when it is validated, then it is rejected with an error identifying the specific control character.
-- Given a path containing a carriage return, when it is validated, then it is rejected.
-- Given a path containing only printable characters, when it is validated, then it passes (control character check does not reject normal paths).
-
----
-
-## 2. Homoglyph and Unicode Spoofing Prevention
-
-### R-SEC-04: Unicode homoglyph detection via NFKC normalization
-
-Paths must be checked against their NFKC-normalized form. If the normalized form differs from the original, the path contains compatibility characters (superscripts, ligatures, full-width letters, combining diacritics) that could visually spoof a different path.
-
-**Why:** The full-width solidus `\uFF0F` looks identical to ASCII `/` in many fonts but is a different Unicode codepoint. A path containing it would pass a prefix check (the Python string does not contain ASCII `/` at that position) but might be interpreted as a directory separator by some systems, or might confuse operators reading logs.
-
-**Acceptance criteria:**
-
-- Given a path containing a full-width letter (e.g., full-width `A`), when it is validated, then it is rejected because NFKC normalization produces a different string.
-- Given a path containing only ASCII characters, when it is validated, then it passes the NFKC check.
-
-### R-SEC-05: Explicit homoglyph blocklist
-
-Beyond NFKC normalization, paths must be checked against an explicit blocklist of known dangerous look-alike characters: Cyrillic letters that resemble Latin letters, Greek letters, fraction slashes, and full-width separators.
-
-**Why:** Some homoglyphs survive NFKC normalization (Cyrillic `a` normalizes to Cyrillic `a`, not Latin `a`). These are dangerous because they are visually indistinguishable from ASCII in most fonts. An operator reviewing a log would see `workspace/config.py` and not realize the `o` is Cyrillic, pointing to a different file.
-
-**Acceptance criteria:**
-
-- Given a path containing Cyrillic small `o` (U+043E), when it is validated, then it is rejected with an error naming the character and its Unicode codepoint.
-- Given a path containing a fraction slash (U+2044), when it is validated, then it is rejected.
-- Given a configurable blocklist, when a custom blocklist is provided, then it replaces the default (not merged).
+### Acceptance Criteria
+- Given a platform that supports resolving a file descriptor to its real path, when the post-open check runs, then the resolved real path is checked against allowed directories
+- Given a platform where descriptor-to-path resolution is not available, when the post-open check runs, then a cross-platform fallback using device and inode comparison against all files under allowed directories is used
+- Given a file that cannot be validated by any available method, when the post-open check runs, then access is denied by default (deny-by-default posture)
 
 ---
 
-## 3. Symlink Attack Prevention
+# Path Security
 
-### R-SEC-06: Atomic file reading with pre-open directory pinning
+## US-06: As a file operation, I need paths containing null bytes rejected so that a null byte cannot truncate the path at the operating system boundary and bypass the prefix check
 
-File reads must use a multi-step atomic protocol: open the parent directory first, validate the directory descriptor matches expectations, then open the target file relative to the pinned directory descriptor.
+A null byte in a path string causes the OS to see a shorter path than the one validated by the application. The prefix check passes on the full Python string, but the OS operates on the truncated version, potentially accessing a completely different file.
 
-**Why:** A simple `open(path)` has a TOCTOU (time-of-check-time-of-use) race: between the moment the path is validated and the moment the file is opened, an attacker can replace a legitimate file or directory with a symlink to an arbitrary target. Opening the directory first and then using `openat()` semantics (via `dir_fd`) eliminates this race window.
+### Acceptance Criteria
+- Given a path containing a null byte at any position, when the path is validated, then the operation is denied with a clear error message
 
-**Acceptance criteria:**
+## US-07: As a file operation, I need paths containing control characters rejected so that invisible characters cannot cause unexpected behavior in path handling
 
-- Given a file `workspace/data.txt`, when it is read atomically, then the parent directory is opened and validated before the file is opened.
-- Given a parent directory that is replaced with a symlink between validation and opening, when the directory descriptor is validated, then the read fails (descriptor does not match expected device/inode).
+Control characters (tabs, carriage returns, escape sequences, and other non-printing characters) in file paths can cause display confusion, log injection, or unexpected behavior in shell commands that process paths.
 
-### R-SEC-07: O_NOFOLLOW with fallback and post-open validation
+### Acceptance Criteria
+- Given a path containing any ASCII control character, when the path is validated, then the operation is denied with an error message identifying the specific control character found
 
-When opening a target file relative to a pinned directory, the system must first attempt the open with the `O_NOFOLLOW` flag. If the target is a symlink, the kernel returns `ELOOP`. On receiving `ELOOP`, the system falls back to opening without `O_NOFOLLOW` (allowing the kernel to follow the symlink) and then performs post-open path validation (R-SEC-10) to ensure the resolved path is still within the allowed workspace.
+## US-08: As a file operation, I need paths containing Unicode homoglyphs rejected so that visually identical characters from non-Latin scripts cannot be used to spoof file paths
 
-**Why:** Even with directory pinning (R-SEC-06), if the file itself is a symlink, `openat()` would follow it to an arbitrary target. `O_NOFOLLOW` is attempted first as the preferred defense. However, some legitimate workspace layouts use symlinks, so a hard rejection would break valid use cases. The fallback open combined with post-open path validation provides the safety net: symlinks that resolve within the workspace are allowed; symlinks that escape the workspace are caught by the path validation and rejected.
+Characters from Cyrillic, Greek, and other scripts can look identical to ASCII characters but have different Unicode code points. An attacker could craft a path that looks like a legitimate workspace path but actually references a different location, or bypass allowlist matching that compares code points.
 
-**Acceptance criteria:**
+### Acceptance Criteria
+- Given a path containing a character from the homoglyph blocklist, when the path is validated, then the operation is denied with an error message identifying the specific homoglyph and its description
+- Given a path that changes under Unicode normalization (NFKC), when the path is validated, then the operation is denied because the path contains compatibility characters that could be used for visual spoofing
+- Given a custom homoglyph blocklist configured by the operator, when homoglyph checking runs, then the operator's blocklist is used instead of the built-in default
 
-- Given a symlink `workspace/evil.txt -> /etc/shadow`, when it is opened, then `O_NOFOLLOW` triggers `ELOOP`, the system retries without `O_NOFOLLOW`, and post-open path validation rejects the read because the resolved path is outside the workspace.
-- Given a symlink `workspace/link.txt -> workspace/real.txt` (target within workspace), when it is opened, then `O_NOFOLLOW` triggers `ELOOP`, the system retries without `O_NOFOLLOW`, and post-open path validation allows the read because the resolved path is inside the workspace.
-- Given a regular file `workspace/normal.txt`, when it is opened with `O_NOFOLLOW`, then it opens normally without triggering the fallback path.
+## US-09: As a file operation, I need all path security checks executed in a fixed priority order so that the most critical and cheapest checks run first
 
-### R-SEC-08: Directory descriptor consistency validation
+Path security involves multiple independent checks, each catching a different attack vector. Running them in a consistent order (null bytes first, then control characters, then homoglyphs) ensures the most critical and cheapest checks execute first, and the first failure short-circuits the remaining checks.
 
-After opening a directory descriptor, the system must verify that the descriptor's device and inode match the expected path's device and inode. A mismatch indicates the directory was swapped (symlink race).
+### Acceptance Criteria
+- Given a path that violates multiple security rules simultaneously, when the validation pipeline runs, then the error from the highest-priority check (null bytes) is returned
+- Given a path that passes null-byte validation but contains control characters, when the validation pipeline runs, then the control-character error is returned
+- Given a path that passes null-byte and control-character checks but contains homoglyphs, when the validation pipeline runs, then the homoglyph error is returned
+- Given a path that passes all security checks, when the validation pipeline runs, then no error is returned
 
-**Why:** If an attacker replaces the parent directory with a symlink between `os.open(parent)` and the subsequent file open, the descriptor would point to a different directory. The device/inode check detects this substitution.
+## US-10: As a file operation, I need filename components validated against path traversal sequences so that directory separators or parent-directory references embedded in a filename cannot escape the intended directory
 
-**Acceptance criteria:**
+A filename component (the last segment of a path) should never contain directory separators or parent-directory references. These could allow an attacker to escape the intended directory by embedding traversal sequences in what appears to be a simple filename.
 
-- Given a directory descriptor whose device/inode matches the expected path, when validation runs, then it passes.
-- Given a directory descriptor whose device/inode does NOT match (directory was swapped), when validation runs, then it fails and the file read is aborted.
-
----
-
-## 4. Hardlink Escape Prevention
-
-### R-SEC-09: Hardlink count check
-
-Files with multiple hardlinks must be rejected. A file with more than one directory entry (hardlink count > 1) could be accessible from a location outside the allowed paths.
-
-**Why:** An attacker can create a hardlink inside the workspace that points to the same inode as a sensitive file outside the workspace (e.g., `ln /etc/shadow workspace/shadow`). The file's content is the same regardless of which path is used. Since it is impractical to enumerate all hardlink locations, rejecting multi-linked files is the safe default.
-
-**Acceptance criteria:**
-
-- Given a file with exactly 1 hardlink (the normal case), when it is validated, then it passes.
-- Given a file with 2 or more hardlinks, when it is validated, then it is rejected.
-
-### R-SEC-10: Post-open containment validation
-
-After a file is opened (descriptor obtained), the system must verify that the opened file's real path is within the allowed paths, using platform-specific mechanisms.
-
-**Why:** Pre-open path validation and `O_NOFOLLOW` close most attack vectors, but the definitive check is: "where does this file descriptor actually point?" On Linux, `/proc/self/fd/N` reveals the real path; on macOS, `fcntl(F_GETPATH)` does the same. This final check catches any attack that manipulates the path between validation and opening.
-
-**Acceptance criteria:**
-
-- Given a file descriptor that resolves to a path inside the workspace, when post-open validation runs, then it passes.
-- Given a file descriptor that resolves to a path outside the workspace (attack succeeded at the OS level), when post-open validation runs, then the descriptor is closed and the read is aborted.
-- Given a platform where neither `/proc/self/fd` nor `fcntl(F_GETPATH)` is available, when post-open validation falls back to device/inode walking, then it still produces a correct accept/reject decision.
-
----
-
-## 5. Path Traversal Prevention
-
-### R-SEC-11: Filename component validation
-
-Individual filename components (the last segment of a path) must not contain path separators (`/`, `\`) or traversal sequences (`..`).
-
-**Why:** A tool might construct a path by joining a base directory with a filename from the model. If the filename is `../../etc/passwd`, a naive join produces a path outside the workspace. Validating the filename component in isolation catches this before the join.
-
-**Acceptance criteria:**
-
-- Given a filename component `../../etc/passwd`, when it is validated, then it is rejected.
-- Given a filename component `normal_file.py`, when it is validated, then it passes.
-- Given a filename component containing a backslash (`foo\bar`), when it is validated, then it is rejected (backslash is a path separator on Windows and could be used for traversal on cross-platform code).
-
----
-
-## 6. Layered Defense Summary
-
-The security requirements above form a defense-in-depth chain. No single check is sufficient alone:
-
-1. **Null bytes and control characters** (R-SEC-02, R-SEC-03) -- reject obviously malformed input before any interpretation.
-2. **Unicode spoofing** (R-SEC-04, R-SEC-05) -- reject visually deceptive characters that could fool human review.
-3. **Path traversal** (R-SEC-11) -- reject structural attacks in path components.
-4. **Workspace containment** (R-SEC-01) -- reject resolved paths outside allowed directories.
-5. **Atomic open with directory pinning** (R-SEC-06, R-SEC-07, R-SEC-08) -- eliminate TOCTOU races at the syscall level.
-6. **Hardlink detection** (R-SEC-09) -- reject files reachable from outside the workspace.
-7. **Post-open validation** (R-SEC-10) -- final confirmation that the opened file is where it should be.
-
-A path must pass ALL layers to be accessed. Failure at any layer aborts the operation.
+### Acceptance Criteria
+- Given a filename containing a forward slash, when the filename is validated, then the operation is denied
+- Given a filename containing a backslash, when the filename is validated, then the operation is denied
+- Given a filename component that is a parent-directory reference, when the filename is validated, then the operation is denied
