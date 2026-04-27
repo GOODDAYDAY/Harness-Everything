@@ -31,7 +31,7 @@ Cycle metrics exist to answer: "Was this cycle productive, or did the agent spin
 **Expected behavior:**
 
 1. The framework computes metrics from the raw tool execution log. No file I/O or LLM calls are involved in this computation -- it is purely deterministic.
-2. The metrics report that `files_changed = 0`, `turns_per_change = infinity` (or a sentinel), `redundant_reads = 3` (same file read 4 times, 3 are redundant), and `plan_before_act = true` (all calls were reads).
+2. The metrics report that `files_changed = 0`, `turns_per_change = 0.0`, `redundant_reads = 3` (same file read 4 times, 3 are redundant), and `plan_before_act = true` (all calls were reads).
 3. The one-line summary is appended to the agent's persistent notes, e.g.: `[metrics] cycle=14 tools=35 err=0 success=100% files=0 turns/chg=0.0 bash=0% redundant=3 ctx_hit=0% notes=Y plan=Y test=N hooks=PASS elapsed=42s`.
 4. The full metrics JSON and a formatted markdown report are written to the cycle's artifact directory.
 5. On the next cycle, the agent sees the metrics line in its persistent notes and can recognize that cycle 14 was unproductive. The framework does not force a corrective action -- it trusts the agent to adjust.

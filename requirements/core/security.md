@@ -86,16 +86,17 @@ File reads must use a multi-step atomic protocol: open the parent directory firs
 - Given a file `workspace/data.txt`, when it is read atomically, then the parent directory is opened and validated before the file is opened.
 - Given a parent directory that is replaced with a symlink between validation and opening, when the directory descriptor is validated, then the read fails (descriptor does not match expected device/inode).
 
-### R-SEC-07: O_NOFOLLOW for symlink rejection at open time
+### R-SEC-07: O_NOFOLLOW with fallback and post-open validation
 
-When opening a target file relative to a pinned directory, the system must use the `O_NOFOLLOW` flag to prevent the kernel from following symlinks. If the target is a symlink, the open must fail.
+When opening a target file relative to a pinned directory, the system must first attempt the open with the `O_NOFOLLOW` flag. If the target is a symlink, the kernel returns `ELOOP`. On receiving `ELOOP`, the system falls back to opening without `O_NOFOLLOW` (allowing the kernel to follow the symlink) and then performs post-open path validation (R-SEC-10) to ensure the resolved path is still within the allowed workspace.
 
-**Why:** Even with directory pinning (R-SEC-06), if the file itself is a symlink, `openat()` would follow it to an arbitrary target. `O_NOFOLLOW` causes the kernel to return `ELOOP` instead of following, closing this attack vector at the syscall level.
+**Why:** Even with directory pinning (R-SEC-06), if the file itself is a symlink, `openat()` would follow it to an arbitrary target. `O_NOFOLLOW` is attempted first as the preferred defense. However, some legitimate workspace layouts use symlinks, so a hard rejection would break valid use cases. The fallback open combined with post-open path validation provides the safety net: symlinks that resolve within the workspace are allowed; symlinks that escape the workspace are caught by the path validation and rejected.
 
 **Acceptance criteria:**
 
-- Given a symlink `workspace/evil.txt -> /etc/shadow`, when it is opened with `O_NOFOLLOW`, then the open fails with ELOOP and the file is not read.
-- Given a regular file `workspace/normal.txt`, when it is opened with `O_NOFOLLOW`, then it opens normally.
+- Given a symlink `workspace/evil.txt -> /etc/shadow`, when it is opened, then `O_NOFOLLOW` triggers `ELOOP`, the system retries without `O_NOFOLLOW`, and post-open path validation rejects the read because the resolved path is outside the workspace.
+- Given a symlink `workspace/link.txt -> workspace/real.txt` (target within workspace), when it is opened, then `O_NOFOLLOW` triggers `ELOOP`, the system retries without `O_NOFOLLOW`, and post-open path validation allows the read because the resolved path is inside the workspace.
+- Given a regular file `workspace/normal.txt`, when it is opened with `O_NOFOLLOW`, then it opens normally without triggering the fallback path.
 
 ### R-SEC-08: Directory descriptor consistency validation
 

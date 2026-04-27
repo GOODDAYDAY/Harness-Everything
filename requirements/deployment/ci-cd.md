@@ -102,7 +102,7 @@ The agent config JSON contains environment-specific paths, API endpoint URLs, an
 **Acceptance criteria:**
 
 - Tool restrictions are enforced at the framework level, not by the LLM's compliance with instructions
-- The bash denylist blocks commands even when embedded in pipes or subshells
+- The bash denylist blocks commands when embedded in pipes and chain operators (`&&`, `||`, `;`, `|`). Command substitution (`$(...)` and backticks) is not currently inspected -- this is a known limitation.
 - Hook configuration is per-project, not global -- different config files can specify different hook sets
 
 ---
@@ -146,6 +146,24 @@ The self-improvement loop is designed to run indefinitely, but operators need to
 
 - No persistent state from the pause survives into the resumed run (each run is independent)
 - Both resume methods (new tag push and manual service start) result in the same behavior
+
+### Scenario: In-process pause via pause file
+
+**Context:** The operator (or an external script) wants to pause the agent within a running process without stopping the service or waiting for the current chunk to finish. This complements the stop marker (which pauses between CI chunks) by providing a finer-grained pause within a running process.
+
+**Expected behavior:**
+
+1. The operator creates a `.harness.pause` file in the workspace root.
+2. The agent finishes its current cycle (it does not abort mid-cycle).
+3. The agent enters a sleep loop, checking periodically for the pause file's removal.
+4. When the `.harness.pause` file is removed, the agent resumes execution from the next cycle.
+
+**Acceptance criteria:**
+
+- The pause file is a simple file presence check (`.harness.pause` in the workspace root)
+- The agent completes its current cycle before pausing -- it does not interrupt mid-cycle
+- The agent resumes automatically when the pause file is removed, without requiring a process restart
+- This mechanism operates within a running process, unlike the stop marker which operates between CI-triggered chunks
 
 ---
 

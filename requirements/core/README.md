@@ -175,6 +175,8 @@ Beyond the binary done/not-done marker, checkpoints must support storing structu
 - Given metadata with a score value outside the valid range, when it is written, then the operation fails with a validation error.
 - Given a checkpoint where the metadata file is missing or corrupt, when metadata is read, then the system returns a "not available" result (no crash).
 
+**Known gap:** Currently, out-of-range score values in metadata will raise an unhandled `ValueError` rather than returning gracefully. The validation error on write (criterion 2) works correctly, but a corrupt metadata file containing an out-of-range score will crash on read instead of returning "not available." This is a code bug to be addressed.
+
 ---
 
 ## 4. Project Context Injection

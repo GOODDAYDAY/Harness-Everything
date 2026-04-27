@@ -121,7 +121,7 @@ The agent must be able to trace how a symbol is used across the codebase in thre
 **Acceptance criteria:**
 - Caller mode accepts a bare function name and returns all functions that call it.
 - Read mode accepts `obj.attr` notation and returns all sites where the attribute is accessed.
-- Call-chain mode traverses callers-of-callers up to a configurable depth.
+- Call-chain mode traverses callers-of-callers up to a limited depth (capped at 2 levels to avoid combinatorial explosion).
 - Uses AST analysis, not text matching.
 
 ### R-SEARCH-10: Call graph construction

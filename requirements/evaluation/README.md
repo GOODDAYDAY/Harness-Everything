@@ -27,7 +27,7 @@ A cycle writes three Python files. One of them has a missing colon on line 47.
 - The system runs `py_compile` on all three files
 - The broken file produces an ERROR finding with the file path and line number
 - The other two files pass silently
-- The report summary reads "1 error(s), 0 warning(s), 2 file(s) clean"
+- The report summary reads "1 error(s), 0 warning(s), 2 file(s) clean [3 checked, 0 skipped]"
 
 **Acceptance criteria:**
 - Every `.py` file in the changed set is compiled; non-Python files are counted as skipped, not silently ignored

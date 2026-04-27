@@ -17,7 +17,7 @@ The agent must be able to read a file and specify which portion to retrieve (sta
 **Acceptance criteria:**
 - The agent can request lines 100-150 of a file and receive exactly those lines.
 - Line numbers in the output are 1-based and match the file's actual line numbers.
-- Requesting an offset beyond the file's length returns the available tail, not an error.
+- Requesting an offset beyond the file's length returns an error indicating the offset exceeds the file length.
 
 ### R-FILE-02: Batch reading
 
@@ -53,7 +53,7 @@ The agent must be able to create a new file or completely overwrite an existing 
 **Acceptance criteria:**
 - Writing to a path whose parent directory does not exist creates the parent directory automatically.
 - If the write fails mid-way (simulated by e.g., disk full), the original file content is preserved.
-- Atomic write uses a temp-file-then-rename pattern, not in-place truncation.
+- Writes go through security validation (path confinement, phase restrictions) before writing. The primary write path uses direct file writing after validation; a secondary utility provides temp-file-then-rename semantics for callers that need atomicity guarantees.
 
 ### R-FILE-05: Batch writing
 

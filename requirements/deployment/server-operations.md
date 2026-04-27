@@ -109,14 +109,16 @@ The heartbeat script is that external monitor.
 **Expected behavior:**
 
 1. The heartbeat script detects the service is `inactive` (not running, not failed).
-2. It reads the most recent run's summary JSON to check the best score.
+2. It checks the most recent run's summary to determine the best score.
 3. If the best score is below a zombie threshold (a value well below any plausibly healthy run), it restarts the service.
 4. If the best score is healthy, the inactive state is normal (waiting for CI to restart with new code) and no action is taken.
+
+**Note:** The current summary is written as Markdown (`final_summary.md`), not JSON. The JSON-based zombie detection logic in the heartbeat script is non-functional (dead code) because no `summary.json` is ever produced.
 
 **Acceptance criteria:**
 
 - The zombie threshold is set low enough that a run with even one productive cycle would not trigger it (a threshold of 1.0 when healthy runs score 5+ is appropriate)
-- The script reads the summary JSON from the most recent run directory (sorted by modification time)
+- The script attempts to read a summary from the most recent run directory (sorted by modification time). The current implementation looks for a JSON summary that the agent does not produce -- the agent writes `final_summary.md` instead.
 - If no summary file exists, no action is taken (the run may still be in progress in a different form)
 - The detection is defensive: any failure to read or parse the summary results in no action, not a crash
 

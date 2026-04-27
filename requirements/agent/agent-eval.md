@@ -13,8 +13,8 @@ Every committed cycle must be evaluated by two independent evaluators that run i
 **Acceptance criteria:**
 - Both evaluators run concurrently (not sequentially) to minimize latency.
 - If one evaluator's LLM call fails, the other is cancelled rather than left running as an orphan task.
-- The composite score is a weighted combination (not a simple average), with configurable weights favoring the basic evaluator.
-- Scores are on a 0-10 scale, clamped to that range even if the LLM outputs out-of-range values.
+- The composite score is a weighted combination (not a simple average), with fixed weights favoring the basic evaluator.
+- Scores are on a 0-10 scale. Score parsing clamps to that range if the LLM outputs out-of-range values; the composite score computation additionally rejects out-of-range inputs as a defense-in-depth measure.
 
 ---
 
@@ -69,7 +69,7 @@ At configurable intervals (every N committed cycles), the framework must run a s
 - The meta-review input includes: the score history table (last 20 entries), git log + diffstat since the last review, and the agent's current notes (truncated to a reasonable size).
 - The meta-review output is persisted to the cycle's artifact directory as `meta_review.md`.
 - The strategic direction text is injected into subsequent cycles' system prompts under a "Strategic Direction" section, positioned before the mission statement.
-- If the meta-review LLM call fails, the previous strategic direction is retained (not cleared), and the review hash is not updated, so the next interval will retry with the same baseline.
+- If the meta-review LLM call fails, the strategic direction is reset to empty (the failure result clears the previous direction). The review hash is not updated, so the next interval will retry with the same baseline. Note: this clearing behavior may be unintended -- retaining the previous direction on failure would be more conservative.
 
 ---
 

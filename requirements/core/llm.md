@@ -100,26 +100,32 @@ When the model returns a very short text response with no tool calls, the system
 
 ### R-LLM-08: Proactive compaction of old tool results
 
-After each tool turn, old tool-result text (beyond the most recent few turns) must be replaced with compact, signal-preserving summaries. Compaction must happen continuously, not just when the conversation is about to overflow.
+After each tool-result message is appended, older tool-result messages must be replaced with compact, signal-preserving summaries. The most recent tool-result messages are preserved verbatim; older ones are replaced with signal-preserving stubs. Compaction must happen continuously, not just when the conversation is about to overflow.
 
 **Why:** Each API call re-sends the entire conversation. Without compaction, a 30-turn loop with file reads accumulates 200K+ characters, causing input token costs to grow quadratically with turn count. Waiting until overflow to prune causes a sudden quality cliff as the model loses context mid-run.
 
 **Acceptance criteria:**
 
-- Given a tool loop that has run for more than 6 turns, when the 7th turn completes, then tool results from turns 1-3 are compacted (the 3 most recent are preserved verbatim).
-- Given a compacted tool result, when the model reads it, then it can see what tool was called, how many characters the original output was, a preview of the content, and any high-signal lines (errors, test results, scores).
+- Given a conversation with many tool-result messages, when compaction runs, then the most recent tool-result messages are preserved verbatim and older tool-result messages are replaced with stubs.
+- Given a compacted tool-result message, when the model reads it, then it can see what tool was called, how many characters the original output was, a preview of the content, and any high-signal lines (errors, test results, scores).
 
 ### R-LLM-09: Signal-aware compaction thresholds
 
-Different tool types must be compacted at different thresholds based on how much future value their output carries.
+Different tool types must be compacted at different thresholds based on how much future value their output carries. The system uses three tiers plus sub-categories:
 
-**Why:** A `grep_search` result listing 50 file paths has low future value (the agent already decided which files to read). A `test_runner` result showing 3 failures has high future value (the agent needs those failure messages to fix the code). Uniform compaction either loses critical test output or retains useless file listings.
+- **Low-signal** (approximately 200-char preview): Search and listing tools whose output has been consumed (e.g., grep, glob, directory listing). Within this tier, *list-output tools* (those returning structured lists such as glob results, directory listings, tree output, git log) receive no preview at all; *short-preview tools* (grep, git status, git diff) receive a brief preview (approximately 100 characters).
+- **Medium-signal** (approximately 1500-char preview): Tools that produce moderately reusable output such as shell commands, symbol extraction, and code analysis.
+- **High-signal** (approximately 2000-char preview): Test runners, linters, evaluators, and other tools whose output directly drives the next action.
+
+**Why:** A `grep_search` result listing 50 file paths has low future value (the agent already decided which files to read). A `test_runner` result showing 3 failures has high future value (the agent needs those failure messages to fix the code). Uniform compaction either loses critical test output or retains useless file listings. The medium tier preserves enough context from shell and analysis output without consuming as much space as high-signal tools.
 
 **Acceptance criteria:**
 
-- Given output from a search/listing tool (grep, glob, directory listing), when it exceeds a low threshold (approximately 200 characters), then it is compacted aggressively with minimal preserved lines.
+- Given output from a list-output tool (glob, directory listing, tree, git log), when compaction runs, then it is compacted with no content preview.
+- Given output from a short-preview tool (grep, git status, git diff), when compaction runs, then it is compacted with a brief preview (approximately 100 characters).
+- Given output from a medium-signal tool (shell commands, symbol extraction, code analysis), when it exceeds a medium threshold (approximately 1500 characters), then it is compacted with a moderately sized preview.
 - Given output from a test runner or linter, when it exceeds a high threshold (approximately 2000 characters), then it is compacted with more preserved signal lines.
-- Given bash output that contains test/compile indicators (pytest summaries, tracebacks, syntax errors), when compaction runs, then it is treated as high-signal regardless of the tool name.
+- Given bash output that contains test/compile/lint indicators (pytest summaries, tracebacks, syntax errors), when compaction runs, then it is promoted to high-signal treatment.
 
 ### R-LLM-10: Emergency pruning on context window overflow
 
@@ -207,3 +213,14 @@ Every tool call must be recorded in an execution log with the tool name, input p
 - Given a tool call that succeeds, when the loop completes, then the execution log contains an entry with the tool name, input, output, and duration.
 - Given a tool call that fails, when the loop completes, then the execution log entry includes the error and is marked as an error.
 - Given a tool call with output exceeding 4000 characters, when it is logged, then the output is truncated symmetrically (head and tail preserved, middle replaced with a truncation marker).
+
+### R-LLM-17: Built-in context budget introspection tool
+
+The tool loop must provide a built-in `context_budget` tool that returns live loop statistics: turn count, tokens used, tool calls made, and scratchpad note count. The agent can call this tool at any point during the loop to query its own resource consumption.
+
+**Why:** Without visibility into its own resource usage, the agent cannot make informed decisions about when to stop exploring and start producing output. The context budget tool lets the agent self-regulate -- for example, noticing it has used 80% of its turn budget and switching from exploration to synthesis.
+
+**Acceptance criteria:**
+
+- Given a tool loop in progress, when the agent calls the `context_budget` tool, then it receives a response containing the current turn count, cumulative token usage, total tool calls made, and the number of scratchpad notes saved.
+- Given the `context_budget` tool, when it is called, then it returns current values (not stale or cached data from a previous turn).

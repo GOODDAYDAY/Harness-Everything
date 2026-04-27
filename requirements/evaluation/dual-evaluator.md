@@ -55,17 +55,17 @@ The system must detect and flag scores that lack calibration justification, espe
 
 **Specific calibration guards:**
 
-- **Anti-inflation:** A score of 9+ for a debate (text-only) round is suspicious. Text proposals rarely deserve near-perfect scores because they haven't been tested. The system flags this with a specific warning about what would justify 9.5+.
-- **Anti-deflation:** A score below 4 for an implement round requires evidence of a concrete defect. The system flags when a low score might reflect "incomplete" rather than "broken."
+- **Anti-inflation:** A score of 9.5+ for a debate (text-only) round is suspicious. Text proposals rarely deserve near-perfect scores because they haven't been tested. The system flags this with a specific warning about what would justify 9.5+.
+- **Anti-deflation:** A score of 3 or below for an implement round requires evidence of a concrete defect. The system flags when a low score might reflect "incomplete" rather than "broken."
 - **Perfect score guard:** A claimed 10.0 triggers a check that every criterion is satisfied. A claimed 0.0 triggers a check that the response is truly absent, not just poor.
 - **Anchor keyword validation:** When a score is at the extremes (below 1.5 or above 8.5), the system checks whether the analysis text references appropriate calibration language. A score of 9.5 without words like "comprehensive," "well-tested," or "specific" is flagged as potentially miscalibrated.
 
 **Acceptance criteria:**
-- Calibration warnings are advisory (WARNING prefix), not hard failures -- they inform the operator, they do not block the pipeline
+- Calibration warnings are advisory (WARNING prefix), not hard failures -- they inform the operator, they do not block the pipeline. **Behavioral note:** score-justification consistency checks (from `validate_calibration_anchors()`) currently produce messages without a "WARNING:" prefix, which causes them to be treated as hard validation failures by `validate_evaluator_output` despite the advisory intent
 - The system detects whether calibration anchor phrases from the prompt appear in the evaluator's output (simple keyword presence, not semantic understanding)
 - Extreme scores with analysis sections shorter than 15 words are flagged -- a one-sentence justification is not sufficient for an extreme claim
 - Score-justification consistency is checked: a low score accompanied by predominantly positive language ("good," "excellent," "great") is flagged as contradictory, and vice versa
-- At most 3 calibration warnings are generated per score to avoid noise
+- Calibration warnings are generated sparingly to avoid noise
 
 ---
 
@@ -97,7 +97,7 @@ The system must validate that evaluator responses follow the expected structure 
 
 **What is validated:**
 
-- **Required sections:** ANALYSIS, TOP DEFECT (basic) or KEY RISK (diffusion), and SCORE must all be present. Missing SCORE is a hard error; other missing sections are advisory warnings.
+- **Required sections:** ANALYSIS, TOP DEFECT (basic) or KEY RISK (diffusion), and SCORE must all be present. Missing SCORE is a hard error; other missing sections are advisory warnings. **Note:** reasoning-mode basic uses "TOP ISSUE:" as its diagnostic section header (not "TOP DEFECT:"). However, the validator currently checks for "TOP DEFECT:" regardless of mode, creating a mismatch that always triggers a warning for reasoning-mode basic output.
 - **Score format:** The SCORE line must match `SCORE: X.X` format. It should be the last line of output for reliable parsing.
 - **Score-in-code-block detection:** A state machine tracks backtick nesting (fenced blocks and inline spans) to detect whether a SCORE line is inside a code block. Scores inside code blocks are flagged.
 - **Analysis structure:** Each dimension line should follow the `A. Dimension: N -- description` format. Missing dimensions are warned about but do not fail validation.
@@ -108,7 +108,7 @@ The system must validate that evaluator responses follow the expected structure 
 - Validation returns a tuple of (is_valid, issues_list); only non-WARNING issues make the output invalid
 - A response can have multiple warnings and still be valid -- warnings are for operator awareness, not pipeline control
 - The SCORE-in-code-block check uses a proper state machine that tracks fenced blocks (triple backticks) and inline spans (single backticks) independently
-- Mode-specific validation: debate mode should mention "text proposal" or "planning round"; implement mode should mention "executed code" or "code state"
+- Mode-specific validation: debate mode should mention "text proposal" or "planning round"; implement mode should mention "executed code" or "code state". **Behavioral note:** mode-specific content checks produce messages without a "WARNING:" prefix, which causes them to be treated as hard validation failures by `validate_evaluator_output` despite their intent as content guidance checks
 - Token budget warning: outputs longer than ~2000 tokens trigger an advisory warning about potential truncation
 
 ---

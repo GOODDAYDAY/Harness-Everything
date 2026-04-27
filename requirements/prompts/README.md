@@ -65,7 +65,7 @@ A cycle with no code changes is not inherently bad -- the agent may have explore
 
 1. **Assume correctness, assess consequences.** The diffusion evaluator must take the proposal as implemented correctly and judge what happens beyond the directly touched code: caller breakage, maintenance burden, emergent behaviour under load, rollback difficulty.
 
-2. **Inverted scoring scale.** A high diffusion score (9-10) means "negligible systemic impact, trivial rollback." A low score (0-2) means "catastrophic cascade, irreversible damage." This is deliberately inverted from intuition about "higher is better quality" -- it measures safety, not excellence.
+2. **Containment-focused scoring scale.** A high diffusion score (9-10) means "negligible systemic impact, trivial rollback." A low score (0-2) means "catastrophic cascade, irreversible damage." The scale runs in the same direction as the basic evaluator (higher is better), but measures containment safety rather than code quality. A 10 means negligible systemic impact; a 0 means catastrophic cascade.
 
 3. **Gate-based anchoring for systemic risk.** The prompt must define gates around public API changes, cross-file coordination requirements, rollback complexity, and module containment. These gates prevent the evaluator from hand-waving away systemic risk.
 
