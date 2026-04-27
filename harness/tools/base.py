@@ -66,11 +66,30 @@ class ToolResult:
     is_error: bool = False
     elapsed_s: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Optional image attachments for multimodal tool results.
+    # Each entry: {"media_type": "image/png", "data": "<base64>"}
+    images: list[dict[str, str]] = field(default_factory=list)
 
-    def to_api(self) -> dict[str, Any]:
-        """Format as a tool_result content block for the Claude API."""
+    def to_api(self) -> list[dict[str, Any]]:
+        """Format as tool_result content blocks for the Claude API.
+
+        Returns a list of content blocks.  Always includes a text block;
+        if ``images`` is non-empty, prepends image blocks so the LLM sees
+        the visual context before the text summary.
+        """
+        blocks: list[dict[str, Any]] = []
+        for img in self.images:
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.get("media_type", "image/png"),
+                    "data": img["data"],
+                },
+            })
         text = self.error if self.is_error else self.output
-        return {"type": "text", "text": text}
+        blocks.append({"type": "text", "text": text})
+        return blocks
 
 
 class FileSecurity:

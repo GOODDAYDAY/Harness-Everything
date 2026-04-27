@@ -36,6 +36,7 @@ from harness.core.config import HarnessConfig
 from harness.core.llm import LLM
 from harness.core.signal_util import install_shutdown_handlers
 from harness.core.hooks import (
+    GameSmokeHook,
     GodotSyntaxHook,
     ImportSmokeHook,
     StaticCheckHook,
@@ -428,15 +429,24 @@ class AgentLoop:
             game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
             godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
             hooks.append(GodotSyntaxHook(game_path=game_path, godot_path=godot_path))
+        if "game_smoke" in names:
+            game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
+            godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
+            hooks.append(GameSmokeHook(game_path=game_path, godot_path=godot_path))
         return hooks
 
     async def _run_hooks(
         self, cycle: int, exec_log: list[dict[str, Any]],
-    ) -> list[str]:
-        """Return a list of hook-failure reasons (empty = all passed)."""
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Run post-cycle hooks and return (failures, hook_summaries).
+
+        ``failures``: list of failure reason strings (empty = all passed).
+        ``hook_summaries``: list of dicts with hook name, passed, output,
+        and errors — used to inject runtime feedback into evaluator input.
+        """
         hooks = self._build_hooks()
         if not hooks:
-            return []
+            return [], []
         ctx = {
             "cycle": cycle,
             "files_changed": collect_changed_paths(exec_log),
@@ -447,6 +457,7 @@ class AgentLoop:
             return_exceptions=True,
         )
         failures: list[str] = []
+        hook_summaries: list[dict[str, Any]] = []
         for hook, result in zip(hooks, results):
             if isinstance(result, Exception):
                 if getattr(hook, "gates_commit", False):
@@ -454,16 +465,25 @@ class AgentLoop:
                     failures.append(f"{hook.name}: crash ({result})")
                 else:
                     log.error("Agent: hook %s crashed (non-gating, not blocking commit): %s", hook.name, result)
+                hook_summaries.append({
+                    "hook": hook.name, "passed": False,
+                    "output": "", "errors": f"crash: {result}",
+                })
                 continue
             if not result.passed and getattr(hook, "gates_commit", False):
                 failures.append(
                     f"{hook.name}: {(result.errors or 'failed')[:200]}"
                 )
+            hook_summaries.append({
+                "hook": hook.name, "passed": result.passed,
+                "output": (result.output or "")[:500],
+                "errors": (result.errors or "")[:500],
+            })
             log.info(
                 "Agent: hook %s: passed=%s output=%s",
                 hook.name, result.passed, (result.output or "")[:120],
             )
-        return failures
+        return failures, hook_summaries
 
     # ---- main loop ----
 
@@ -497,6 +517,10 @@ class AgentLoop:
             log.info("Agent cycle %d/%d starting", cycles_run, self.config.max_cycles)
             t_start = time.monotonic()
 
+            # Record HEAD before the tool loop so we can diff against it
+            # even if the agent commits during its own tool calls.
+            cycle_start_hash = await agent_git.get_head_hash(primary_repo)
+
             # ── Phase 1: Execute ──
             system = self._build_system(cycle)
             user_msg = self._build_cycle_user_message(cycle)
@@ -522,7 +546,7 @@ class AgentLoop:
             )
 
             # ── Phase 2: Verify ──
-            hook_failures = await self._run_hooks(cycle, exec_log)
+            hook_failures, hook_summaries = await self._run_hooks(cycle, exec_log)
 
             # ── Phase 3: Stage ──
             staged = False
@@ -560,8 +584,32 @@ class AgentLoop:
             if self.config.auto_evaluate:
                 if staged and changed_paths:
                     eval_input = await agent_git.get_staged_diff(primary_repo)
+                    # Fallback: agent may have committed during its tool loop,
+                    # leaving the staging area empty.  Use committed diff instead.
+                    if not eval_input.strip() and cycle_start_hash:
+                        log.info(
+                            "Agent: staged diff empty but changes expected — "
+                            "falling back to committed diff since %s",
+                            cycle_start_hash,
+                        )
+                        eval_input = await agent_git.get_committed_diff(
+                            primary_repo, cycle_start_hash,
+                        )
                 else:
                     eval_input = text or ""
+
+                # Inject runtime feedback from hooks into evaluator input
+                if hook_summaries:
+                    runtime_lines = ["\n\n--- RUNTIME FEEDBACK ---"]
+                    for hs in hook_summaries:
+                        status = "PASS" if hs["passed"] else "FAIL"
+                        runtime_lines.append(f"\n[{hs['hook']}] {status}")
+                        if hs["output"]:
+                            runtime_lines.append(hs["output"])
+                        if hs["errors"]:
+                            runtime_lines.append(f"Errors: {hs['errors']}")
+                    eval_input += "\n".join(runtime_lines)
+
                 eval_score = await agent_eval.run_evaluation(
                     self._evaluator, cycle, eval_input, self.config.mission,
                     has_diff=bool(staged and changed_paths),

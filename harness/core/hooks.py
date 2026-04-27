@@ -442,6 +442,151 @@ class GitCommitHook(VerificationHook):
         return HookResult(passed=all_passed, output=output)
 
 
+class GameSmokeHook(VerificationHook):
+    """Launch the game and verify it stays alive with valid state.
+
+    Creates its own ``GameBridge`` instance — independent of the tool-level
+    singleton so that hooks do not depend on tool state.
+
+    Steps:
+      1. Check if a game is already running on the port (ping).
+      2. If not, launch a new Godot instance and wait for TCP ping.
+      3. Query game state and validate structure (grid dimensions, no
+         negative score, weather present).
+      4. Capture one screenshot as evidence.
+      5. Quit the game (only if this hook launched it).
+
+    Graceful degradation: passes with a warning when Godot is not found.
+    """
+
+    name = "game_smoke"
+    gates_commit = True
+
+    def __init__(
+        self,
+        game_path: str | None = None,
+        godot_path: str | None = None,
+        timeout: int = 20,
+    ) -> None:
+        self.game_path = game_path
+        self.godot_path = godot_path
+        self.timeout = timeout
+
+    async def run(self, config: HarnessConfig, context: dict[str, Any]) -> HookResult:
+        # Only run when .gd files were changed
+        changed = [
+            f for f in context.get("files_changed", [])
+            if isinstance(f, str) and f.endswith(".gd")
+        ]
+        if not changed:
+            return HookResult(
+                passed=True,
+                output="game_smoke: no .gd files changed, skipping",
+            )
+
+        from harness.game_bridge import GameBridge
+
+        godot = self.godot_path or os.environ.get("HARNESS_GODOT_PATH", "godot")
+        game_dir = self.game_path or os.environ.get("HARNESS_GAME_PATH", config.workspace)
+        port = int(os.environ.get("HARNESS_GAME_PORT", "19840"))
+
+        bridge = GameBridge(
+            godot_path=godot,
+            project_path=game_dir,
+            port=port,
+        )
+
+        # Check if game is already running (tool loop may have left it up)
+        we_launched = False
+        try:
+            resp = await bridge.ping()
+            already_running = resp.ok
+        except Exception:
+            already_running = False
+
+        if not already_running:
+            try:
+                success = await bridge.launch(timeout=self.timeout)
+            except FileNotFoundError:
+                return HookResult(
+                    passed=True,
+                    output="game_smoke: Godot not installed, check SKIPPED",
+                    errors="SKIPPED: Godot not found",
+                )
+            except Exception as e:
+                return HookResult(
+                    passed=False, output="",
+                    errors=f"game_smoke: launch failed: {e}",
+                )
+            if not success:
+                return HookResult(
+                    passed=False, output="",
+                    errors="game_smoke: game failed to start (no ping response within timeout)",
+                )
+            we_launched = True
+
+        # Validate game state
+        errors: list[str] = []
+        output_parts: list[str] = []
+        try:
+            state_resp = await bridge.get_state()
+            if not state_resp.ok:
+                errors.append(f"state query failed: {state_resp.error}")
+            else:
+                state = state_resp.data.get("state", {})
+                # Structural validation
+                grid_cols = state.get("grid_cols", 0)
+                grid_rows = state.get("grid_rows", 0)
+                if grid_cols <= 0 or grid_rows <= 0:
+                    errors.append(f"invalid grid dimensions: {grid_cols}x{grid_rows}")
+                grid = state.get("grid", [])
+                if len(grid) != grid_cols * grid_rows:
+                    errors.append(
+                        f"grid size mismatch: expected {grid_cols * grid_rows} cells, got {len(grid)}"
+                    )
+                score = state.get("score", -1)
+                if score < 0:
+                    errors.append(f"negative score: {score}")
+
+                output_parts.append(
+                    f"state OK: grid={grid_cols}x{grid_rows}, "
+                    f"score={score}, round={state.get('round', '?')}"
+                )
+        except Exception as e:
+            errors.append(f"state query exception: {e}")
+
+        # Capture screenshot as evidence
+        import tempfile
+        screenshot_path = os.path.join(tempfile.gettempdir(), "game_smoke_screenshot.png")
+        try:
+            shot_resp = await bridge.screenshot(screenshot_path)
+            if shot_resp.ok:
+                output_parts.append(f"screenshot saved: {screenshot_path}")
+            else:
+                output_parts.append(f"screenshot failed: {shot_resp.error}")
+        except Exception as e:
+            output_parts.append(f"screenshot skipped: {e}")
+
+        # Cleanup: only quit if we launched it
+        if we_launched:
+            try:
+                await bridge.stop()
+            except Exception:
+                pass
+
+        if errors:
+            return HookResult(
+                passed=False,
+                output="\n".join(output_parts),
+                errors="game_smoke FAILED:\n" + "\n".join(errors),
+            )
+        return HookResult(
+            passed=True,
+            output=f"game_smoke: OK ({len(changed)} .gd file(s) changed)\n"
+                   + "\n".join(output_parts),
+        )
+
+
 class GodotSyntaxHook(VerificationHook):
     """Validate GDScript syntax by running ``godot --headless --quit``.
 

@@ -242,6 +242,11 @@ def _estimate_conversation_chars(conversation: list[dict[str, Any]]) -> int:
                             sub_text = sub.get("text", "")
                             if isinstance(sub_text, str):
                                 total += len(sub_text)
+                            # Count image blocks by their base64 data size
+                            if sub.get("type") == "image":
+                                source = sub.get("source", {})
+                                if isinstance(source, dict):
+                                    total += len(source.get("data", ""))
     return total
 
 
@@ -800,6 +805,23 @@ def _compact_old_tool_results(conversation: list[dict[str, Any]]) -> int:
             sub_content = block.get("content", [])
             if not isinstance(sub_content, list):
                 continue
+            # Strip image blocks from old tool results — they are the
+            # largest context consumers (~100KB each).  Replace with a
+            # small text placeholder so the LLM knows an image was here.
+            orig_len = len(sub_content)
+            filtered = [
+                s for s in sub_content
+                if not (isinstance(s, dict) and s.get("type") == "image")
+            ]
+            if len(filtered) < orig_len:
+                n_removed = orig_len - len(filtered)
+                filtered.insert(0, {
+                    "type": "text",
+                    "text": f"[{n_removed} image(s) removed from old result]",
+                })
+                block["content"] = filtered
+                compacted += n_removed
+                sub_content = filtered
             for sub in sub_content:
                 if not isinstance(sub, dict) or sub.get("type") != "text":
                     continue
@@ -1330,7 +1352,7 @@ class LLM:
                     {
                         "type": "tool_result",
                         "tool_use_id": tc["id"],
-                        "content": [result.to_api()],
+                        "content": result.to_api(),
                         "is_error": result.is_error,
                     }
                 )

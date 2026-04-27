@@ -11,7 +11,9 @@ persists across tool calls within a single agent run.
 
 from __future__ import annotations
 
+import base64
 import os
+from pathlib import Path
 from typing import Any
 
 from harness.core.config import HarnessConfig
@@ -141,13 +143,43 @@ class GameScreenshotTool(Tool):
 
         path = params.get("output_path", "/tmp/game_screenshot.png")
         resp = await bridge.screenshot(path)
-        if resp.ok:
-            size = resp.data.get("size", [0, 0])
-            return ToolResult(
-                output=f"Screenshot saved to {path} ({size[0]}x{size[1]})",
-                metadata={"path": path, "width": size[0], "height": size[1]},
+        if not resp.ok:
+            return ToolResult(error=f"Screenshot failed: {resp.error}", is_error=True)
+
+        size = resp.data.get("size", [0, 0])
+
+        # Read PNG and base64-encode for image content block
+        images: list[dict[str, str]] = []
+        png_path = Path(path)
+        if png_path.exists():
+            raw = png_path.read_bytes()
+            # Safety cap: if > 500KB, skip embedding (too large for context)
+            if len(raw) <= 500_000:
+                b64 = base64.b64encode(raw).decode("ascii")
+                images.append({"media_type": "image/png", "data": b64})
+
+        # Query game state for text summary alongside image
+        text_parts = [f"Screenshot saved to {path} ({size[0]}x{size[1]})"]
+        state_resp = await bridge.get_state()
+        if state_resp.ok:
+            state = state_resp.data.get("state", {})
+            text_parts.append(f"Score: {state.get('score', 0)}")
+            text_parts.append(f"Round: {state.get('round', 0)}")
+            text_parts.append(f"Trees placed: {state.get('total_trees', 0)}")
+            text_parts.append(
+                f"Weather: {state.get('weather', {}).get('name', 'none')} "
+                f"{state.get('weather', {}).get('icon', '')}"
             )
-        return ToolResult(error=f"Screenshot failed: {resp.error}", is_error=True)
+            hand = state.get("hand", [])
+            tree_names = {-1: ".", 0: "E", 1: "F", 2: "B", 3: "S", 4: "W"}
+            hand_str = " ".join(tree_names.get(t, "?") for t in hand)
+            text_parts.append(f"Hand: {hand_str} ({len(hand)} seeds)")
+
+        return ToolResult(
+            output="\n".join(text_parts),
+            images=images,
+            metadata={"path": path, "width": size[0], "height": size[1]},
+        )
 
 
 class GameInputTool(Tool):
