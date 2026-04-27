@@ -69,6 +69,33 @@ async def get_staged_diff(repo_path: Path) -> str:
         return ""
 
 
+async def get_committed_diff(repo_path: Path, since_hash: str) -> str:
+    """Return ``git diff <since_hash>..HEAD``, truncated to 30 k chars.
+
+    Use this when the agent has already committed during its tool loop,
+    making the staging area empty.  *since_hash* should be the HEAD hash
+    recorded at the start of the cycle.
+    """
+    if not since_hash:
+        return ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "diff", f"{since_hash}..HEAD",
+            cwd=str(repo_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        diff = stdout.decode(errors="replace")
+        if len(diff) > 30_000:
+            log.debug("agent_git: committed diff truncated from %d to 30k chars", len(diff))
+            diff = diff[:30_000] + "\n\n... (diff truncated at 30k chars)"
+        return diff
+    except Exception as exc:
+        log.warning("agent_git: get_committed_diff failed: %s", exc)
+        return ""
+
+
 async def get_head_hash(repo_path: Path) -> str:
     """Return short HEAD hash (10 chars)."""
     try:

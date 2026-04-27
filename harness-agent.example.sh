@@ -102,6 +102,7 @@ print(c.get('harness', {}).get('api_key', ''))
 
 cmd_start() {
     is_running && die "Agent already running (PID $(cat "$PID_FILE")). Run '$0 stop' first."
+    [[ -f "$PAUSE_FILE" ]] && die "Pause file exists ($PAUSE_FILE). Run '$0 resume' first."
 
     ensure_env
 
