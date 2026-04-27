@@ -18,6 +18,8 @@ Rules:
   * If a single commit stands alone (unrelated to its neighbours), it is
     its own group — but still rewrite its message to be clean.
   * If ALL commits work on the same task, output one group.
+  * If there are too few commits or all are independent, return an
+    array where every group has exactly one SHA (= no squash needed).
   * Every input commit must appear in exactly one group.
 
 Output ONLY a JSON array.  No markdown fences, no explanation.

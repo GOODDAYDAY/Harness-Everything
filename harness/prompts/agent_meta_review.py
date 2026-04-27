@@ -1,9 +1,9 @@
-"""Prompt templates for agent-mode periodic meta-review.
+"""Prompt templates for agent-mode periodic checkpoint.
 
-The meta-review runs every N cycles (configured via ``meta_review_interval``
+The checkpoint runs every N cycles (configured via ``meta_review_interval``
 in ``AgentConfig``).  It analyses score trends and git history, producing
 strategic direction guidance that gets injected into subsequent cycles'
-system prompts.
+system prompts.  It also compresses old cycle notes to keep context lean.
 """
 
 AGENT_META_REVIEW_SYSTEM = """\
@@ -75,4 +75,42 @@ Concrete instructions for the next 3-5 cycles.  Be specific:
   * "Focus on X before moving to Y"
   * "Stop doing Z — it's not improving scores"
   * "The weakest dimension is A — prioritise it by doing B"
+"""
+
+
+# ---------------------------------------------------------------------------
+# Notes compression — runs in parallel with meta-review at checkpoint
+# ---------------------------------------------------------------------------
+
+NOTES_COMPRESS_SYSTEM = """\
+You are a memory compressor for an autonomous coding agent. You receive
+the agent's old cycle notes — detailed per-cycle summaries that have
+accumulated over many cycles.
+
+Your job is to compress them into a concise summary that preserves:
+  * Key decisions made and their rationale
+  * Important findings about the codebase (architecture, gotchas, patterns)
+  * What was accomplished (features, bug fixes, refactors)
+  * Recurring problems or anti-patterns observed
+  * The trajectory of the work (what direction things were heading)
+
+Discard:
+  * Redundant repetitions of the same finding across cycles
+  * Routine status updates with no lasting insight
+  * Raw score numbers (the trend matters, not individual values)
+  * Tool call counts and timing details
+
+Output a single cohesive summary in markdown. Use headers to organize by
+topic (not by cycle number). Keep it under 800 words — the agent reads
+this every cycle, so brevity matters.
+
+Start your output with:
+## Compressed History (cycles N–M)
+"""
+
+NOTES_COMPRESS_USER = """\
+Compress the following old cycle notes into a concise summary.
+Preserve key decisions, findings, and trajectory. Discard routine details.
+
+$old_notes
 """

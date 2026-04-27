@@ -70,9 +70,10 @@ class TestAgentConfig:
         cfg = _make_agent_config(workspace=str(tmp_path))
         assert cfg.max_cycles == 999
         assert cfg.continuous is False
-        assert cfg.max_notes_cycles == 30
         assert cfg.auto_commit is True
         assert cfg.auto_push is False
+        assert cfg.auto_squash is False
+        assert cfg.auto_tag is False
         assert cfg.pause_file == ".harness.pause"
 
     def test_mission_stored(self, tmp_path: Path):
@@ -90,10 +91,6 @@ class TestAgentConfig:
     def test_max_cycles_negative_raises(self, tmp_path: Path):
         with pytest.raises(ValueError, match="max_cycles must be >= 1"):
             _make_agent_config(workspace=str(tmp_path), max_cycles=-5)
-
-    def test_max_notes_cycles_zero_raises(self, tmp_path: Path):
-        with pytest.raises(ValueError, match="max_notes_cycles must be >= 1"):
-            _make_agent_config(workspace=str(tmp_path), max_notes_cycles=0)
 
     def test_mission_non_string_raises(self, tmp_path: Path):
         with pytest.raises(ValueError, match="mission must be a string"):
@@ -187,8 +184,8 @@ class TestAgentLoopReadNotes:
         notes = loop._read_notes()
         assert "Did stuff." in notes
 
-    def test_keeps_last_n_cycles(self, tmp_path: Path):
-        loop = _make_loop(tmp_path, max_notes_cycles=2)
+    def test_returns_all_cycles(self, tmp_path: Path):
+        loop = _make_loop(tmp_path)
         content = (
             "## Cycle 1 Summary (2024-01-01)\nCycle one work.\n"
             "## Cycle 2 Summary (2024-01-02)\nCycle two work.\n"
@@ -196,21 +193,21 @@ class TestAgentLoopReadNotes:
         )
         loop._notes_path.write_text(content, encoding="utf-8")
         notes = loop._read_notes()
-        # Should have cycles 2 and 3 but not 1
+        # All cycles returned — compression is handled by checkpoint
         assert "Cycle three work." in notes
         assert "Cycle two work." in notes
-        assert "Cycle one work." not in notes
+        assert "Cycle one work." in notes
 
-    def test_max_notes_cycles_one(self, tmp_path: Path):
-        loop = _make_loop(tmp_path, max_notes_cycles=1)
+    def test_returns_compressed_and_recent(self, tmp_path: Path):
+        loop = _make_loop(tmp_path)
         content = (
-            "## Cycle 1 Summary (2024)\nOld stuff.\n"
-            "## Cycle 2 Summary (2024)\nNew stuff.\n"
+            "## Compressed History (cycles 1–5)\nPrevious summary.\n\n"
+            "## Cycle 6 Summary (2024)\nRecent stuff.\n"
         )
         loop._notes_path.write_text(content, encoding="utf-8")
         notes = loop._read_notes()
-        assert "New stuff." in notes
-        assert "Old stuff." not in notes
+        assert "Previous summary." in notes
+        assert "Recent stuff." in notes
 
     def test_returns_empty_on_oserror(self, tmp_path: Path):
         loop = _make_loop(tmp_path)
@@ -221,7 +218,7 @@ class TestAgentLoopReadNotes:
         assert result == ""
 
     def test_single_cycle_block_returned_in_full(self, tmp_path: Path):
-        loop = _make_loop(tmp_path, max_notes_cycles=30)
+        loop = _make_loop(tmp_path)
         content = "## Cycle 5 Summary (2024)\nImportant info."
         loop._notes_path.write_text(content, encoding="utf-8")
         notes = loop._read_notes()

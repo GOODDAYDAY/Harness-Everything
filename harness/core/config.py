@@ -56,9 +56,6 @@ class HarnessConfig:
     # command string (case-sensitive, path-basename stripped).  Example:
     #   bash_command_denylist = ["rm", "curl", "wget", "nc", "ssh"]
 
-    # --- loop ---
-    max_iterations: int = 5
-
     # --- tool-use budget ---
     max_tool_turns: int = 60
     # Cap on the number of tool-use turns in a single executor call_with_tools
@@ -70,7 +67,7 @@ class HarnessConfig:
     # for actual edits. 60 gives breathing room for read → edit → verify.
 
     # --- API concurrency ---
-    max_concurrent_llm_calls: int = 4
+    max_concurrent_llm_calls: int = 20
     # Upper bound on in-flight LLM API requests across the whole process.
     # Pipeline debate parallel inner rounds + dual evaluators + planner three-way
     # can easily stack 5+ concurrent calls against the provider; without a cap,
@@ -119,14 +116,6 @@ class HarnessConfig:
             raise ValueError(
                 f"HarnessConfig.max_tokens={self.max_tokens} exceeds the Claude API maximum "
                 "of 64 000 output tokens.  Typical values: 8 096 (default), 16 384, 32 768."
-            )
-        if self.max_iterations < 1:
-            raise ValueError(f"HarnessConfig.max_iterations must be ≥ 1, got {self.max_iterations}")
-        if self.max_iterations > 100:
-            log.warning(
-                "HarnessConfig.max_iterations=%d is very large — "
-                "this may run for a very long time",
-                self.max_iterations,
             )
 
         # --- validate model string ---
@@ -240,7 +229,7 @@ class HarnessConfig:
         Example output::
 
             harness startup: model=bedrock/claude-sonnet-4-6 max_tokens=8096 \
-workspace=/home/user/project max_iterations=5 max_tool_turns=30 \
+workspace=/home/user/project max_tool_turns=30 \
 allowed_tools=all log_level=INFO
 
         Returns:
@@ -249,7 +238,7 @@ allowed_tools=all log_level=INFO
         tools_str = ",".join(self.allowed_tools) if self.allowed_tools else "all"
         return (
             f"harness startup: model={self.model} max_tokens={self.max_tokens} "
-            f"workspace={self.workspace} max_iterations={self.max_iterations} "
+            f"workspace={self.workspace} "
             f"max_tool_turns={self.max_tool_turns} allowed_tools={tools_str} "
             f"log_level={self.log_level}"
         )

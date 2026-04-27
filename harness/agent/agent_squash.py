@@ -103,23 +103,19 @@ async def run_squash(
     llm: LLM,
     repo_path: Path,
     since_hash: str,
-    *,
-    min_commits: int = 3,
 ) -> str:
     """Analyze recent commits and squash related ones.
 
     Returns the new HEAD hash after squashing (SHAs change after rebase).
     If squash is skipped or fails, returns the current HEAD hash unchanged.
+    The LLM decides whether the commits are worth squashing.
     """
     current_hash = await agent_git.get_head_hash(repo_path)
 
     # Gather commits since last squash
     commits = await agent_git.get_commits_since(repo_path, since_hash)
-    if len(commits) < min_commits:
-        log.debug(
-            "agent_squash: only %d commits since %s (need %d), skipping",
-            len(commits), since_hash, min_commits,
-        )
+    if not commits:
+        log.debug("agent_squash: no commits since %s, skipping", since_hash)
         return current_hash
 
     # Ask LLM to group commits

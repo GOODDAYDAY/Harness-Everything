@@ -51,14 +51,6 @@ class TestHarnessConfigValidation:
         cfg = make_config(tmp_path, max_tokens=1)
         assert cfg.max_tokens == 1
 
-    def test_max_iterations_below_one_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="max_iterations"):
-            make_config(tmp_path, max_iterations=0)
-
-    def test_max_iterations_one_accepted(self, tmp_path: Path) -> None:
-        cfg = make_config(tmp_path, max_iterations=1)
-        assert cfg.max_iterations == 1
-
     def test_max_tool_turns_below_one_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="max_tool_turns"):
             make_config(tmp_path, max_tool_turns=0)

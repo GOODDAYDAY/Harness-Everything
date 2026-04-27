@@ -49,7 +49,7 @@ from harness.agent.cycle_metrics import (
     format_summary as format_metrics_summary,
     persist_cycle_metrics,
 )
-from harness.agent import agent_git, agent_eval, agent_squash
+from harness.agent import agent_git, agent_eval
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +59,9 @@ log = logging.getLogger(__name__)
 # wording variations don't trap the loop forever.
 _MISSION_COMPLETE_MARKER = "mission complete"
 _MISSION_BLOCKED_MARKER = "mission blocked"
+
+# Internal constant — no longer user-configurable.
+_PAUSE_POLL_SECONDS = 30   # pause-file polling interval
 
 
 @dataclass
@@ -78,10 +81,6 @@ class AgentConfig:
     # cycling until max_cycles or graceful shutdown.  Designed for standing
     # maintenance missions where there is no logical endpoint.
     continuous: bool = False
-    # Number of most-recent cycle notes blocks to keep in the system-prompt
-    # injection. The file on disk keeps everything; this only controls what
-    # the LLM sees to avoid unbounded prompt growth.
-    max_notes_cycles: int = 30
     # Verification hooks that run after each cycle's tool loop. Names match
     # the switches in ``_build_hooks``; "syntax" / "static" / "import_smoke"
     # are recognised today.
@@ -105,38 +104,33 @@ class AgentConfig:
     auto_push: bool = False
     auto_push_remote: str = "origin"
     auto_push_branch: str = "main"
-    # Every N successful cycles, create a tag + push it. Cycle tags can
-    # trigger deploy workflows. 0 disables tagging entirely.
-    # Tag format: <prefix>-<cycle_count>-<shortsha>, e.g. harness-r-10-a3f5d2c.
-    auto_tag_interval: int = 0
-    auto_tag_prefix: str = "harness-r"
-    auto_tag_push: bool = True
     # Pause file — when this file exists in the workspace, the agent
     # finishes its current cycle and then sleeps until the file is removed.
     # Usage: `touch .harness.pause` to pause, `rm .harness.pause` to resume.
     pause_file: str = ".harness.pause"
-    # How often (seconds) to check whether the pause file has been removed.
-    pause_poll_interval: int = 30
-    # ── V5 auto-evaluation ──
+    # ── Auto-evaluation ──
     # When True, the framework automatically runs DualEvaluator on each
     # cycle's git diff after commit.  Scores are logged and appended to
     # agent_notes.md so the agent sees quality trends without needing to
     # self-evaluate.
     auto_evaluate: bool = True
-    # ── V5 periodic meta-review ──
-    # Every ``meta_review_interval`` committed cycles, the framework runs
-    # a meta-review LLM call that analyses score trends + git history and
-    # produces strategic direction guidance, injected into subsequent
-    # cycles' system prompts.  Set to 0 to disable.
+    # ── Periodic checkpoint ──
+    # The checkpoint is the sole periodic orchestration point: strategic
+    # review + maintenance actions (squash, tag).  Every
+    # ``meta_review_interval`` cycles, the framework runs a checkpoint
+    # that analyses score trends + git history and produces strategic
+    # direction guidance.  Also runs once at startup ("cold checkpoint")
+    # to orient the agent based on previous notes / git history.
+    # Set to 0 to disable periodic checkpoints (startup still runs).
     meta_review_interval: int = 5
-    # ── Smart squash ──
-    # Every ``auto_squash_interval`` cycles, the framework asks the LLM to
-    # group recent commits by logical task and squash each group into a
-    # single clean commit.  Only runs when ``auto_push`` is False (squash
-    # rewrites history).  Set to 0 to disable.
-    auto_squash_interval: int = 0
-    # Minimum number of commits since last squash before triggering.
-    squash_min_commits: int = 3
+    # ── Checkpoint feature toggles ──
+    # At each checkpoint, the framework may also perform maintenance
+    # actions.  These are boolean switches — the LLM decides the details
+    # (e.g. which commits to group, whether there are enough to squash).
+    auto_squash: bool = False   # LLM groups recent commits and squashes
+    auto_tag: bool = False      # tag HEAD at each checkpoint
+    auto_tag_prefix: str = "harness-r"
+    auto_tag_push: bool = True
     # Project-specific parameters.  The framework does not interpret these —
     # they are injected into the system prompt as-is so the agent can see
     # project-level context (e.g. coding conventions, domain glossary,
@@ -150,10 +144,6 @@ class AgentConfig:
     def __post_init__(self) -> None:
         if self.max_cycles < 1:
             raise ValueError(f"max_cycles must be >= 1, got {self.max_cycles}")
-        if self.max_notes_cycles < 1:
-            raise ValueError(
-                f"max_notes_cycles must be >= 1, got {self.max_notes_cycles}"
-            )
         if not isinstance(self.mission, str):
             raise ValueError("mission must be a string (may be empty)")
 
@@ -170,7 +160,11 @@ class AgentConfig:
                 "agent config requires a 'harness' object with LLM/workspace settings"
             )
         # Silently drop deprecated fields for backward compatibility.
-        cleaned.pop("meta_review_inject", None)
+        for deprecated in (
+            "meta_review_inject", "auto_squash_interval", "auto_tag_interval",
+            "squash_min_commits", "max_notes_cycles", "pause_poll_interval",
+        ):
+            cleaned.pop(deprecated, None)
         cleaned["harness"] = HarnessConfig.from_dict(harness_data)
         return cls(**cleaned)
 
@@ -283,11 +277,9 @@ class AgentLoop:
         self._evaluator = DualEvaluator(self.llm) if config.auto_evaluate else None
         self._score_history: list[dict[str, Any]] = []
 
-        # V5: meta-review state
+        # Checkpoint state
         self._meta_review_context: str = ""
         self._last_review_hash: str = ""
-        # Smart squash state
-        self._last_squash_hash: str = ""
 
         self._install_signal_handlers()
 
@@ -316,7 +308,7 @@ class AgentLoop:
         """Block until the pause file is removed (if it exists).
 
         Called between cycles. While paused, checks every
-        ``pause_poll_interval`` seconds and honours shutdown signals.
+        ``_PAUSE_POLL_SECONDS`` seconds and honours shutdown signals.
         """
         pf = self._pause_file_path()
         if not pf.exists():
@@ -331,27 +323,25 @@ class AgentLoop:
             if self._shutdown_requested:
                 log.info("Agent: shutdown requested while paused — exiting.")
                 return
-            await asyncio.sleep(self.config.pause_poll_interval)
+            await asyncio.sleep(_PAUSE_POLL_SECONDS)
 
         log.info("Agent: pause file removed — resuming from cycle %d.", cycle + 2)
 
     # ---- per-cycle prompt construction ----
 
     def _read_notes(self) -> str:
-        """Load the persistent cycle notes, trimmed to ``max_notes_cycles``."""
+        """Load the persistent cycle notes.
+
+        The file contains a mix of compressed history (from checkpoint
+        LLM compression) and recent per-cycle summaries.  Return the
+        full contents — compression keeps the file size manageable.
+        """
         if not self._notes_path.exists():
             return ""
         try:
-            raw = self._notes_path.read_text(encoding="utf-8")
+            return self._notes_path.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
-        # Split on the cycle marker and keep the last N blocks. Each block
-        # begins with ``## Cycle N Summary``. We keep the most recent so the
-        # LLM sees how the work has most recently been progressing.
-        parts = re.split(r"(?=^## Cycle \d+)", raw, flags=re.MULTILINE)
-        parts = [p for p in parts if p.strip()]
-        kept = parts[-self.config.max_notes_cycles :]
-        return "".join(kept).strip()
 
     def _append_notes(self, cycle: int, summary: str) -> None:
         """Append this cycle's summary to ``agent_notes.md``."""
@@ -474,12 +464,25 @@ class AgentLoop:
         cycles_run = 0
         mission_status = "exhausted"
         final_summary = ""
+        workspace = Path(self.config.harness.workspace)
+        primary_repo = self._repo_paths[0] if self._repo_paths else workspace
 
-        # Initialize squash baseline to current HEAD
-        if self.config.auto_squash_interval > 0 and self._repo_paths:
-            self._last_squash_hash = await agent_git.get_head_hash(
-                self._repo_paths[0],
+        # ── Startup checkpoint (cold analysis) ──
+        # Same function as the periodic checkpoint, but skips maintenance
+        # actions (no squash/tag).  Gives the agent strategic direction from
+        # cycle 1 instead of a blind "go read the codebase".
+        self._last_review_hash = await agent_git.get_head_hash(primary_repo)
+        notes = self._read_notes()
+        if notes or self._score_history:
+            cp = await agent_eval.run_checkpoint(
+                self.llm, -1, self._score_history,
+                self._last_review_hash, notes,
+                primary_repo, self.artifacts.write,
+                notes_path=self._notes_path,
             )
+            self._meta_review_context = cp.meta_context
+            self._last_review_hash = cp.head_hash
+            log.info("Agent: startup checkpoint complete, direction set")
 
         for cycle in range(self.config.max_cycles):
             cycles_run = cycle + 1
@@ -515,8 +518,6 @@ class AgentLoop:
 
             # ── Phase 3: Stage ──
             staged = False
-            workspace = Path(self.config.harness.workspace)
-            primary_repo = self._repo_paths[0] if self._repo_paths else workspace
             if self.config.auto_commit and not hook_failures:
                 staged = await agent_git.stage_changes(self._repo_paths, changed_paths)
                 if not staged:
@@ -552,7 +553,6 @@ class AgentLoop:
                 if staged and changed_paths:
                     eval_input = await agent_git.get_staged_diff(primary_repo)
                 else:
-                    # No code changes — evaluate the agent's reasoning output
                     eval_input = text or ""
                 eval_score = await agent_eval.run_evaluation(
                     self._evaluator, cycle, eval_input, self.config.mission,
@@ -595,45 +595,30 @@ class AgentLoop:
                         )
                         if not push_ok:
                             log.warning("Agent: push failed for cycle %d", cycles_run)
-                    await agent_git.tag_cycle(
-                        self._repo_paths,
-                        cycle,
-                        self.config.auto_tag_interval,
-                        self.config.auto_tag_prefix,
-                        self.config.auto_push_remote,
-                        self.config.auto_tag_push,
-                    )
                 else:
                     log.warning("Agent: commit failed for cycle %d", cycles_run)
 
-            # 4d. Meta-review (every N cycles)
+            # ── Checkpoint (every N cycles) ──
+            # Unified orchestration point: strategic review + squash + tag.
+            # Meta-review and squash LLM calls run in parallel; execution
+            # actions (squash → tag) run sequentially with dependencies.
             interval = self.config.meta_review_interval
             if interval > 0 and cycles_run % interval == 0:
-                result = await agent_eval.run_meta_review(
+                cp = await agent_eval.run_checkpoint(
                     self.llm, cycle, self._score_history,
                     self._last_review_hash, self._read_notes(),
                     primary_repo, self.artifacts.write,
+                    notes_path=self._notes_path,
+                    auto_squash=self.config.auto_squash and not self.config.auto_push,
+                    auto_tag=self.config.auto_tag,
+                    tag_prefix=self.config.auto_tag_prefix,
+                    tag_push=self.config.auto_tag_push,
+                    push_remote=self.config.auto_push_remote,
                 )
-                self._meta_review_context = result.context
-                self._last_review_hash = result.head_hash
+                self._meta_review_context = cp.meta_context
+                self._last_review_hash = cp.head_hash
 
-            # 4e. Smart squash (every N cycles, after meta-review)
-            squash_interval = self.config.auto_squash_interval
-            if (squash_interval > 0
-                    and cycles_run % squash_interval == 0
-                    and self.config.auto_commit
-                    and not self.config.auto_push):
-                new_hash = await agent_squash.run_squash(
-                    self.llm, primary_repo,
-                    self._last_squash_hash,
-                    min_commits=self.config.squash_min_commits,
-                )
-                self._last_squash_hash = new_hash
-                # Squash rewrites history — update review hash too
-                if new_hash != self._last_review_hash:
-                    self._last_review_hash = new_hash
-
-            # ── Phase 5: Persist ──
+            # ── Phase 6: Persist ──
             self._persist_cycle(cycle, text, exec_log, hook_failures)
             summary = self._extract_cycle_summary(text, exec_log, hook_failures)
             if metrics_line:

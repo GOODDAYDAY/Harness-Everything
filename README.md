@@ -18,7 +18,7 @@ python main.py config/agent_example.json
 ```
 AgentLoop.run()
 │
-├── for cycle in range(max_iterations):
+├── for cycle in range(max_cycles):
 │   │
 │   ├── Build system prompt = mission + persistent notes (agent_notes.md)
 │   ├── call_with_tools() — up to max_tool_turns tool calls
@@ -31,11 +31,10 @@ AgentLoop.run()
 │   │
 │   ├── If hooks pass + auto_commit: git add -A && git commit
 │   ├── Auto-evaluation via DualEvaluator (basic + diffusion scoring)
-│   ├── Periodic meta-review (cross-cycle analysis)
+│   ├── Periodic checkpoint (meta-review + squash + tag, parallel LLM)
 │   └── Check for MISSION COMPLETE / MISSION BLOCKED signals
 │
-├── Auto-push (git pull --rebase + push)
-└── Auto-tag (triggers CI/CD restart for self-improvement)
+└── Auto-push (git pull --rebase + push)
 ```
 
 ## LLM Provider
@@ -64,11 +63,11 @@ Templates in [`config/`](config/):
 | Field | Default | Description |
 |---|---|---|
 | `model` | `"bedrock/claude-sonnet-4-6"` | LiteLLM-prefixed model ID |
-| `max_iterations` | 5 | Cycles per run |
 | `max_tool_turns` | 60 | Tool calls per cycle |
 | `auto_commit` | false | Commit after each passing cycle |
-| `auto_push_interval` | 0 | Push every N cycles (0 = disabled) |
-| `auto_tag_at_end` | false | Tag on exit (triggers CI restart) |
+| `meta_review_interval` | 5 | Checkpoint every N cycles (review + squash + tag) |
+| `auto_squash` | false | LLM groups and squashes commits at checkpoint |
+| `auto_tag` | false | Tag HEAD at each checkpoint |
 | `import_smoke_modules` | `[]` | Modules to verify in subprocess |
 | `mission` | `""` | Task description for the agent |
 
