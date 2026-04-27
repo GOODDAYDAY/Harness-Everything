@@ -50,6 +50,12 @@ class HarnessConfig:
     # Names from OPTIONAL_TOOLS (e.g. ["web_search"]) to add on top of the
     # default registry.  These are NOT included by default to keep schema size
     # small; opt in explicitly when the task needs them.
+    tool_config: dict[str, Any] = field(default_factory=dict)
+    # Per-tool configuration for optional tools.  Each key is a tool name
+    # (e.g. "db_query") mapping to a dict of tool-specific settings.
+    # The harness does not validate these — each tool validates its own
+    # section at execution time.  See architecture.md "Adding tool-specific
+    # config for an optional tool" for the convention.
     bash_command_denylist: list[str] = field(default_factory=list)
     # Shell commands (or leading tokens) that BashTool will refuse to execute.
     # Each entry is matched against the first whitespace-separated token of the

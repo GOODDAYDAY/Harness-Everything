@@ -7,6 +7,9 @@ dependencies = [
     "anthropic>=0.40.0",
 ]
 
+[project.optional-dependencies]
+db = ["asyncpg>=0.29.0"]
+
 [tool.setuptools.packages.find]
 include = ["harness*"]
 

@@ -75,6 +75,7 @@ from harness.tools.lint_check import LintCheckTool
 from harness.tools.context_budget import ContextBudgetTool
 from harness.tools.project_map import ProjectMapTool
 from harness.tools.ast_rename import AstRenameTool
+from harness.tools.db_query import DbQueryTool
 from harness.tools.game_tools import (
     GameLaunchTool, GameScreenshotTool, GameInputTool, GameStateTool,
 )
@@ -146,6 +147,7 @@ DEFAULT_TOOLS: list[Tool] = [
 OPTIONAL_TOOLS: list[Tool] = [
     WebSearchTool(),    # DuckDuckGo search + page fetch; needs network access
     HttpRequestTool(),  # Generic HTTP client (GET/POST/etc.); needs network access
+    DbQueryTool(),      # Read-only PostgreSQL query; needs asyncpg + network access
     GitSearchTool(),    # Git history/blame/grep; high schema cost, opt in via extra_tools
     ReadFileTool(),     # Superseded by batch_read; opt in via extra_tools=["read_file"]
     WriteFileTool(),    # Superseded by batch_write; opt in via extra_tools=["write_file"]
