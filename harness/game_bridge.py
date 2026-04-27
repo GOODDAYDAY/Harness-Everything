@@ -17,14 +17,19 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
+import signal
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Track all active bridge instances for cleanup on interpreter exit.
+_active_bridges: set["GameBridge"] = set()
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +63,7 @@ class GameBridge:
         self._process: asyncio.subprocess.Process | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        _active_bridges.add(self)
 
     # ── Process management ────────────────────────────────────────────────
 
@@ -141,6 +147,18 @@ class GameBridge:
             await self._process.wait()
 
         self._process = None
+        _active_bridges.discard(self)
+
+    def _kill_sync(self) -> None:
+        """Synchronous kill — used by atexit when the event loop is gone."""
+        if self._process is None or self._process.returncode is not None:
+            return
+        pid = self._process.pid
+        try:
+            os.kill(pid, signal.SIGTERM)
+            log.debug("atexit: sent SIGTERM to game PID %d", pid)
+        except OSError:
+            pass
 
     @property
     def is_running(self) -> bool:
@@ -400,3 +418,13 @@ class GameBridge:
         ok = data.get("ok", False)
         error = data.get("error", "")
         return BridgeResponse(ok=ok, data=data, error=error)
+
+
+def _cleanup_bridges() -> None:
+    """Kill any lingering Godot processes on interpreter exit."""
+    for bridge in list(_active_bridges):
+        bridge._kill_sync()
+    _active_bridges.clear()
+
+
+atexit.register(_cleanup_bridges)

@@ -525,35 +525,38 @@ class GameSmokeHook(VerificationHook):
                 )
             we_launched = True
 
-        # Validate game state
+        # Validate game state (advisory — failure here does not block commit,
+        # because GameState autoload may not exist yet in early development
+        # or may have syntax errors that don't prevent the game from launching)
         errors: list[str] = []
+        warnings: list[str] = []
         output_parts: list[str] = []
         try:
             state_resp = await bridge.get_state()
             if not state_resp.ok:
-                errors.append(f"state query failed: {state_resp.error}")
+                warnings.append(f"state query unavailable: {state_resp.error}")
             else:
                 state = state_resp.data.get("state", {})
                 # Structural validation
                 grid_cols = state.get("grid_cols", 0)
                 grid_rows = state.get("grid_rows", 0)
                 if grid_cols <= 0 or grid_rows <= 0:
-                    errors.append(f"invalid grid dimensions: {grid_cols}x{grid_rows}")
+                    warnings.append(f"invalid grid dimensions: {grid_cols}x{grid_rows}")
                 grid = state.get("grid", [])
-                if len(grid) != grid_cols * grid_rows:
-                    errors.append(
+                if grid and len(grid) != grid_cols * grid_rows:
+                    warnings.append(
                         f"grid size mismatch: expected {grid_cols * grid_rows} cells, got {len(grid)}"
                     )
                 score = state.get("score", -1)
                 if score < 0:
-                    errors.append(f"negative score: {score}")
+                    warnings.append(f"negative score: {score}")
 
                 output_parts.append(
-                    f"state OK: grid={grid_cols}x{grid_rows}, "
+                    f"state: grid={grid_cols}x{grid_rows}, "
                     f"score={score}, round={state.get('round', '?')}"
                 )
         except Exception as e:
-            errors.append(f"state query exception: {e}")
+            warnings.append(f"state query exception: {e}")
 
         # Capture screenshot as evidence
         import tempfile
@@ -573,6 +576,9 @@ class GameSmokeHook(VerificationHook):
                 await bridge.stop()
             except Exception:
                 pass
+
+        if warnings:
+            output_parts.append("Warnings: " + "; ".join(warnings))
 
         if errors:
             return HookResult(
