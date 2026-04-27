@@ -2,6 +2,9 @@
 
 Manages the full flow: schedule → diagnose → notify → discuss → execute → report.
 Runs as a long-lived daemon process with Feishu WebSocket connectivity.
+
+Diagnosis reuses the harness checkpoint meta-review mechanism (read-only analysis
+of score trends + git delta).  Post-execution reuses checkpoint squash + push.
 """
 
 from __future__ import annotations
@@ -31,6 +34,8 @@ log = logging.getLogger(__name__)
 
 _NO_ACTION_MARKER = "no action needed"
 _APPROVAL_KEYWORDS = frozenset({"approved", "approve", "go ahead", "lgtm", "通过", "批准"})
+_STATE_FILENAME = ".pilot_state.json"
+_MAX_PROPOSAL_HISTORY = 30
 
 
 class PilotState(enum.Enum):
@@ -48,7 +53,7 @@ class PilotLoop:
     """Orchestrates the daily improvement loop as a state machine.
 
     Collaborators: FeishuClient (notification), Discussion (LLM conversation),
-    AgentLoop (diagnosis and execution runs).
+    checkpoint meta-review (diagnosis), AgentLoop (execution).
     """
 
     def __init__(self, config: PilotConfig) -> None:
@@ -61,6 +66,7 @@ class PilotLoop:
         self._shutdown_event = asyncio.Event()
         self._approval_event = asyncio.Event()
         self._rejection_event = asyncio.Event()
+        self._last_review_hash: str = ""
 
     async def run(self) -> None:
         """Start the pilot daemon: connect to Feishu, schedule daily runs.
@@ -86,12 +92,13 @@ class PilotLoop:
     async def _run_improvement_cycle(self) -> None:
         """Execute one complete improvement cycle: diagnose → notify → discuss → execute → report."""
         try:
-            # 1. Diagnose
+            # 1. Diagnose via meta-review
             proposal, diagnostic_context = await self._run_diagnosis()
 
             # 2. Check if action is needed
             if self._is_no_action_proposal(proposal):
                 await self._notify_no_action(proposal)
+                self._save_proposal_record("no_action", proposal)
                 return
 
             # 3. Notify operator via Feishu
@@ -100,13 +107,20 @@ class PilotLoop:
             # 4. Discuss with operator (blocks until approved/rejected/expired)
             approved = await self._run_discussion(proposal, diagnostic_context)
             if not approved:
+                self._save_proposal_record("rejected", proposal)
                 return
 
             # 5. Execute the approved plan
             result = await self._run_execution()
 
-            # 6. Report results
+            # 6. Post-execution: squash + push
+            await self._post_execution_cleanup()
+
+            # 7. Report results
             await self._report_results(result)
+
+            # 8. Record approval
+            self._save_proposal_record("approved", proposal)
 
         except Exception as exc:
             log.error("Improvement cycle failed: %s", exc, exc_info=True)
@@ -114,28 +128,47 @@ class PilotLoop:
         finally:
             self._transition(PilotState.IDLE)
 
-    # ── Phase: Diagnosis ─────────────────────────────────────────────────
+    # ── Phase: Diagnosis (meta-review) ──────────────────────────────────
 
     async def _run_diagnosis(self) -> tuple[str, str]:
-        """Run a harness agent in diagnosis mode and extract the proposal."""
+        """Run a checkpoint-style meta-review to produce an improvement proposal.
+
+        Reuses the harness meta-review mechanism: analyzes git delta and
+        proposal history to identify improvement opportunities.  No code
+        changes are made — this is a read-only analysis.
+        """
         self._transition(PilotState.DIAGNOSING)
 
-        # 1. Build and run the diagnosis agent
-        agent_result = await self._execute_agent_run(
-            self._config.build_diagnosis_agent_config()
+        # 1. Resolve workspace and load persistent state
+        repo_path = self._resolve_workspace()
+        since_hash = self._load_last_review_hash()
+        proposal_notes = self._format_proposal_history()
+
+        # 2. Gather git delta as diagnostic context
+        from harness.agent import agent_git
+        git_delta = await agent_git.get_review_git_delta(
+            repo_path, since_hash or "HEAD~20",
         )
 
-        # 2. Extract proposal from the last cycle output
-        proposal = self._extract_proposal(agent_result)
+        # 3. Format score history (empty — pilot doesn't track eval scores)
+        from harness.agent.agent_eval import format_score_history
+        score_table = format_score_history([])
 
-        # 3. Collect diagnostic context from tool logs
-        diagnostic_context = self._collect_diagnostic_context(agent_result)
+        # 4. Run meta-review LLM
+        from harness.agent.agent_eval import _meta_review_llm
+        llm = self._create_discussion_llm()
+        proposal = await _meta_review_llm(llm, score_table, git_delta, proposal_notes)
+
+        # 5. Update review hash for next run
+        head_hash = await agent_git.get_head_hash(repo_path)
+        self._save_last_review_hash(head_hash)
+        self._last_review_hash = head_hash
 
         log.info(
-            "Diagnosis complete, proposal_len=%d, context_len=%d, cycles=%d",
-            len(proposal), len(diagnostic_context), agent_result.cycles_run,
+            "Diagnosis complete, proposal_len=%d, context_len=%d",
+            len(proposal), len(git_delta),
         )
-        return proposal, diagnostic_context
+        return proposal, git_delta
 
     # ── Phase: Notification ──────────────────────────────────────────────
 
@@ -243,13 +276,54 @@ class PilotLoop:
 
         mission = self._discussion.current_proposal if self._discussion else self._proposal
         agent_config = self._config.build_execution_agent_config(mission)
-        result = await self._execute_agent_run(agent_config)
+        result = await self._run_agent(agent_config)
 
         log.info(
             "Execution complete, cycles=%d, tool_calls=%d, status=%s",
             result.cycles_run, result.total_tool_calls, result.mission_status,
         )
         return result
+
+    async def _post_execution_cleanup(self) -> None:
+        """Squash commits and push to remote after execution completes.
+
+        Reuses the harness checkpoint mechanism for squash grouping.
+        """
+        from harness.agent import agent_eval, agent_git
+
+        repo_path = self._resolve_workspace()
+        since_hash = self._last_review_hash
+
+        # 1. Squash via checkpoint (meta-review output is discarded)
+        llm = self._create_discussion_llm()
+        cp = await agent_eval.run_checkpoint(
+            llm,
+            cycle=0,
+            score_history=[],
+            since_hash=since_hash,
+            current_notes="",
+            repo_path=repo_path,
+            write_fn=lambda *a, **kw: None,
+            auto_squash=True,
+            auto_tag=False,
+        )
+        if cp.squashed:
+            log.info("Post-execution squash complete")
+
+        # 2. Push to remote
+        execution = self._config.execution
+        if execution.get("auto_push", True):
+            remote = execution.get("push_remote", "origin")
+            branch = execution.get("push_branch", "main")
+            pushed = await agent_git.push_head([repo_path], remote, branch, 0)
+            if pushed:
+                log.info("Pushed to %s/%s", remote, branch)
+            else:
+                log.warning("Push to %s/%s failed", remote, branch)
+
+        # 3. Update review hash
+        self._last_review_hash = cp.head_hash
+        self._save_last_review_hash(cp.head_hash)
 
     # ── Phase: Reporting ─────────────────────────────────────────────────
 
@@ -372,7 +446,7 @@ class PilotLoop:
         await self._feishu.close()
         log.info("Pilot shutdown complete")
 
-    async def _execute_agent_run(self, config_dict: dict[str, Any]) -> Any:
+    async def _run_agent(self, config_dict: dict[str, Any]) -> Any:
         """Create an AgentConfig and run AgentLoop programmatically."""
         from harness.agent.agent_loop import AgentConfig, AgentLoop
 
@@ -382,7 +456,7 @@ class PilotLoop:
         return result
 
     def _create_discussion_llm(self) -> Any:
-        """Create a standalone LLM client for the discussion phase."""
+        """Create a standalone LLM client for diagnosis and discussion."""
         from harness.core.config import HarnessConfig
         from harness.core.llm import LLM
 
@@ -390,6 +464,10 @@ class PilotLoop:
             self._config.build_discussion_harness_config()
         )
         return LLM(harness_cfg)
+
+    def _resolve_workspace(self) -> Path:
+        """Resolve the target project workspace path from diagnosis config."""
+        return Path(self._config.diagnosis["harness"]["workspace"])
 
     def _transition(self, new_state: PilotState) -> None:
         """Transition to a new state, logging the change."""
@@ -422,46 +500,79 @@ class PilotLoop:
             target += timedelta(days=1)
         return (target - now).total_seconds()
 
-    # ── Data extraction ──────────────────────────────────────────────────
+    # ── Proposal state persistence ──────────────────────────────────────
 
-    @staticmethod
-    def _extract_proposal(result: Any) -> str:
-        """Extract the proposal text from the agent's final output."""
-        if result.summary:
-            return result.summary
-        return "(No proposal generated — agent produced no output)"
+    def _state_file_path(self) -> Path:
+        """Path to the persistent pilot state file in the workspace."""
+        return self._resolve_workspace() / _STATE_FILENAME
 
-    @staticmethod
-    def _collect_diagnostic_context(result: Any) -> str:
-        """Collect diagnostic data from the agent run's artifact directory.
+    def _load_state(self) -> dict[str, Any]:
+        """Load pilot state from disk, returning empty dict if not found."""
+        path = self._state_file_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning("Failed to load pilot state from %s: %s", path, exc)
+            return {}
 
-        Reads tool_log.json files from each cycle to provide raw diagnostic
-        data (DB query results, file contents) for the discussion LLM.
+    def _save_state(self, state: dict[str, Any]) -> None:
+        """Write pilot state to disk."""
+        path = self._state_file_path()
+        try:
+            path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+            log.debug("Pilot state saved to %s", path)
+        except Exception as exc:
+            log.warning("Failed to save pilot state to %s: %s", path, exc)
+
+    def _load_last_review_hash(self) -> str:
+        """Load the git hash from the last diagnosis run."""
+        return self._load_state().get("last_review_hash", "")
+
+    def _save_last_review_hash(self, head_hash: str) -> None:
+        """Persist the git hash after a diagnosis run."""
+        state = self._load_state()
+        state["last_review_hash"] = head_hash
+        self._save_state(state)
+
+    def _save_proposal_record(self, status: str, proposal: str) -> None:
+        """Append a proposal outcome to the history for future diagnosis context.
+
+        Records date, status (approved/rejected/no_action/expired), and the
+        first line of the proposal for quick identification.
         """
-        run_dir = Path(result.run_dir) if result.run_dir else None
-        if not run_dir or not run_dir.exists():
-            log.warning("No run_dir available for diagnostic context")
-            return "(No diagnostic data available)"
+        state = self._load_state()
+        history = state.get("proposal_history", [])
+        history.append({
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "status": status,
+            "summary_first_line": proposal.split("\n")[0][:200],
+        })
+        # Keep bounded
+        if len(history) > _MAX_PROPOSAL_HISTORY:
+            history = history[-_MAX_PROPOSAL_HISTORY:]
+        state["proposal_history"] = history
+        self._save_state(state)
+        log.info("Proposal record saved, status=%s, history_len=%d", status, len(history))
 
-        context_parts: list[str] = []
-        for cycle_dir in sorted(run_dir.glob("cycle_*")):
-            tool_log = cycle_dir / "tool_log.json"
-            if tool_log.exists():
-                try:
-                    data = json.loads(tool_log.read_text())
-                    for entry in data:
-                        tool_name = entry.get("tool", "")
-                        output = entry.get("output", "")
-                        if tool_name and output:
-                            context_parts.append(
-                                f"### {tool_name}\n```\n{output[:3000]}\n```"
-                            )
-                except Exception as exc:
-                    log.warning("Failed to read tool_log %s: %s", tool_log, exc)
+    def _format_proposal_history(self) -> str:
+        """Format proposal history as notes for the meta-review LLM.
 
-        context = "\n\n".join(context_parts) if context_parts else "(No tool outputs found)"
-        log.debug("Diagnostic context collected, parts=%d, total_len=%d", len(context_parts), len(context))
-        return context
+        Gives the LLM context about what was previously proposed, approved,
+        or rejected so it avoids re-proposing already-handled issues.
+        """
+        state = self._load_state()
+        history = state.get("proposal_history", [])
+        if not history:
+            return "(No previous proposals)"
+
+        lines = ["## Previous Proposals"]
+        for entry in history[-10:]:
+            lines.append(
+                f"- [{entry['date']}] {entry['status']}: {entry['summary_first_line']}"
+            )
+        return "\n".join(lines)
 
     @staticmethod
     def _is_no_action_proposal(proposal: str) -> bool:

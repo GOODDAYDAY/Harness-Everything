@@ -93,15 +93,7 @@ class TestScheduleConfig:
 
 
 class TestBuilderMethods:
-    """Config builder methods for diagnosis/execution/discussion."""
-
-    def test_US01_diagnosis_config_defaults(self):
-        """US-01: Diagnosis config sets auto_commit=False, auto_evaluate=False."""
-        cfg = PilotConfig.from_dict(_minimal_config())
-        diag = cfg.build_diagnosis_agent_config()
-        assert diag["auto_commit"] is False
-        assert diag["auto_evaluate"] is False
-        assert diag["max_cycles"] == 5
+    """Config builder methods for execution/discussion."""
 
     def test_US09_execution_config_merges_overrides(self):
         """US-09: Execution config merges execution overrides onto diagnosis base."""

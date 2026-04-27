@@ -14,7 +14,6 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULE_HOUR: int = 9
 _DEFAULT_SCHEDULE_MINUTE: int = 0
-_DEFAULT_DIAGNOSIS_MAX_CYCLES: int = 5
 _DEFAULT_EXECUTION_MAX_CYCLES: int = 50
 _DEFAULT_PROPOSAL_EXPIRY_HOURS: int = 24
 _DEFAULT_DISCUSSION_MAX_TOKENS: int = 8096
@@ -118,38 +117,25 @@ class PilotConfig:
             ),
         )
         log.info(
-            "PilotConfig loaded: schedule=%02d:%02d, diagnosis_cycles=%d, execution_cycles=%d, expiry=%dh",
+            "PilotConfig loaded: schedule=%02d:%02d, execution_cycles=%d, expiry=%dh",
             schedule.hour,
             schedule.minute,
-            diagnosis.get("max_cycles", _DEFAULT_DIAGNOSIS_MAX_CYCLES),
             execution.get("max_cycles", _DEFAULT_EXECUTION_MAX_CYCLES),
             pilot.proposal_expiry_hours,
         )
         return pilot
 
-    def build_diagnosis_agent_config(self) -> dict[str, Any]:
-        """Build a complete AgentConfig-compatible dict for the diagnosis run.
-
-        Ensures diagnosis-specific defaults: auto_commit=false, auto_evaluate=false.
-        """
-        cfg = dict(self.diagnosis)
-        cfg.setdefault("auto_commit", False)
-        cfg.setdefault("auto_evaluate", False)
-        cfg.setdefault("max_cycles", _DEFAULT_DIAGNOSIS_MAX_CYCLES)
-        cfg.setdefault("continuous", False)
-        log.debug("Built diagnosis agent config, max_cycles=%d", cfg["max_cycles"])
-        return cfg
-
     def build_execution_agent_config(self, mission: str) -> dict[str, Any]:
         """Build a complete AgentConfig-compatible dict for the execution run.
 
-        Merges execution overrides onto the diagnosis base, then sets the
-        approved mission text.
+        Merges execution overrides onto the diagnosis base (which provides
+        harness/workspace/tool settings), then sets the approved mission text.
         """
         cfg = dict(self.diagnosis)
         cfg.update(self.execution)
         cfg["mission"] = mission
         cfg.setdefault("auto_commit", True)
+        cfg.setdefault("auto_push", False)
         cfg.setdefault("max_cycles", _DEFAULT_EXECUTION_MAX_CYCLES)
         cfg.setdefault("continuous", False)
         log.debug("Built execution agent config, max_cycles=%d", cfg["max_cycles"])
