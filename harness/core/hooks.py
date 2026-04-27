@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import glob as glob_mod
+import logging
 import os
 import py_compile
 import sys
@@ -11,6 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from harness.core.config import HarnessConfig
 
