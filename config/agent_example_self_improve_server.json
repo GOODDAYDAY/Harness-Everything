@@ -47,7 +47,6 @@
   "max_cycles": 20,
   "// max_cycles": "Run 20 cycles, then exit cleanly. The auto_tag at the end triggers deploy.yml which restarts the service on the freshly-committed code.",
 
-  "max_notes_cycles": 20,
   "cycle_hooks": ["syntax", "static", "import_smoke"],
   "import_smoke_modules": [
     "harness.core.config",
@@ -72,10 +71,13 @@
   "auto_push_remote": "origin",
   "auto_push_branch": "main",
 
-  "auto_tag_interval": 20,
+  "auto_evaluate": true,
+  "meta_review_interval": 5,
+  "auto_squash": false,
+  "auto_tag": true,
   "auto_tag_prefix": "harness-r",
   "auto_tag_push": true,
-  "// auto_tag_interval": "Tag at cycle 20 (end of chunk). Tag prefix matches .github/workflows/deploy.yml which listens to `harness-r*` — pushing the tag triggers redeploy.",
+  "// auto_tag": "Tag at each checkpoint (every meta_review_interval cycles). Tag prefix matches .github/workflows/deploy.yml which listens to `harness-r*` — pushing the tag triggers redeploy.",
 
   "output_dir": "/home/ubuntu/harness-everything/harness_output"
 }

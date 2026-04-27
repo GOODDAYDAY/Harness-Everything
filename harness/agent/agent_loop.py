@@ -436,16 +436,19 @@ class AgentLoop:
             "cycle": cycle,
             "files_changed": collect_changed_paths(exec_log),
         }
+        # Run all hooks in parallel — they are independent read-only checks.
+        results = await asyncio.gather(
+            *(hook.run(self.config.harness, ctx) for hook in hooks),
+            return_exceptions=True,
+        )
         failures: list[str] = []
-        for hook in hooks:
-            try:
-                result = await hook.run(self.config.harness, ctx)
-            except Exception as exc:
+        for hook, result in zip(hooks, results):
+            if isinstance(result, Exception):
                 if getattr(hook, "gates_commit", False):
-                    log.warning("Agent: hook %s crashed: %s", hook.name, exc)
-                    failures.append(f"{hook.name}: crash ({exc})")
+                    log.warning("Agent: hook %s crashed: %s", hook.name, result)
+                    failures.append(f"{hook.name}: crash ({result})")
                 else:
-                    log.error("Agent: hook %s crashed (non-gating, not blocking commit): %s", hook.name, exc)
+                    log.error("Agent: hook %s crashed (non-gating, not blocking commit): %s", hook.name, result)
                 continue
             if not result.passed and getattr(hook, "gates_commit", False):
                 failures.append(

@@ -30,7 +30,6 @@
   },
   "mission": "You are the maintainer of this codebase. Each cycle, pick the single most valuable improvement you can make right now — a real bug, a dead code path to prune, a test that's missing, a rough API to polish. Prefer small coherent changes to big rewrites. End the mission only when you believe the codebase is in materially better shape than when you started; otherwise keep iterating.",
   "max_cycles": 50,
-  "max_notes_cycles": 20,
   "cycle_hooks": ["syntax", "static", "import_smoke"],
   "import_smoke_modules": [
     "harness.core.config",
