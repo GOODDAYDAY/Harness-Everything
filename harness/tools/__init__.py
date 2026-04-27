@@ -78,6 +78,7 @@ from harness.tools.ast_rename import AstRenameTool
 from harness.tools.db_query import DbQueryTool
 from harness.tools.game_tools import (
     GameLaunchTool, GameScreenshotTool, GameInputTool, GameStateTool,
+    GameRecordTool,
 )
 
 log = logging.getLogger(__name__)
@@ -156,6 +157,7 @@ OPTIONAL_TOOLS: list[Tool] = [
     GameScreenshotTool(),  # Capture game viewport screenshot
     GameInputTool(),    # Send mouse/keyboard input to game
     GameStateTool(),    # Query game state (score, grid, hand, etc.)
+    GameRecordTool(),   # Record gameplay video (screen capture or frame stitch)
 ]
 
 # ---------------------------------------------------------------------------

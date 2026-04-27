@@ -11,8 +11,12 @@ persists across tool calls within a single agent run.
 
 from __future__ import annotations
 
+import asyncio
+import atexit
 import base64
 import os
+import signal
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,24 @@ from harness.tools.base import Tool, ToolResult
 
 # Module-level bridge singleton — lazily initialized by GameLaunchTool
 _bridge: Any = None  # type: GameBridge | None
+
+# Module-level screen recording state (independent of bridge)
+_recording_process: asyncio.subprocess.Process | None = None
+_recording_output: str | None = None
+
+
+def _kill_recording_sync() -> None:
+    """Kill orphaned ffmpeg recording process on interpreter exit."""
+    global _recording_process
+    if _recording_process is not None and _recording_process.returncode is None:
+        try:
+            os.kill(_recording_process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+        _recording_process = None
+
+
+atexit.register(_kill_recording_sync)
 
 
 def _get_bridge() -> Any:
@@ -354,4 +376,182 @@ class GameStateTool(Tool):
         return ToolResult(
             output="\n".join(lines),
             metadata={"state": state},
+        )
+
+
+class GameRecordTool(Tool):
+    """Record gameplay video for sharing or agent verification."""
+
+    name = "game_record"
+    description = (
+        "Record gameplay video. Two modes:\n"
+        "  start/stop: Screen recording via ffmpeg (30fps, full screen, "
+        "high quality for video platforms like Bilibili). Independent of "
+        "the game bridge — works with any running Godot instance.\n"
+        "  frames: Capture frames via TCP bridge and stitch with ffmpeg "
+        "(lower fps, for quick agent verification). Requires game_launch."
+    )
+    tags = frozenset({"game"})
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["start", "stop", "frames"],
+                    "description": (
+                        "start: begin screen recording (ffmpeg avfoundation). "
+                        "stop: end recording and save video file. "
+                        "frames: capture N frames via TCP bridge then stitch."
+                    ),
+                },
+                "output": {
+                    "type": "string",
+                    "description": "Output file path.",
+                    "default": "/tmp/game_recording.mp4",
+                },
+                "fps": {
+                    "type": "integer",
+                    "description": (
+                        "Frames per second. Default 30 for screen mode, "
+                        "10 for frames mode."
+                    ),
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "Duration in seconds (frames mode only).",
+                    "default": 5.0,
+                },
+                "screen_id": {
+                    "type": "string",
+                    "description": (
+                        "macOS avfoundation screen device index. Default '1'. "
+                        "Run `ffmpeg -f avfoundation -list_devices true -i "
+                        '""` to list available devices.'
+                    ),
+                    "default": "1",
+                },
+            },
+            "required": ["action"],
+        }
+
+    async def execute(self, config: HarnessConfig, **params: Any) -> ToolResult:
+        global _recording_process, _recording_output
+
+        action = params.get("action", "")
+
+        if action == "start":
+            if _recording_process is not None:
+                return ToolResult(
+                    error="Recording already in progress. Stop it first.",
+                    is_error=True,
+                )
+
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg is None:
+                return ToolResult(
+                    error="ffmpeg not found. Install with: brew install ffmpeg",
+                    is_error=True,
+                )
+
+            output = params.get("output", "/tmp/game_recording.mp4")
+            fps = params.get("fps", 30)
+            screen_id = params.get("screen_id", "1")
+            _recording_output = output
+
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "avfoundation",
+                "-framerate", str(fps),
+                "-capture_cursor", "1",
+                "-i", f"{screen_id}:none",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p",
+                output,
+            ]
+
+            _recording_process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            return ToolResult(
+                output=(
+                    f"Screen recording started (PID {_recording_process.pid})\n"
+                    f"Output: {output}\n"
+                    f"Settings: {fps}fps, screen device {screen_id}\n"
+                    f"Stop with: game_record action=stop"
+                ),
+            )
+
+        elif action == "stop":
+            if _recording_process is None:
+                return ToolResult(error="No active recording.", is_error=True)
+
+            output = _recording_output
+            proc = _recording_process
+            _recording_process = None
+            _recording_output = None
+
+            # Send 'q' to ffmpeg stdin for graceful shutdown
+            try:
+                if proc.stdin:
+                    proc.stdin.write(b"q")
+                    await proc.stdin.drain()
+            except (BrokenPipeError, OSError):
+                try:
+                    proc.send_signal(signal.SIGINT)
+                except OSError:
+                    pass
+
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+
+            if output and os.path.isfile(output):
+                size_mb = os.path.getsize(output) / (1024 * 1024)
+                return ToolResult(
+                    output=f"Recording saved: {output} ({size_mb:.1f} MB)",
+                    metadata={"path": output, "size_mb": round(size_mb, 1)},
+                )
+            return ToolResult(
+                error=f"Recording file not found: {output}",
+                is_error=True,
+            )
+
+        elif action == "frames":
+            bridge = _get_bridge()
+            if bridge is None or not bridge.is_running:
+                return ToolResult(
+                    error="Game is not running. Call game_launch first.",
+                    is_error=True,
+                )
+            duration = params.get("duration", 5.0)
+            fps = params.get("fps", 10)
+            output = params.get("output", "/tmp/game_recording.mp4")
+            path = await bridge.record_video(
+                duration=duration, fps=fps, output=output,
+            )
+            if path:
+                return ToolResult(
+                    output=(
+                        f"Frame recording saved: {path}\n"
+                        f"{int(duration * fps)} frames at {fps}fps"
+                    ),
+                    metadata={"path": path},
+                )
+            return ToolResult(
+                error="Frame recording failed. Check ffmpeg installation.",
+                is_error=True,
+            )
+
+        return ToolResult(
+            error=f"Unknown action: {action}. Use start, stop, or frames.",
+            is_error=True,
         )
