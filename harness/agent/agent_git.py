@@ -170,7 +170,7 @@ async def build_commit_message(
     )
     if "unknown (tool loop was cut off)" in summary_line:
         summary_line = await diff_summary(workspace, changed_paths)
-    title = f"agent: cycle {cycle + 1}"
+    title = f"[harness] agent: cycle {cycle + 1}"
     if summary_line:
         title += f" — {summary_line}"
 
