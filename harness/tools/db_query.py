@@ -43,7 +43,9 @@ _WRITE_KEYWORDS: frozenset[str] = frozenset({
 })
 
 _DEFAULT_TIMEOUT: int = 30
+_MAX_TIMEOUT: int = 120
 _DEFAULT_MAX_ROWS: int = 500
+_MAX_MAX_ROWS: int = 5000
 _MAX_CELL_WIDTH: int = 120
 
 
@@ -129,8 +131,23 @@ class DbQueryTool(Tool):
     def _validate_read_only(self, query: str) -> ToolResult | None:
         """Reject non-SELECT SQL before it reaches the database.
 
+        Security layers:
+        1. Reject multi-statement queries (semicolons) — prevents bypassing
+           read-only mode via ``SELECT 1; SET TRANSACTION READ WRITE; DELETE ...``
+        2. Keyword allowlist — only SELECT/EXPLAIN/SHOW/WITH pass
+        3. SET TRANSACTION READ ONLY at connection level (in _execute_query)
+
         Returns None if the query is allowed, or a ToolResult error if rejected.
         """
+        # Layer 1: reject multi-statement queries
+        if _contains_multiple_statements(query):
+            log.warning("db_query: rejected multi-statement query (semicolons)")
+            return ToolResult(
+                error="Multi-statement queries (semicolons) are not allowed.  Submit one query at a time.",
+                is_error=True,
+            )
+
+        # Layer 2: keyword allowlist
         first_keyword = _extract_first_keyword(query)
         if not first_keyword:
             log.warning("db_query: could not parse SQL keyword from query")
@@ -166,8 +183,8 @@ class DbQueryTool(Tool):
             return asyncpg
 
         dsn = tool_cfg["dsn"]
-        timeout = tool_cfg.get("timeout", _DEFAULT_TIMEOUT)
-        max_rows = tool_cfg.get("max_rows", _DEFAULT_MAX_ROWS)
+        timeout = min(tool_cfg.get("timeout", _DEFAULT_TIMEOUT), _MAX_TIMEOUT)
+        max_rows = min(tool_cfg.get("max_rows", _DEFAULT_MAX_ROWS), _MAX_MAX_ROWS)
 
         conn = None
         try:
@@ -274,6 +291,21 @@ def _import_asyncpg():
             ),
             is_error=True,
         )
+
+
+def _contains_multiple_statements(query: str) -> bool:
+    """Check if query contains multiple SQL statements (semicolons).
+
+    Ignores semicolons inside single-quoted string literals so that
+    ``SELECT * FROM t WHERE col = 'a;b'`` is not rejected.
+    """
+    in_string = False
+    for char in query:
+        if char == "'":
+            in_string = not in_string
+        elif char == ";" and not in_string:
+            return True
+    return False
 
 
 def _extract_first_keyword(query: str) -> str | None:
