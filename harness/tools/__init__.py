@@ -25,7 +25,7 @@ Current optional tools
                    — Single-file variants, superseded by ``batch_read`` /
                      ``batch_edit`` / ``batch_write`` respectively. Kept
                      available as opt-in when a specific integration needs
-                     one-at-a-time semantics; default pipelines/agents use
+                     one-at-a-time semantics; the default agent uses
                      the batch variants so a multi-file change costs one
                      LLM round-trip instead of N.
 

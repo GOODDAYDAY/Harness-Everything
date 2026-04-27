@@ -4,7 +4,7 @@ Verifies the harness's tool-use loop actually works against DeepSeek end-to-end:
 the model issues a `read_file` tool call, the harness executes it, the model
 consumes the result and produces a final text answer.
 
-Run before bringing up any pipeline against DeepSeek.
+Run before bringing up a harness run against DeepSeek.
 
 Usage:
     HARNESS_API_KEY=<deepseek-key> python tests/smoke_test_deepseek.py

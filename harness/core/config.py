@@ -81,8 +81,8 @@ class HarnessConfig:
     log_level: str = "INFO"
     # Python logging level name for the harness logger hierarchy.
     # Valid values: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL".
-    # Applied by HarnessLoop.__init__ and PipelineLoop.__init__ via
-    # apply_log_level() so every run picks up the configured verbosity.
+    # Applied at startup via apply_log_level() so every run picks up
+    # the configured verbosity.
 
     def __post_init__(self) -> None:
         # --- resolve paths ---
@@ -222,8 +222,7 @@ class HarnessConfig:
     def apply_log_level(self) -> None:
         """Apply ``self.log_level`` to the root ``harness`` logger hierarchy.
 
-        Call this once at startup (``HarnessLoop.__init__``,
-        ``PipelineLoop.__init__``) so all child loggers inherit the level.
+        Call this once at startup so all child loggers inherit the level.
         Does not touch the root logging configuration — only the ``harness``
         package logger — so the caller's own logging setup is preserved.
         """

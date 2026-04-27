@@ -436,7 +436,7 @@ class Tool(ABC):
     # against allowed_paths in config.
     requires_path_check: bool = False
 
-    # Tool categories for per-phase filtering via PhaseConfig.tool_tags.
+    # Tool categories for tag-based filtering.
     # Valid tags: "file_read", "file_write", "search", "git", "analysis",
     #             "execution", "network", "testing"
     tags: frozenset[str] = frozenset()
@@ -1199,12 +1199,11 @@ class Tool(ABC):
 
         Matching is against the workspace-relative path using fnmatch
         semantics, with a ``**`` prefix expanded so e.g. ``harness/**`` also
-        matches ``harness/pipeline/loop.py``. A path that is not under the
+        matches ``harness/core/hooks.py``. A path that is not under the
         workspace (rare, but allowed_paths may span multiple roots) is
         allowed — phase scoping is intentionally a workspace-local concept.
 
-        Scoping is per-phase and cheap: an empty list skips the entire check.
-        See PhaseConfig.allowed_edit_globs for the policy.
+        Scoping is cheap: an empty list skips the entire check.
         """
         globs = getattr(config, "phase_edit_globs", None)
         if not globs:

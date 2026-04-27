@@ -77,7 +77,7 @@ class ImportSmokeHook(VerificationHook):
 
     Cheap, deterministic, offline — catches ImportError/SyntaxError introduced
     by the preceding phase before the change is committed. Intended for
-    self-improvement pipelines where the harness edits its own source and a
+    self-improvement runs where the harness edits its own source and a
     broken module would prevent the next round from running at all.
 
     Runs in a subprocess so the parent's already-imported modules don't mask
@@ -94,7 +94,7 @@ class ImportSmokeHook(VerificationHook):
         timeout: int = 30,
     ) -> None:
         # Default covers the self-improvement case; override via config for
-        # pipelines with different import entry points.
+        # projects with different import entry points.
         self.modules = modules or [
             "harness.core.config",
             "harness.agent",
@@ -365,7 +365,7 @@ class GitCommitHook(VerificationHook):
             n_inner = context.get("inner_rounds_run", 0)
             all_scores = context.get("all_scores", [])
 
-            commit_msg = f"harness: R{outer + 1} {phase_name} [score={score:.1f}]"
+            commit_msg = f"[harness] R{outer + 1} {phase_name} [score={score:.1f}]"
             body_parts: list[str] = []
             if changes:
                 body_parts.append(f"Summary: {changes}")
@@ -387,7 +387,7 @@ class GitCommitHook(VerificationHook):
             if body_parts:
                 commit_msg += "\n\n" + "\n".join(body_parts)
         else:
-            commit_msg = f"harness: R{outer + 1} {phase_name}"
+            commit_msg = f"[harness] R{outer + 1} {phase_name}"
 
         results: list[str] = []
         all_passed = True

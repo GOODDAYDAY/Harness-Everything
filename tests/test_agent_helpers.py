@@ -51,6 +51,12 @@ def _make_loop(tmp_path: Path, **kwargs) -> AgentLoop:
     loop._notes_path = tmp_path / "agent_notes.md"
     loop.artifacts = MagicMock()
     loop.artifacts.write = MagicMock()
+    # Attrs normally set in __init__
+    loop._evaluator = None
+    loop._score_history = []
+    loop._meta_review_context = ""
+    loop._last_review_hash = ""
+    loop._shutdown_requested = False
     return loop
 
 

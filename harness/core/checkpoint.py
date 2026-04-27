@@ -91,7 +91,7 @@ class CheckpointManager:
         """Write ``skipped.done`` marker."""
         self.store.write("", *segments, "skipped.done")
 
-    # ---- convenience for phase pipeline ----
+    # ---- convenience helpers ----
 
     def is_inner_done(self, outer: int, phase_label: str, inner: int) -> bool:
         segs = self.store.inner_dir(outer, phase_label, inner)

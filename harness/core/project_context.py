@@ -1,31 +1,22 @@
-"""project_context — lightweight project-structure snapshot for the Planner.
+"""project_context — lightweight project-structure snapshot.
 
-Injects a compact, signal-dense block of project metadata into the Planner's
-user message so that both the conservative and aggressive proposers can reason
-about *what is already there* before deciding what to change.
+Injects a compact, signal-dense block of project metadata so the LLM can
+reason about *what is already there* before deciding what to change.
 
 What is collected
 -----------------
-1. **Directory tree** (depth-limited, hidden dirs excluded) — gives the
-   proposers a map of the project layout so they reference real file paths.
+1. **Directory tree** (depth-limited, hidden dirs excluded) — a map of the
+   project layout so real file paths can be referenced.
 2. **Recent git log** (last N commits, one-line) — shows what has changed
-   recently so proposals don't re-do work or conflict with the latest state.
-3. **Git status** — current working-tree changes (M/A/D/?) so the proposer
+   recently so the agent doesn't re-do work or conflict with the latest state.
+3. **Git status** — current working-tree changes (M/A/D/?) so the agent
    knows what is already modified.
 4. **Key file inventory** — glob-based listing of Python files, test files,
-   and config files so the proposer can reference them by path.
+   and config files.
 
 All collection is best-effort: if git is absent or the workspace has no git
 repo, the git sections are silently omitted.  If a glob finds nothing, it is
 omitted too.  The result is always a valid (possibly sparse) string.
-
-Integration
------------
-``HarnessLoop`` calls ``ProjectContextBuilder(config).build()`` once at
-startup and prepends the result to the context string passed to
-``Planner.plan()``.  Because it runs only once (and is cached), the overhead
-is one ``git log`` + one ``git status`` subprocess call per run, not per
-iteration.
 """
 
 from __future__ import annotations

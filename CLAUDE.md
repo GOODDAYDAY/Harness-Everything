@@ -4,15 +4,6 @@
 
 Harness-Everything is an AI coding harness that uses any Anthropic-compatible LLM (Claude, DeepSeek, etc.) to autonomously improve codebases. It runs in agent mode: a single LLM with full tool access, persistent notes, and multi-cycle execution.
 
-## When asked to investigate the live pipeline
-
-Read `docs/HARNESS_RUNBOOK.md` first. It is the standing operating procedure
-for diagnosing the production self-improvement loop on
-`ubuntu@43.128.100.101` — covers the 30-second status check, symptom-driven
-diagnostic recipes (crashes, no-commits, tunnel vision, score regression),
-how to read `memory.jsonl`, when to push a fix vs wait, the deploy mechanics,
-and the gotchas that have already burned past sessions.
-
 ## Tech Stack
 
 - Python 3.11+, async throughout
@@ -62,6 +53,7 @@ harness/
     metrics.py             # Structured metrics collector
   prompts/
     dual_evaluator.py      # Dual evaluator prompts
+    agent_meta_review.py   # Meta-review prompt
   tools/
     base.py                # Tool ABC, ToolResult
     registry.py            # ToolRegistry (dispatch, alias normalization)

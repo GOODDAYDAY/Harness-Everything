@@ -478,7 +478,7 @@ class TestDualEvaluatorEvaluate:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Integration: full pipeline through extract → format
+# Integration: full flow through extract → format
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestExtractThenFormat:

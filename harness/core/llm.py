@@ -952,9 +952,8 @@ class LLM:
 
         t0 = time.monotonic()
         # Gate every API call through the per-process semaphore so the
-        # provider's rate limit is respected even when multiple pipeline
-        # tasks (debate parallel rounds, dual evaluators, planner three-way)
-        # fire simultaneously.
+        # provider's rate limit is respected even when multiple concurrent
+        # tasks (dual evaluators, parallel tool calls) fire simultaneously.
         async with self._api_semaphore:
             resp = await _call_with_retry(
                 lambda: asyncio.wait_for(

@@ -1,10 +1,8 @@
 """Shared SIGINT/SIGTERM handler installation for async loops.
 
-AgentLoop and PipelineLoop both want the same "finish the current unit of
-work, then exit cleanly on Ctrl-C" semantics. This module provides one
-implementation they share — the try/except against NotImplementedError is
-there because add_signal_handler is Unix-only and Windows local dev would
-otherwise crash.
+Provides "finish the current unit of work, then exit cleanly on Ctrl-C"
+semantics. The try/except against NotImplementedError is there because
+add_signal_handler is Unix-only and Windows local dev would otherwise crash.
 """
 
 from __future__ import annotations
