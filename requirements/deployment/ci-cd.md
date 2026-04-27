@@ -90,6 +90,7 @@ The pause file (US-07) works within a running work chunk. The stop marker works 
 - Given the stop marker file exists on the server, when the deployment pipeline reaches the service restart step, then it skips the restart, removes the marker, and logs that the loop is paused
 - Given the stop marker file does not exist, when the deployment pipeline reaches the restart step, then it restarts the service normally
 - Given the stop marker was consumed (removed after skipping restart), when the operator later wants to resume the loop, then they must manually start the service (the marker is a one-shot mechanism)
+- Note: the service restart step currently runs unconditionally regardless of smoke test outcome — after a rollback, the service is still restarted on the rolled-back code
 
 ---
 

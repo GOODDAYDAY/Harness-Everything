@@ -57,11 +57,11 @@ A batch write creates or overwrites multiple files in one call. Each file is han
 
 ## US-06: As a file operation, I need file writes to be atomic so that a crash mid-write does not leave a corrupted file
 
-Write operations first write to a temporary file in the same directory, then atomically replace the target. This ensures that readers never see a half-written file.
+The primary write path (used by the write tool) validates security constraints and then writes directly to the target file. A secondary utility function provides temp-file-then-rename atomicity for callers that need it, but it is not used by the main write path.
 
 ### Acceptance Criteria
-- Given a write operation that succeeds, when the file is read back, then it contains exactly the written content
-- Given a write operation that fails after the temporary file is created, when the failure is handled, then the temporary file is cleaned up and the original file is unchanged
+- Given a write operation via the primary path, when the write succeeds, then the file contains exactly the written content
+- Given the secondary atomic-write utility, when used by a caller that opts in, then the content is first written to a temporary file and then renamed to the target, ensuring readers never see a half-written file
 
 ---
 
@@ -236,11 +236,12 @@ Paths containing null bytes, homoglyph characters, or other attack vectors are r
 
 ## US-24: As a file operation, I need to prevent time-of-check-to-time-of-use (TOCTOU) attacks so that a path verified as safe is still safe when accessed
 
-Path validation and file access are performed atomically where possible. Symlinks are not followed unless explicitly allowed, and file identity is verified via inode after opening to detect path swaps.
+TOCTOU protection primarily uses path-based validation: the path is resolved, checked for containment within allowed directories, and then the operation proceeds. Inode-level verification is available as an additional layer for read operations (via `FileSecurity` atomic read), but the static methods used by most tools rely on simpler path checks.
 
 ### Acceptance Criteria
 - Given a symlink within the workspace, when it is accessed without symlink resolution enabled, then the operation is rejected
-- Given a file that is swapped between validation and access, when the atomic validation detects the mismatch, then the operation is rejected with a security violation error
+- Given a file that is swapped between validation and access, when the path-based validation detects a containment violation on the resolved path, then the operation is rejected with a security violation error
+- Given a read operation using the atomic read path, when inode-level verification is performed, then an additional layer of swap detection is applied beyond path-based checks
 
 ## US-25: As a file operation, I need to enforce phase-scoped edit restrictions so that the agent can only modify files permitted by the current execution phase
 

@@ -170,5 +170,5 @@ Cross-reference symbol inputs are validated against a strict format: ASCII lette
 The symbol extraction tool can optionally include cross-reference data (callers, callees, test files) alongside the extracted source code, combining two lookups into one.
 
 ### Acceptance Criteria
-- Given an extraction request with cross-references enabled, when the symbol is found, then both the source code and the cross-reference data are returned in a single result
+- Given an extraction request with cross-references enabled, when the symbol is found, then both the source code and the cross-reference data are returned in a single result (note: cross-reference data in combined results is currently only available in JSON output format; text format shows placeholder text)
 - Given an extraction request with cross-references disabled (default), when the symbol is found, then only the source code is returned

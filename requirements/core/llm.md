@@ -60,7 +60,7 @@ Long tool loops accumulate large tool-result payloads that are re-sent with ever
 
 ### Acceptance Criteria
 - Given a conversation whose estimated character size exceeds the pruning threshold, when pruning is triggered, then the text content of older tool-result blocks is shortened until the total size drops to the target level
-- Given a conversation undergoing pruning, when tool-result text is shortened, then the most recent conversation pairs are always preserved verbatim so the model retains its freshest context
+- Given a conversation undergoing pruning, when tool-result text is shortened, then the 3 most recent assistant+user pairs are always preserved verbatim so the model retains its freshest context
 - Given a conversation undergoing pruning, when tool-result blocks are shortened, then no messages are removed or reordered (structural integrity required by the API is maintained)
 - Given the system prompt, when pruning runs, then the system prompt is never at risk because it is passed separately from the conversation messages
 

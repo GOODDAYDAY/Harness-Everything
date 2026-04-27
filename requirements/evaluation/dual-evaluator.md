@@ -93,6 +93,7 @@ Each scoring perspective must produce output in a defined structure (analysis se
 - Given evaluator output where the score line is malformed (not matching the expected format), then a validation error is produced
 - Given evaluator output where the score line is not the last line, then a warning is produced advising that final placement is preferred for reliable parsing
 - Given evaluator output that exceeds a reasonable length, then a warning is produced advising truncation
+- Given evaluator output for a debate/text-proposal mode, when validation runs, then the validator checks that the output contains mode-appropriate terminology (e.g., "text proposal"); given evaluator output for an implement/executed-code mode, when validation runs, then the validator checks for terminology such as "executed code"
 
 ### US-08: As the evaluator, I need the defect and feedback sections to reference concrete code locations, so that findings are actionable rather than vague
 
@@ -115,7 +116,7 @@ The downstream system needs to consume evaluation results programmatically -- ro
 
 #### Acceptance Criteria
 - Given valid evaluator output, then the extracted result includes the numeric score, a list of actionable feedback items, the top defect (if any), and an improvement suggestion (if any)
-- Given evaluator output with a delta-vs-prior section, then the delta text is extracted and included in the result
+- Given evaluator output with a delta-vs-prior section, then only the summary line immediately following the "DELTA VS PRIOR BEST:" header is extracted and included in the result (the per-dimension breakdown is not extracted)
 - Given evaluator output with dimension-level analysis scores, then those scores are extracted as a mapping of dimension names to values
 - Given evaluator output that fails hard validation, then the extraction returns an error description and does not attempt to parse further
 - Given evaluator output with calibration-related language, then the result indicates that calibration anchors were referenced

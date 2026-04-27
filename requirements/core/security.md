@@ -32,7 +32,7 @@ A time-of-check-to-time-of-use (TOCTOU) attack can swap a symlink target between
 - Given a file inside the workspace, when an atomic read is performed, then the parent directory is opened and its identity verified against expectations before the file is opened relative to it
 - Given a file whose parent directory descriptor does not match the expected path (possible TOCTOU swap), when the consistency check runs, then the read is denied
 - Given a file opened via atomic read, when the opened descriptor is verified, then its device and inode are compared against the expected file to detect last-moment swaps
-- Given a file that is a symlink, when an atomic read is attempted, then the symlink is not followed (if the platform supports it), preventing redirect-to-target attacks
+- Given a file that is a symlink, when an atomic read is attempted, then the system attempts to open the file without following symlinks (O_NOFOLLOW), but falls back to following symlinks if the platform does not support it, then validates that the resolved path is still within the workspace — preventing redirect-to-target attacks even on the fallback path
 
 ## US-04: As a file operation, I need files with multiple hard links rejected so that a hard link inside an allowed directory pointing to a file outside cannot bypass containment
 

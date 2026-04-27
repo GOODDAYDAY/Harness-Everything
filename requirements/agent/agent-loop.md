@@ -6,12 +6,12 @@ User stories for cycle lifecycle, shutdown, resumption, notes, mission control, 
 
 ## Cycle Lifecycle
 
-### US-01: As a cycle, I need to execute in ordered phases (execute, verify, stage, evaluate, commit, persist, control), so that each concern is handled at the right time with the right inputs
+### US-01: As a cycle, I need to execute in ordered phases (execute, verify, stage, evaluate, commit, checkpoint, persist, control), so that each concern is handled at the right time with the right inputs
 
 Each cycle follows a fixed sequence: the agent runs its tool-use dialogue, then the framework verifies the output, stages changes, evaluates quality, commits to version control, persists artifacts, and finally checks whether to continue. This phased approach ensures that verification always precedes committing and that evaluation data is available before persistence.
 
 #### Acceptance Criteria
-- Given a cycle begins, when it completes normally, then the execution phase runs before verification, verification runs before staging, staging runs before evaluation, evaluation runs before commit, and commit runs before persistence
+- Given a cycle begins, when it completes normally, then the execution phase runs before verification, verification runs before staging, staging runs before evaluation, evaluation runs before commit, commit runs before checkpoint, checkpoint runs before persistence, and persistence runs before control
 - Given the verification phase detects failures, when the cycle proceeds, then the staging and commit phases are skipped but evaluation and persistence still run
 
 ### US-02: As a cycle, I need a system prompt assembled from the mission, project parameters, persistent notes, strategic direction, and cycle number, so that the agent has full context for its work
