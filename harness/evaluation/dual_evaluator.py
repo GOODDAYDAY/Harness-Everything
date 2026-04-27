@@ -1,6 +1,6 @@
 """DualEvaluator — two independent evaluators that never see each other's output.
 
-Unlike ThreeWayResolver (which merges perspectives), this keeps evaluators
+Two independent evaluators that never see each other's output, keeping them
 isolated to prevent groupthink.  Scores are combined numerically.
 """
 
@@ -92,6 +92,15 @@ _MODE_HEADERS: dict[str, str] = {
         "- Evaluate the actual code state; the proposal text is context only\n"
         "- Check correctness, syntax, test results, and tool call success/failure\n"
         "- Penalize missing tests, syntax errors, and broken functionality\n\n"
+    ),
+    "reasoning": (
+        "## EVALUATION MODE: REASONING (NO CODE CHANGES)\n"
+        "This cycle produced **no code changes**. You are evaluating the agent's\n"
+        "exploration, reasoning, and decision quality — NOT code.\n"
+        "- Did the agent actively explore the codebase (read files, search, run tests)?\n"
+        "- Is the conclusion (e.g. 'nothing to change') backed by evidence?\n"
+        "- Did the agent identify new directions or leave actionable notes for the next cycle?\n"
+        "- Penalize empty repetition: cycles that just re-state 'mission complete' with no new information\n\n"
     ),
 }
 
@@ -894,7 +903,7 @@ class DualEvaluator:
         subject: str,
         context: str,
         *,
-        mode: Literal["debate", "implement"] = "debate",
+        mode: Literal["debate", "implement", "reasoning"] = "debate",
         basic_system: str = "",
         diffusion_system: str = "",
         score_pattern: str = r"SCORE[:\s]+(\d+(?:\.\d+)?)",
@@ -913,8 +922,12 @@ class DualEvaluator:
             score_pattern: Regex to extract numeric score from evaluator output
                 (used as the loose fallback in parse_score).
         """
-        basic_sys = basic_system or default_prompts.BASIC_SYSTEM
-        diffusion_sys = diffusion_system or default_prompts.DIFFUSION_SYSTEM
+        if mode == "reasoning":
+            basic_sys = basic_system or default_prompts.REASONING_BASIC_SYSTEM
+            diffusion_sys = diffusion_system or default_prompts.REASONING_DIFFUSION_SYSTEM
+        else:
+            basic_sys = basic_system or default_prompts.BASIC_SYSTEM
+            diffusion_sys = diffusion_system or default_prompts.DIFFUSION_SYSTEM
 
         # Prepend a mode header so evaluators adapt their rubric to whether
         # they are reviewing a text proposal or an executed code change.

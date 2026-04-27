@@ -39,16 +39,25 @@ async def run_evaluation(
     cycle: int,
     diff_text: str,
     mission: str,
+    *,
+    has_diff: bool = True,
 ) -> DualScore | None:
-    """Run DualEvaluator on a cycle's diff.  Returns the score or ``None``."""
+    """Run DualEvaluator on a cycle's deliverable.
+
+    When *has_diff* is True (default), evaluates code changes in ``implement``
+    mode.  When False, evaluates the agent's reasoning/exploration output in
+    ``reasoning`` mode.  Returns the score or ``None``.
+    """
     if evaluator is None or not diff_text.strip():
         return None
     try:
         mission_ctx = mission[:200] if mission else "autonomous maintenance"
+        mode = "implement" if has_diff else "reasoning"
+        context_label = "code changes" if has_diff else "agent reasoning (no code changes)"
         score = await evaluator.evaluate(
             subject=diff_text,
-            context=f"Mission: {mission_ctx}\nAgent cycle {cycle + 1} code changes.",
-            mode="implement",
+            context=f"Mission: {mission_ctx}\nAgent cycle {cycle + 1} {context_label}.",
+            mode=mode,
         )
         log.info(
             "agent_eval: cycle %d — basic=%.1f diffusion=%.1f combined=%.1f",

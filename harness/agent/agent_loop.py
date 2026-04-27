@@ -225,6 +225,10 @@ _COMPLETION_RULES_CONTINUOUS = """\
   * At the end of this cycle, summarise what you fixed and what remains.
     The next cycle will continue automatically — focus on the highest-priority
     remaining issue each time.
+  * If you believe the current mission direction is fully addressed, do NOT
+    just declare it complete. Instead, explore the codebase for new high-value
+    improvements: run tests, scan for TODOs, review recent git history,
+    check for missing error handling or test coverage.
   * Output "MISSION BLOCKED: <what you need from a human>" when you hit
     something you cannot resolve autonomously.
   * Otherwise, end your turn with a brief status update and the loop
@@ -389,6 +393,12 @@ class AgentLoop:
                 "what exists, then pick the first concrete task and execute it. "
                 "Use the scratchpad tool to save any finding you'll need later."
             )
+        if self.config.continuous:
+            return (
+                f"Begin cycle {cycle + 1}. Review your persistent notes above for "
+                "what you did last cycle, then pick the next concrete task and "
+                "execute it."
+            )
         return (
             f"Begin cycle {cycle + 1}. Review your persistent notes above for "
             "what you did last cycle, then pick the next concrete task and "
@@ -516,13 +526,18 @@ class AgentLoop:
             except Exception as exc:
                 log.warning("Agent: metrics failed cycle %d: %s", cycles_run, exc)
 
-            # 4b. Auto-evaluation (on staged changes)
+            # 4b. Auto-evaluation (every cycle)
             eval_notes = ""
             eval_line = ""
-            if self.config.auto_evaluate and staged and changed_paths:
-                diff_text = await agent_git.get_staged_diff(primary_repo)
+            if self.config.auto_evaluate:
+                if staged and changed_paths:
+                    eval_input = await agent_git.get_staged_diff(primary_repo)
+                else:
+                    # No code changes — evaluate the agent's reasoning output
+                    eval_input = text or ""
                 eval_score = await agent_eval.run_evaluation(
-                    self._evaluator, cycle, diff_text, self.config.mission,
+                    self._evaluator, cycle, eval_input, self.config.mission,
+                    has_diff=bool(staged and changed_paths),
                 )
                 if eval_score is not None:
                     agent_eval.record_score(eval_score, cycle, self._score_history)
@@ -567,11 +582,9 @@ class AgentLoop:
                 )
                 committed = True
 
-            # 4d. Meta-review (every N cycles when we have scores)
+            # 4d. Meta-review (every N cycles)
             interval = self.config.meta_review_interval
-            if (interval > 0
-                    and cycles_run % interval == 0
-                    and self._score_history):
+            if interval > 0 and cycles_run % interval == 0:
                 result = await agent_eval.run_meta_review(
                     self.llm, cycle, self._score_history,
                     self._last_review_hash, self._read_notes(),

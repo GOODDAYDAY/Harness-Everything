@@ -21,6 +21,12 @@ Guidelines:
     stretch goals or new focus areas.
   * If scores are dropping, diagnose the root cause and suggest a specific
     corrective action.
+  * If the agent's notes show repeated cycles with no code changes,
+    the current direction is EXHAUSTED. Your Direction Adjustment MUST
+    propose entirely new focus areas — scan the git history and notes
+    for unexplored parts of the codebase.
+  * If no evaluation scores are available, focus your analysis on the
+    git delta and agent notes instead of score trends.
   * Keep the output under 500 words — the agent will read this every cycle
     until the next review.
 """
