@@ -133,6 +133,13 @@ class AgentConfig:
     auto_tag: bool = False      # tag HEAD at each checkpoint
     auto_tag_prefix: str = "harness-r"
     auto_tag_push: bool = True
+    # ── Game testing ──
+    # Master switch for AI-driven game testing capabilities (game tools,
+    # game hooks, GameBridge process launching).  Default OFF — these
+    # features give the agent the ability to launch processes, open TCP
+    # connections, inject input, and capture screenshots.  Enable only
+    # when the agent is being used for game development with Godot.
+    enable_game_testing: bool = False
     # Project-specific parameters.  The framework does not interpret these —
     # they are injected into the system prompt as-is so the agent can see
     # project-level context (e.g. coding conventions, domain glossary,
@@ -253,9 +260,19 @@ class AgentLoop:
         log.info(config.harness.startup_banner())
 
         self.llm = LLM(config.harness)
+
+        # Filter out game tools when game testing is disabled
+        extra = list(config.harness.extra_tools or [])
+        if not config.enable_game_testing:
+            _GAME_TOOLS = {"game_launch", "game_screenshot", "game_input", "game_state"}
+            before = len(extra)
+            extra = [t for t in extra if t not in _GAME_TOOLS]
+            if before != len(extra):
+                log.info("Agent: game testing disabled — stripped %d game tool(s) from extra_tools", before - len(extra))
+
         self.registry = build_registry(
             config.harness.allowed_tools or None,
-            extra_tools=config.harness.extra_tools or None,
+            extra_tools=extra or None,
         )
 
         # Resume if there's an incomplete run directory; otherwise new run.
@@ -425,14 +442,18 @@ class AgentLoop:
                     smoke_calls=self.config.import_smoke_calls or None,
                 )
             )
-        if "godot_syntax" in names:
-            game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
-            godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
-            hooks.append(GodotSyntaxHook(game_path=game_path, godot_path=godot_path))
-        if "game_smoke" in names:
-            game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
-            godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
-            hooks.append(GameSmokeHook(game_path=game_path, godot_path=godot_path))
+        # Game-related hooks — only when game testing is enabled
+        if self.config.enable_game_testing:
+            if "godot_syntax" in names:
+                game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
+                godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
+                hooks.append(GodotSyntaxHook(game_path=game_path, godot_path=godot_path))
+            if "game_smoke" in names:
+                game_path = self.config.extra.get("game_path") or os.environ.get("HARNESS_GAME_PATH")
+                godot_path = self.config.extra.get("godot_path") or os.environ.get("HARNESS_GODOT_PATH")
+                hooks.append(GameSmokeHook(game_path=game_path, godot_path=godot_path))
+        elif "godot_syntax" in names or "game_smoke" in names:
+            log.info("Agent: game testing disabled — skipping game hooks")
         return hooks
 
     async def _run_hooks(
