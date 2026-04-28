@@ -1,0 +1,513 @@
+"""Security utilities for path validation and threat mitigation."""
+
+from __future__ import annotations
+
+import errno
+import logging
+import os
+from pathlib import Path
+
+from harness.core.config import HarnessConfig
+
+log = logging.getLogger(__name__)
+
+
+def validate_path_no_homoglyphs(path: str, config: HarnessConfig | None = None) -> str | None:
+    """Check if path contains Unicode homoglyphs or visually confusing characters.
+
+    Uses two complementary strategies:
+
+    1. **NFKC normalisation check** — if NFKC(path) != path the filename
+       contains compatibility characters (superscripts, ligatures, full-width
+       letters, combining diacritics, etc.) that could be used to spoof
+       ASCII-looking paths.
+
+    2. **Explicit homoglyph blocklist** — Cyrillic, Greek, and other look-alike
+       characters whose presence is always suspicious in file paths.  When
+       ``config.homoglyph_blocklist`` is non-empty it is used as the blocklist;
+       otherwise a built-in minimal high-risk set is applied.
+
+    Args:
+        path: The path string to validate.
+        config: Optional ``HarnessConfig``; used to read a custom blocklist.
+
+    Returns:
+        Error message string if suspicious characters found, else ``None``.
+    """
+    import unicodedata
+
+    # Strategy 1: NFKC normalisation — catches superscripts, combining marks, etc.
+    nfkc = unicodedata.normalize("NFKC", path)
+    if nfkc != path:
+        return (
+            f"PERMISSION ERROR: Path contains Unicode homoglyphs or compatibility "
+            f"characters that change under NFKC normalisation: {path!r}"
+        )
+
+    # Strategy 2: explicit blocklist — pure look-alikes not caught by NFKC
+    if config and hasattr(config, "homoglyph_blocklist") and config.homoglyph_blocklist:
+        homoglyphs = config.homoglyph_blocklist
+    else:
+        homoglyphs = {
+            '\u0430': 'Cyrillic small a (looks like ASCII a)',
+            '\u04CF': 'Cyrillic small palochka (looks like ASCII l)',
+            '\u0391': 'Greek capital alpha (looks like ASCII A)',
+            '\u03B1': 'Greek small alpha (looks like ASCII a)',
+            '\u041E': 'Cyrillic capital O (looks like ASCII O)',
+            '\u043E': 'Cyrillic small o (looks like ASCII o)',
+            '\u2044': 'Fraction slash (looks like ASCII /)',
+            '\uFF0F': 'Full-width solidus (looks like ASCII /)',
+        }
+    for char, description in homoglyphs.items():
+        if char in path:
+            return (
+                f"PERMISSION ERROR: Path contains Unicode homoglyphs: "
+                f"{description} (U+{ord(char):04X})"
+            )
+
+    return None
+
+
+def validate_path_no_null_bytes(path: str) -> str | None:
+    """Check if path contains null bytes which can truncate paths at OS level.
+    
+    Null bytes in path strings cause undefined behavior on some OSes and can be
+    used to truncate the path at the OS level, bypassing prefix checks.
+    
+    Args:
+        path: The path string to validate
+        
+    Returns:
+        Error message if null byte found, None if path is clean
+    """
+    if "\x00" in path:
+        return f"PERMISSION ERROR: path contains null byte: {path!r}"
+    return None
+
+
+def validate_path_no_control_chars(path: str) -> str | None:
+    """Check if path contains control characters.
+    
+    Rejects all control characters including whitespace control characters
+    that could cause unexpected behavior in path handling.
+    
+    Args:
+        path: The path string to validate
+        
+    Returns:
+        Error message if control character found, None if path is clean
+    """
+    # Dictionary of control characters with descriptions
+    control_chars = {
+        '\x00': 'U+0000 (NULL)',
+        '\x01': 'U+0001 (SOH)',
+        '\x02': 'U+0002 (STX)',
+        '\x03': 'U+0003 (ETX)',
+        '\x04': 'U+0004 (EOT)',
+        '\x05': 'U+0005 (ENQ)',
+        '\x06': 'U+0006 (ACK)',
+        '\x07': 'U+0007 (BEL)',
+        '\x08': 'U+0008 (BS)',
+        '\x09': 'U+0009 (TAB)',
+        '\x0A': 'U+000A (LF)',
+        '\x0B': 'U+000B (VT)',
+        '\x0C': 'U+000C (FF)',
+        '\x0D': 'U+000D (CR)',
+        '\x0E': 'U+000E (SO)',
+        '\x0F': 'U+000F (SI)',
+        '\x10': 'U+0010 (DLE)',
+        '\x11': 'U+0011 (DC1)',
+        '\x12': 'U+0012 (DC2)',
+        '\x13': 'U+0013 (DC3)',
+        '\x14': 'U+0014 (DC4)',
+        '\x15': 'U+0015 (NAK)',
+        '\x16': 'U+0016 (SYN)',
+        '\x17': 'U+0017 (ETB)',
+        '\x18': 'U+0018 (CAN)',
+        '\x19': 'U+0019 (EM)',
+        '\x1A': 'U+001A (SUB)',
+        '\x1B': 'U+001B (ESC)',
+        '\x1C': 'U+001C (FS)',
+        '\x1D': 'U+001D (GS)',
+        '\x1E': 'U+001E (RS)',
+        '\x1F': 'U+001F (US)',
+        '\x7F': 'U+007F (DEL)',
+    }
+    
+    for char, description in control_chars.items():
+        if char in path:
+            return f"PERMISSION ERROR: Path contains disallowed control character: {description}"
+    
+    return None
+
+
+def validate_path_security(path: str, config: HarnessConfig | None = None) -> str | None:
+    """Comprehensive path security validation.
+    
+    Runs all security checks on a path in the correct order:
+    1. Null byte validation (most critical - can truncate paths at OS level)
+    2. Control character validation (can cause unexpected behavior)
+    3. Unicode homoglyph validation (visual spoofing attacks)
+    
+    Args:
+        path: The path string to validate
+        config: Optional HarnessConfig instance for homoglyph blocklist
+        
+    Returns:
+        First error message found, or None if all checks pass
+    """
+    # Check in security-critical order
+    if error := validate_path_no_null_bytes(path):
+        return error
+    if error := validate_path_no_control_chars(path):
+        return error
+    if error := validate_path_no_homoglyphs(path, config):
+        return error
+    return None
+
+
+async def validate_path_scope(config: HarnessConfig, resolved_path: str) -> tuple[bool, str | None]:
+    """Validate that a path is within the allowed workspace scope.
+    
+    Args:
+        config: Harness configuration
+        resolved_path: Absolute resolved path to validate
+        
+    Returns:
+        Tuple of (is_valid, error_message). If valid, error_message is None.
+    """
+    # Simple implementation: check if path is within workspace
+    # In a real implementation, this would check allowed_paths and other constraints
+    try:
+        resolved = Path(resolved_path).resolve()
+        workspace = Path(config.workspace).resolve()
+        
+        # Check if path is within workspace
+        if workspace in resolved.parents or resolved == workspace:
+            return True, None
+        else:
+            return False, f"PERMISSION ERROR: Path not allowed: {resolved_path} is outside allowed workspace {config.workspace}"
+    except Exception as e:
+        return False, f"PERMISSION ERROR: Path validation error: {e}"
+
+
+def _validate_file_within_allowed_paths(file_fd: int, allowed_paths: list[Path]) -> bool:
+    """Validate that a file descriptor points to a file within allowed paths.
+    
+    Implements a three-tier validation strategy:
+    1. Linux-specific: Use /proc/self/fd/{file_fd} to resolve the real path
+    2. Cross-platform fallback: Compare device/inode with all files under allowed_paths
+    3. Deny by default: Return False if validation cannot be performed
+    
+    Args:
+        file_fd: Open file descriptor to validate
+        allowed_paths: List of allowed directory paths
+        
+    Returns:
+        True if the file is within allowed_paths, False otherwise
+    """
+    # Get file stats first to check for multiple hardlinks
+    try:
+        file_stat = os.fstat(file_fd)
+        file_dev = file_stat.st_dev
+        file_ino = file_stat.st_ino
+        
+        # SECURITY FIX: Check for multiple hardlinks
+        # Files with multiple hardlinks could be accessed from outside allowed paths
+        if file_stat.st_nlink > 1:
+            # File has multiple hardlinks — potential security risk.
+            # We cannot efficiently enumerate all hardlink locations, so we
+            # conservatively reject any file whose inode has more than one
+            # directory entry.  This prevents an attacker from creating a
+            # hardlink inside an allowed directory that points to a file
+            # residing outside allowed paths.
+            return False
+    except OSError:
+        # Cannot stat file
+        return False
+    
+    # Tier 1: Linux-specific /proc resolution (fastest and most accurate)
+    try:
+        # Read the symlink from /proc/self/fd/{file_fd}
+        proc_path = Path(f"/proc/self/fd/{file_fd}")
+        if proc_path.exists():
+            target = proc_path.readlink()
+            # Get the real path (resolve any symlinks in the target path)
+            real_path = Path(os.path.realpath(str(target)))
+            resolved_allowed = [Path(os.path.realpath(str(a))) for a in allowed_paths]
+            # Check if the real path is within any allowed path
+            return any(real_path.is_relative_to(a) or real_path == a for a in resolved_allowed)
+    except (OSError, ValueError):
+        # /proc not available or other error, fall through to Tier 2
+        pass
+
+    # Tier 1.5: macOS-specific F_GETPATH (real path of opened fd)
+    try:
+        import fcntl as _fcntl
+        _F_GETPATH = 50  # macOS-specific fcntl constant
+        buf = b"\x00" * 4096
+        result_buf = _fcntl.fcntl(file_fd, _F_GETPATH, buf)
+        real_path_str = result_buf.rstrip(b"\x00").decode("utf-8", errors="replace")
+        if real_path_str:
+            real_path = Path(os.path.realpath(real_path_str))
+            resolved_allowed = [Path(os.path.realpath(str(a))) for a in allowed_paths]
+            return any(real_path.is_relative_to(a) or real_path == a for a in resolved_allowed)
+    except (OSError, ImportError, ValueError):
+        pass  # Not macOS or unsupported; fall through to Tier 2
+    
+    # Tier 2: Cross-platform device/inode comparison
+    try:
+        # Get device/inode of the opened file (already have from above)
+        # file_dev and file_ino are already set
+        
+        # Iterate through all files under allowed paths
+        for allowed in allowed_paths:
+            if not allowed.exists():
+                continue
+            # Recursively walk through all files
+            for root, dirs, files in os.walk(str(allowed)):
+                for filename in files:
+                    file_path = Path(root) / filename
+                    try:
+                        # Use lstat so that symlinks within allowed_paths are
+                        # compared by their OWN inode, not the target's inode.
+                        # This prevents a symlink to an outside file from
+                        # erroneously matching the outside file's dev/ino.
+                        stat_result = os.lstat(str(file_path))
+                        if stat_result.st_dev == file_dev and stat_result.st_ino == file_ino:
+                            return True
+                    except OSError:
+                        # File may have been deleted or permissions changed
+                        continue
+    except OSError:
+        # Cannot stat file or walk directories
+        pass
+    
+    # Tier 3: Deny by default
+    return False
+
+
+def _validate_dir_fd_consistent(dir_fd: int, parent_dir: Path) -> bool:
+    """Validate that a directory file descriptor matches the expected path.
+    
+    Implements device/inode validation to prevent TOCTOU attacks where
+    a symlink could be swapped between checking and opening.
+    
+    Args:
+        dir_fd: Open directory file descriptor
+        parent_dir: Expected parent directory path
+        
+    Returns:
+        True if the descriptor matches the path, False otherwise
+    """
+    try:
+        # Get device/inode of the opened descriptor
+        dir_stat = os.fstat(dir_fd)
+        
+        # Get device/inode of the expected path
+        expected_stat = os.stat(str(parent_dir))
+        
+        # Compare device and inode
+        return (dir_stat.st_dev == expected_stat.st_dev and 
+                dir_stat.st_ino == expected_stat.st_ino)
+    except OSError:
+        return False
+
+
+def _is_parent_directory_symlink(dir_fd: int, child_name: str) -> bool:
+    """Check if the immediate parent directory of a file is a symlink.
+    
+    This detects the malicious TOCTOU scenario where a parent directory
+    symlink is swapped after validation but before file opening.
+    
+    Args:
+        dir_fd: Open directory file descriptor
+        child_name: Name of the child file within the directory
+        
+    Returns:
+        True if the parent directory is a symlink, False otherwise
+    """
+    try:
+        # Try to open the child with O_NOFOLLOW to detect symlinks
+        # O_PATH allows opening symlinks without following them
+        flags = getattr(os, 'O_PATH', 0) | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        try:
+            child_fd = os.open(child_name, flags, dir_fd=dir_fd)
+            os.close(child_fd)
+            # If open succeeded without ELOOP, it's not a symlink
+            return False
+        except OSError as e:
+            # If we get ELOOP, the immediate parent is a symlink
+            if hasattr(os, 'O_NOFOLLOW') and e.errno == getattr(errno, 'ELOOP', None):
+                return True
+            # Other errors - fall back to alternative check
+            pass
+        
+        # Fallback: try to readlink on the parent directory path
+        # This is less secure but works on systems without O_NOFOLLOW
+        try:
+            # Get parent directory path from dir_fd if possible
+            proc_path = Path(f"/proc/self/fd/{dir_fd}")
+            if proc_path.exists():
+                parent_path = proc_path.readlink()
+                # Check if parent path is a symlink
+                return os.path.islink(str(parent_path))
+        except (OSError, ValueError):
+            pass
+        
+        # Conservative default: assume it might be a symlink
+        return True
+    except Exception:
+        # If we can't determine, be conservative
+        return True
+
+
+def _validate_filename_component(filename: str) -> str | None:
+    """Validate that a filename component doesn't contain path traversal sequences.
+    
+    Args:
+        filename: The filename component to validate.
+        
+    Returns:
+        Error message if path traversal detected, None if filename is clean.
+    """
+    # Check for path separators in filename
+    if '/' in filename or '\\' in filename:
+        log.warning("PERMISSION ERROR: Path traversal detected in filename")
+        return "PERMISSION ERROR: Path traversal detected in filename"
+    
+    # Check for traversal sequences in any component
+    # Split by any path separator to check each component
+    components = filename.replace('\\', '/').split('/')
+    for component in components:
+        if component == '..':
+            log.warning("PERMISSION ERROR: Path traversal detected in filename")
+            return "PERMISSION ERROR: Path traversal detected in filename"
+    
+    return None
+
+
+def read_file_atomically(path: Path, allowed_paths: list[Path]) -> str | None:
+    """Read a file atomically to prevent TOCTOU symlink attacks.
+    
+    Args:
+        path: Path to the file to read.
+        allowed_paths: List of allowed directory paths for security containment.
+        
+    Returns:
+        File content as string, or None if the file cannot be read securely.
+    """
+    dir_fd = None
+    file_fd = None
+    try:
+        # 1. Convert path to absolute (but don't resolve symlinks yet)
+        abs_path = path.absolute()
+        
+        # 2. Open parent directory FIRST - before any path validation
+        # This is critical to eliminate TOCTOU race window
+        parent_dir = abs_path.parent
+        filename = abs_path.name
+        
+        # Validate filename component for path traversal
+        if _validate_filename_component(filename):
+            return None
+        
+        # Step 1: Check if parent directory is a symlink before opening
+        # This prevents TOCTOU attacks where a symlink could be swapped
+        # We'll check this more precisely after opening the directory
+        
+        try:
+            # Try to open directory with secure flags if available
+            # O_PATH allows opening symlinks without following them
+            dir_flags = getattr(os, 'O_PATH', 0) | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_CLOEXEC', 0)
+            dir_fd = os.open(str(parent_dir), dir_flags)
+        except (OSError, AttributeError):
+            # Fallback for systems without O_PATH/O_DIRECTORY
+            # Try O_NOFOLLOW to avoid following symlinks
+            no_follow = getattr(os, 'O_NOFOLLOW', 0)
+            try:
+                dir_fd = os.open(str(parent_dir), os.O_RDONLY | no_follow)
+            except OSError:
+                # If O_NOFOLLOW fails (e.g., on directories), fall back to regular open
+                # but we lose TOCTOU protection for symlink swaps
+                dir_fd = os.open(str(parent_dir), os.O_RDONLY)
+        
+        # Step 2: Validate that the opened directory descriptor matches the expected path
+        # This implements device/inode validation to prevent TOCTOU attacks
+        if not _validate_dir_fd_consistent(dir_fd, parent_dir):
+            os.close(dir_fd)
+            return None  # Directory descriptor mismatch - possible TOCTOU attack
+        
+        # 5. Validate the *real* parent directory is within allowed_paths
+        # Get the real path of the parent directory for containment check
+        try:
+            parent_real = Path(os.path.realpath(str(parent_dir)))
+        except OSError:
+            return None  # Cannot resolve real path of parent directory
+        
+        # Containment check: Ensure the real parent directory is within allowed paths.
+        # Resolve allowed_paths to handle OS-level symlinks (e.g. macOS /var -> /private/var)
+        # before comparing against the already-resolved parent_real.
+        resolved_allowed = [Path(os.path.realpath(str(a))) for a in allowed_paths]
+        if not any(parent_real.is_relative_to(a) or parent_real == a for a in resolved_allowed):
+            return None  # Parent directory not within allowed paths
+        
+        # 5. Open target file relative to dir_fd
+        # Use O_NOFOLLOW to prevent following symlinks - this fixes TOCTOU attacks
+        # where a symlink could be swapped between opening and validation
+        # First try with O_NOFOLLOW to avoid following symlinks
+        file_flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        try:
+            file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
+        except OSError as e:
+            # If O_NOFOLLOW fails because the target is a symlink,
+            # try without O_NOFOLLOW to allow reading through symlinks
+            # but we'll validate the target later
+            if hasattr(os, 'O_NOFOLLOW') and e.errno == getattr(errno, 'ELOOP', None):
+                file_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+                try:
+                    file_fd = os.open(filename, file_flags, dir_fd=dir_fd)
+                except OSError:
+                    return None  # Cannot open file
+            else:
+                return None  # Cannot open file
+        
+        # 6. CRITICAL SECURITY FIX: Validate the opened file is within allowed paths
+        # This prevents hardlink attacks where a hardlink inside allowed directory
+        # points to a file outside allowed directory
+        if not _validate_file_within_allowed_paths(file_fd, allowed_paths):
+            os.close(file_fd)
+            return None  # File not within allowed paths (hardlink attack prevented)
+        
+        # 7. Verify the opened file matches the expected file
+        file_stat = os.fstat(file_fd)
+        try:
+            expected_stat = (parent_real / filename).stat()
+        except OSError:
+            log.warning(f"Permission denied for {path}: Cannot stat expected file")
+            return None
+        
+        if (file_stat.st_dev != expected_stat.st_dev or 
+            file_stat.st_ino != expected_stat.st_ino):
+            log.warning(f"Permission denied for {path}: File descriptor mismatch")
+            return None
+        
+        # 8. Read content
+        with os.fdopen(file_fd, 'r', encoding='utf-8', errors='replace') as f:
+            file_fd = None
+            return f.read()
+    except (OSError, PermissionError, UnicodeDecodeError) as exc:
+        log.warning(f"Permission denied for {path}: {exc}")
+        return None
+    finally:
+        # Clean up file descriptors
+        if file_fd is not None:
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
