@@ -1,0 +1,146 @@
+"""list_directory / create_directory / tree — directory operations."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from harness.core.config import HarnessConfig
+from harness.tools.base import Tool, ToolResult
+
+
+class ListDirectoryTool(Tool):
+    name = "list_directory"
+    description = "List files and subdirectories in a directory, with type and size info."
+    requires_path_check = True
+    tags = frozenset({"file_read"})
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path to list"},
+            },
+            "required": ["path"],
+        }
+
+    async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
+        # Use atomic directory validation to prevent TOCTOU attacks
+        is_valid, validated = await self._validate_directory_atomic(config, path)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
+        # No phase-scope check: listing a directory is a read, not a write.
+        # Scope restricts mutations; blocking reads just starves the LLM of
+        # context about the codebase it is supposed to be improving.
+
+        lines: list[str] = []
+        for entry in sorted(Path(resolved).iterdir()):
+            if entry.is_dir():
+                lines.append(f"  [dir]  {entry.name}/")
+            else:
+                size = entry.stat().st_size
+                lines.append(f"  {size:>8}  {entry.name}")
+        return ToolResult(output=f"{resolved}/\n" + "\n".join(lines))
+
+
+class CreateDirectoryTool(Tool):
+    name = "create_directory"
+    description = "Create a directory (and any missing parents)."
+    requires_path_check = True
+    tags = frozenset({"file_write"})
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path to create"},
+            },
+            "required": ["path"],
+        }
+
+    async def execute(self, config: HarnessConfig, *, path: str) -> ToolResult:
+        # Use atomic path validation; require_exists=False since we're creating the directory
+        is_valid, validated = await self._validate_atomic_path(
+            config, path, require_exists=False, directory=False
+        )
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
+        if scope_err := self._check_phase_scope(config, resolved):
+            return scope_err
+        
+        Path(resolved).mkdir(parents=True, exist_ok=True)
+        return ToolResult(output=f"Created {resolved}")
+
+
+class TreeTool(Tool):
+    name = "tree"
+    description = (
+        "Show directory structure as a tree. "
+        "You must specify max_depth — use 1-2 for overview, 3-4 for detail."
+    )
+    requires_path_check = True
+    tags = frozenset({"file_read"})
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Root directory"},
+                "max_depth": {
+                    "type": "integer",
+                    "description": (
+                        "Max recursion depth (default 3). "
+                        "Use 1-2 for quick overview, 3-4 for detailed structure."
+                    ),
+                    "default": 3,
+                },
+            },
+            "required": ["path"],
+        }
+
+    async def execute(
+        self, config: HarnessConfig, *, path: str, max_depth: int = 3
+    ) -> ToolResult:
+        # Use atomic directory validation to prevent TOCTOU attacks
+        is_valid, validated = await self._validate_directory_atomic(config, path)
+        if not is_valid:
+            return validated  # This is a ToolResult error
+        resolved = validated  # This is the validated path string
+        # No phase-scope check: tree is a read operation. See ListDirectoryTool.
+
+        root = Path(resolved)
+        # Note: root.is_dir() is NOT called here because _validate_directory_atomic
+        # already performed atomic directory validation. Calling is_dir() here would
+        # introduce a TOCTOU vulnerability.
+
+        lines: list[str] = [f"{root.name}/"]
+        self._walk(root, "", max_depth, 0, lines)
+        return ToolResult(output="\n".join(lines))
+
+    def _walk(
+        self,
+        directory: Path,
+        prefix: str,
+        max_depth: int,
+        depth: int,
+        lines: list[str],
+    ) -> None:
+        if depth >= max_depth:
+            return
+        entries = sorted(directory.iterdir(), key=lambda e: (not e.is_dir(), e.name))
+        # Filter hidden entries before computing connectors so that the last
+        # *visible* entry correctly receives the "`-- " (end) connector instead
+        # of "|-- " (continue).  Using the raw enumerate index from the
+        # unfiltered list was a bug when hidden files appeared at the end.
+        visible = [e for e in entries if not e.name.startswith(".")]
+        for i, entry in enumerate(visible):
+            is_last = i == len(visible) - 1
+            connector = "`-- " if is_last else "|-- "
+            if entry.is_dir():
+                lines.append(f"{prefix}{connector}{entry.name}/")
+                extension = "    " if is_last else "|   "
+                self._walk(entry, prefix + extension, max_depth, depth + 1, lines)
+            else:
+                lines.append(f"{prefix}{connector}{entry.name}")

@@ -1,0 +1,162 @@
+"""read_file — read file contents with optional offset/limit."""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from harness.core.config import HarnessConfig
+from harness.tools.base import Tool, ToolResult, enforce_atomic_validation, handle_atomic_result
+
+
+@enforce_atomic_validation
+class ReadFileTool(Tool):
+    name = "read_file"
+    description = (
+        "Read a single file. Consider using batch_read instead — it can read "
+        "one file just as easily, and if you need multiple files you save "
+        "round-trips. Use read_file only when you have exactly one file to "
+        "check and no upcoming reads in the same turn."
+    )
+    requires_path_check = True
+    tags = frozenset({"file_read"})
+    
+    # Maximum allowed lines to prevent resource exhaustion attacks
+    MAX_READ_LINES = 10000
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute or relative file path"},
+                "offset": {
+                    "type": "integer",
+                    "description": "Start reading from this line (1-based). Default: 1",
+                    "default": 1,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Max number of lines to read. Default 2000 "
+                        "(reads the whole file in most cases). "
+                        "Only set this if you need a specific range with offset."
+                    ),
+                    "default": 2000,
+                },
+            },
+            "required": ["path"],
+        }
+
+
+
+    async def execute(
+        self, config: HarnessConfig, *, path: str, limit: int = 2000, offset: int = 1
+    ) -> ToolResult:
+        # The Anthropic API occasionally delivers JSON integers as strings when
+        # the LLM emits a quoted value (e.g. offset="2").  Coerce defensively so
+        # callers get a clear error instead of a confusing TypeError deep inside
+        # arithmetic on line 57.
+        try:
+            # First check if values are None (can happen with malformed JSON)
+            if offset is None or limit is None:
+                return ToolResult(
+                    error=f"offset and limit cannot be None, got offset={offset!r} limit={limit!r}",
+                    is_error=True,
+                )
+            
+            # Attempt conversion to integer - try each separately for better error messages
+            try:
+                offset = int(offset)
+            except (TypeError, ValueError) as offset_exc:
+                # Provide specific error for offset conversion failure
+                if isinstance(offset, str) and not offset.strip():
+                    offset_desc = "empty string"
+                elif isinstance(offset, str):
+                    offset_desc = f"string '{offset}'"
+                else:
+                    offset_desc = f"{type(offset).__name__} {offset!r}"
+                return ToolResult(
+                    error=f"offset must be an integer, got {offset_desc}: {offset_exc}",
+                    is_error=True,
+                )
+            
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError) as limit_exc:
+                # Provide specific error for limit conversion failure
+                if isinstance(limit, str) and not limit.strip():
+                    limit_desc = "empty string"
+                elif isinstance(limit, str):
+                    limit_desc = f"string '{limit}'"
+                else:
+                    limit_desc = f"{type(limit).__name__} {limit!r}"
+                return ToolResult(
+                    error=f"limit must be an integer, got {limit_desc}: {limit_exc}",
+                    is_error=True,
+                )
+        except Exception as exc:
+            # Catch any other unexpected exceptions
+            return ToolResult(
+                error=f"Unexpected error converting offset/limit to integers: {exc}",
+                is_error=True,
+            )
+        
+        # Validate offset and limit values
+        if offset < 1:
+            return ToolResult(error=f"offset must be ≥ 1, got {offset}", is_error=True)
+        if limit < 1:
+            return ToolResult(error=f"limit must be ≥ 1, got {limit}", is_error=True)
+        if limit > self.MAX_READ_LINES:
+            return ToolResult(
+                error=f"limit exceeds maximum allowed lines ({self.MAX_READ_LINES}), got {limit}",
+                is_error=True
+            )
+
+        # Combined atomic validation and read
+        atomic_result = await self.file_security.atomic_validate_and_read(
+            config, path, require_exists=True, check_scope=True, resolve_symlinks=False
+        )
+        # Use centralized handler for atomic validation results
+        result = handle_atomic_result(atomic_result, metadata_keys=("text", "resolved_path"))
+        if result.is_error:
+            return result
+        # Extract data from successful result
+        text = result.metadata["text"]
+        resolved = result.metadata["resolved_path"]
+        
+
+        lines = text.splitlines(keepends=True)
+        total_lines = len(lines)
+        
+        # Validate that offset is within file bounds
+        # Offset can be 1 to total_lines (to read lines) or total_lines+1 (to create empty selection)
+        # This follows 1-based indexing where offset=1 means start at first line
+        if offset > total_lines + 1 or (total_lines == 0 and offset > 1):
+            filename = os.path.basename(resolved)
+            if total_lines == 0:
+                return ToolResult(
+                    error=f"Offset {offset} exceeds maximum allowed value (1) for empty file {filename}. Valid offset is 1 (empty files have no lines to read).",
+                    is_error=True
+                )
+            else:
+                return ToolResult(
+                    error=f"Offset {offset} exceeds maximum allowed value ({total_lines + 1}) for file with {total_lines} lines in {filename}. Valid offset range is 1 to {total_lines} (to read lines) or {total_lines + 1} (to create empty selection).",
+                    is_error=True
+                )
+        
+        start = max(offset - 1, 0)
+        selected = lines[start : start + limit]
+        
+        # Handle empty selection (when start >= total_lines for non-empty files, or empty file)
+        filename = os.path.basename(resolved)
+        if not selected:
+            header = f"[{filename}] lines {offset}-{offset-1} of {total_lines}\n"
+            numbered = ""
+        else:
+            numbered = "".join(
+                f"{start + i + 1:>6}\t{line}" for i, line in enumerate(selected)
+            )
+            header = f"[{filename}] lines {start+1}-{min(start+limit, total_lines)} of {total_lines}\n"
+
+        lines_meta = [(start + i + 1, line) for i, line in enumerate(selected)]
+        return ToolResult(output=header + numbered, metadata={"lines": lines_meta})

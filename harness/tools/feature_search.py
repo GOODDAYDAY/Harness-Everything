@@ -1,0 +1,303 @@
+"""feature_search — keyword-based feature discovery across the codebase.
+
+Given a plain-English feature keyword (e.g. ``'checkpoint'``, ``'retry'``,
+``'evaluation'``), finds all code that is related to that feature using four
+complementary heuristics:
+
+1. **Symbol names** — functions/classes/methods whose name contains the keyword.
+2. **File names** — ``.py`` files whose basename contains the keyword.
+3. **Comments & docstrings** — lines containing ``# …keyword…`` or string
+   literals at the top of a function/class body.
+4. **Config keys** — module-level assignments whose name contains the keyword
+   (covers ``CHECKPOINT_DIR = …``, ``retry_limit: int = …``, etc.).
+
+Supports two scoring modes:
+- ``substring`` (default): match if keyword appears anywhere in the name.
+- ``token_overlap``: split keyword into tokens, score by how many tokens appear
+  in each identifier name. Higher scores rank first. Useful for multi-word
+  concepts like ``'file permission check'``.
+
+All analysis is pure AST + text scanning — no external dependencies.
+
+.. note::
+   This tool supersedes the former ``semantic_search`` tool, whose token-overlap
+   scoring is now available via ``scoring='token_overlap'``.
+"""
+
+from __future__ import annotations
+
+import ast
+import logging
+import re
+from typing import Any
+
+from harness.core.config import HarnessConfig
+from harness.tools._ast_utils import parse_module
+from harness.tools.base import Tool, ToolResult
+
+log = logging.getLogger(__name__)
+
+_MAX_OUTPUT_BYTES = 24_000
+
+
+class FeatureSearchTool(Tool):
+    """Find all code related to a feature keyword across the workspace."""
+
+    name = "feature_search"
+    description = (
+        "Find all code related to a feature or concept keyword across the codebase. "
+        "Searches: (1) function/class/method names containing the keyword, "
+        "(2) Python files whose filename contains the keyword, "
+        "(3) comments and docstrings mentioning the keyword, "
+        "(4) module-level config/constant names containing the keyword. "
+        "Returns structured results grouped by category. "
+        "No external dependencies — pure AST and text analysis."
+    )
+    requires_path_check = False  # manual allowed_paths enforcement via _check_dir_root
+    tags = frozenset({"search"})
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": (
+                        "Feature keyword to search for "
+                        "(e.g. 'checkpoint', 'retry', 'evaluation', 'auth'). "
+                        "Case-insensitive; partial matches are included."
+                    ),
+                },
+                "root": {
+                    "type": "string",
+                    "description": "Directory to search (default: config.workspace).",
+                    "default": "",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": (
+                        "Required — no default. "
+                        "Use 10-20 for focused scan, 50-100 for comprehensive. "
+                        "Maximum results per category."
+                    ),
+                    "minimum": 1,
+                    "maximum": 200,
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["symbols", "files", "comments", "config"]},
+                    "description": (
+                        "Which categories to include (default: all four). "
+                        "Use a subset to narrow results: "
+                        "['symbols'] for just function/class names, "
+                        "['comments'] for just docstrings/inline comments."
+                    ),
+                    "default": ["symbols", "files", "comments", "config"],
+                },
+                "scoring": {
+                    "type": "string",
+                    "enum": ["substring", "token_overlap"],
+                    "description": (
+                        "Matching mode for symbol names. "
+                        "'substring' (default): match if keyword appears in the name. "
+                        "'token_overlap': split keyword into tokens and score by how many "
+                        "tokens appear in the identifier — useful for multi-word concepts "
+                        "like 'file permission check'. Results are ranked by score."
+                    ),
+                    "default": "substring",
+                },
+            },
+            "required": ["keyword", "max_results"],
+        }
+
+    async def execute(
+        self,
+        config: HarnessConfig,
+        max_results: int,
+        keyword: str = "",
+        root: str = "",
+        categories: list[str] | None = None,
+        scoring: str = "substring",
+    ) -> ToolResult:
+        keyword = keyword.strip()
+        if not keyword:
+            return ToolResult(error="'keyword' is required and must be non-empty", is_error=True)
+
+        search_root, allowed, err = self._check_dir_root(config, root)
+        if err:
+            return err
+
+        # Clamp max_results
+        max_results = max(1, min(200, max_results))
+
+        # Default categories
+        if categories is None:
+            categories = ["symbols", "files", "comments", "config"]
+        active = set(categories)
+
+        use_token_overlap = scoring == "token_overlap"
+        kw_lower = keyword.lower()
+        kw_tokens = [t.lower() for t in keyword.split() if t] if use_token_overlap else []
+        # Compile a case-insensitive regex for comment/docstring scanning
+        kw_re = re.compile(re.escape(keyword), re.IGNORECASE)
+
+        py_files = self._rglob_safe(search_root, "*.py", allowed)
+
+        # --- Category: files ---
+        file_hits: list[dict[str, Any]] = []
+        if "files" in active:
+            for fpath in py_files:
+                if kw_lower in fpath.name.lower():
+                    try:
+                        rel = str(fpath.relative_to(search_root))
+                    except ValueError:
+                        rel = str(fpath)
+                    file_hits.append({"file": rel})
+                    if len(file_hits) >= max_results:
+                        break
+
+        # Parse files once for AST-based categories
+        symbol_hits: list[dict[str, Any]] = []
+        comment_hits: list[dict[str, Any]] = []
+        config_hits: list[dict[str, Any]] = []
+
+        needs_ast = active & {"symbols", "comments", "config"}
+
+        for fpath in py_files:
+            if not needs_ast:
+                break
+            try:
+                source = fpath.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+            try:
+                rel = str(fpath.relative_to(search_root))
+            except ValueError:
+                rel = str(fpath)
+
+            # --- Category: comments (text scan — fast, no AST needed) ---
+            if "comments" in active and len(comment_hits) < max_results:
+                for lineno, line in enumerate(source.splitlines(), start=1):
+                    stripped = line.strip()
+                    # Match inline comments
+                    if stripped.startswith("#") and kw_re.search(stripped):
+                        comment_hits.append({
+                            "file": rel,
+                            "line": lineno,
+                            "kind": "comment",
+                            "text": stripped[:120],
+                        })
+                        if len(comment_hits) >= max_results:
+                            break
+
+            if not (active & {"symbols", "config"}):
+                continue
+
+            # Parse AST for symbols and config
+            tree, parse_error = parse_module(fpath)
+            if tree is None:
+                # Log parse error for debugging but continue scanning other files
+                if parse_error:
+                    log.debug("feature_search: %s", parse_error)
+                continue
+
+            # --- Category: symbols + comments (docstrings via AST) ---
+            if "symbols" in active or "comments" in active:
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                        # Symbol name match
+                        if "symbols" in active and len(symbol_hits) < max_results:
+                            ident_lower = node.name.lower()
+                            matched = False
+                            overlap_score = 0
+                            if use_token_overlap:
+                                overlap_score = sum(1 for t in kw_tokens if t in ident_lower)
+                                matched = overlap_score > 0
+                            else:
+                                matched = kw_lower in ident_lower
+                            if matched:
+                                kind = (
+                                    "class" if isinstance(node, ast.ClassDef)
+                                    else "async_function" if isinstance(node, ast.AsyncFunctionDef)
+                                    else "function"
+                                )
+                                hit: dict[str, Any] = {
+                                    "file": rel,
+                                    "line": node.lineno,
+                                    "kind": kind,
+                                    "name": node.name,
+                                }
+                                if use_token_overlap:
+                                    hit["score"] = overlap_score
+                                symbol_hits.append(hit)
+
+                        # Docstring match
+                        if "comments" in active and len(comment_hits) < max_results:
+                            docstring = ast.get_docstring(node)
+                            if docstring and kw_re.search(docstring):
+                                # Use first matching line within the docstring
+                                first_line = next(
+                                    (ln for ln in docstring.splitlines() if kw_re.search(ln)),
+                                    docstring.splitlines()[0],
+                                )
+                                comment_hits.append({
+                                    "file": rel,
+                                    "line": node.lineno,
+                                    "kind": "docstring",
+                                    "text": first_line.strip()[:120],
+                                    "symbol": node.name,
+                                })
+
+            # --- Category: config (module-level assignments) ---
+            if "config" in active and len(config_hits) < max_results:
+                for node in ast.iter_child_nodes(tree):
+                    if len(config_hits) >= max_results:
+                        break
+                    if isinstance(node, ast.Assign):
+                        for target in node.targets:
+                            if isinstance(target, ast.Name) and kw_lower in target.id.lower():
+                                # Render value as short snippet
+                                try:
+                                    val_snippet = ast.unparse(node.value)[:60]
+                                except Exception:
+                                    val_snippet = "…"
+                                config_hits.append({
+                                    "file": rel,
+                                    "line": node.lineno,
+                                    "name": target.id,
+                                    "value_snippet": val_snippet,
+                                })
+                                if len(config_hits) >= max_results:
+                                    break
+                    elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                        if kw_lower in node.target.id.lower():
+                            try:
+                                val_snippet = ast.unparse(node.value)[:60] if node.value else "…"
+                            except Exception:
+                                val_snippet = "…"
+                            config_hits.append({
+                                "file": rel,
+                                "line": node.lineno,
+                                "name": node.target.id,
+                                "value_snippet": val_snippet,
+                            })
+
+        # Sort symbol hits by score (descending) in token_overlap mode
+        if use_token_overlap and symbol_hits:
+            symbol_hits.sort(key=lambda h: (-h.get("score", 0), h["name"]))
+
+        results: dict[str, Any] = {
+            "keyword": keyword,
+            "files_scanned": len(py_files),
+        }
+        if "files" in active:
+            results["files"] = file_hits
+        if "symbols" in active:
+            results["symbols"] = symbol_hits
+        if "comments" in active:
+            results["comments"] = comment_hits
+        if "config" in active:
+            results["config"] = config_hits
+
+        return ToolResult(output=self._safe_json(results, max_bytes=_MAX_OUTPUT_BYTES))
