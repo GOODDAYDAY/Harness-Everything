@@ -27,12 +27,21 @@ _MAX_SCORE_HISTORY = 50
 
 
 @dataclass
+class MetaReviewDecision:
+    """Structured decision from the meta-review LLM (US-10)."""
+    action: str           # "continue" | "pivot" | "stop"
+    reason: str
+    pivot_direction: str  # meaningful only when action == "pivot"
+
+
+@dataclass
 class CheckpointResult:
     """Result of a periodic checkpoint (startup or in-loop)."""
     meta_context: str    # strategic direction text injected into system prompt
     head_hash: str       # HEAD hash after checkpoint (squash may change SHAs)
     squashed: bool       # whether squash was executed
     tagged: str          # tag name, empty if not tagged
+    decision: MetaReviewDecision | None = None  # US-10: structured meta-review decision
 
 
 # ---------------------------------------------------------------------------
@@ -164,18 +173,81 @@ async def _meta_review_llm(
     score_table: str,
     git_delta: str,
     notes: str,
-) -> str:
-    """Run the meta-review LLM call (pure analysis, no side effects)."""
+    coverage_report: str = "",
+) -> tuple[str, MetaReviewDecision | None]:
+    """Run the meta-review LLM call (pure analysis, no side effects).
+
+    Returns (free_text, decision).  The decision is parsed from a JSON
+    block in the LLM output; if parsing fails, decision is None.
+    """
     user_content = meta_review_prompts.AGENT_META_REVIEW_USER
     user_content = user_content.replace("$score_history", score_table)
     user_content = user_content.replace("$git_delta", git_delta)
+    user_content = user_content.replace(
+        "$coverage_report", coverage_report or "(no coverage data yet)"
+    )
     user_content = user_content.replace("$current_notes", notes)
 
     response = await llm.call(
         [{"role": "user", "content": user_content}],
         system=meta_review_prompts.AGENT_META_REVIEW_SYSTEM,
     )
-    return (response.text or "").strip()
+    raw = (response.text or "").strip()
+    free_text, decision = _parse_meta_review_decision(raw)
+    return free_text, decision
+
+
+_VALID_ACTIONS = frozenset({"continue", "pivot", "stop"})
+
+
+def _parse_meta_review_decision(
+    raw_text: str,
+) -> tuple[str, MetaReviewDecision | None]:
+    """Extract structured decision from meta-review LLM output (US-10).
+
+    Looks for a ```json ... ``` fenced block containing an object with an
+    ``action`` field.  Returns (free_text_without_json_block, decision).
+    On any parse failure, returns (original_text, None) — the caller
+    treats None as "continue" (backward compatible).
+    """
+    # Find ```json ... ``` block
+    pattern = r"```json\s*\n(\{[^`]*?\})\s*\n```"
+    match = re.search(pattern, raw_text, re.DOTALL)
+    if not match:
+        log.debug("meta-review decision: no JSON block found, defaulting to continue")
+        return raw_text, None
+
+    json_str = match.group(1)
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as exc:
+        log.warning("meta-review decision: JSON parse error: %s", exc)
+        return raw_text, None
+
+    action = data.get("action", "")
+    if action not in _VALID_ACTIONS:
+        log.warning("meta-review decision: invalid action %r, ignoring", action)
+        return raw_text, None
+
+    reason = data.get("reason", "")
+    pivot_direction = data.get("pivot_direction", "")
+
+    if action == "pivot" and not pivot_direction:
+        log.warning("meta-review decision: pivot without pivot_direction, treating as continue")
+        return raw_text, MetaReviewDecision(
+            action="continue",
+            reason="pivot requested but no direction provided",
+            pivot_direction="",
+        )
+
+    # Strip the JSON block from the free-text output
+    free_text = raw_text[:match.start()].rstrip() + raw_text[match.end():].lstrip()
+
+    return free_text.strip(), MetaReviewDecision(
+        action=action,
+        reason=reason,
+        pivot_direction=pivot_direction,
+    )
 
 
 async def _squash_grouping_llm(
@@ -306,6 +378,7 @@ async def run_checkpoint(
     tag_prefix: str = "harness-r",
     tag_push: bool = True,
     push_remote: str = "origin",
+    coverage_report: str = "",
 ) -> CheckpointResult:
     """Run the periodic checkpoint: strategic review + maintenance actions.
 
@@ -353,7 +426,7 @@ async def run_checkpoint(
 
     # ── 2. Parallel LLM calls ──
     # Index tracking: 0=meta-review, 1+=optional (squash, compress)
-    coros: list[Any] = [_meta_review_llm(llm, score_table, git_delta, notes_for_review)]
+    coros: list[Any] = [_meta_review_llm(llm, score_table, git_delta, notes_for_review, coverage_report)]
     squash_idx = -1
     compress_idx = -1
 
@@ -368,12 +441,13 @@ async def run_checkpoint(
 
     results = await asyncio.gather(*coros, return_exceptions=True)
 
-    # Extract meta-review result (always index 0)
+    # Extract meta-review result (always index 0) — now a (text, decision) tuple
+    decision: MetaReviewDecision | None = None
     if isinstance(results[0], Exception):
         log.warning("checkpoint: meta-review LLM failed: %s", results[0])
         meta_context = ""
     else:
-        meta_context = results[0]
+        meta_context, decision = results[0]
 
     # Extract squash groups (if requested)
     squash_groups = None
@@ -434,9 +508,16 @@ async def run_checkpoint(
         label, len(meta_context), squashed, tag_name or "(none)",
     )
 
+    if decision:
+        log.info(
+            "checkpoint: meta-review decision: action=%s reason=%s",
+            decision.action, decision.reason[:80],
+        )
+
     return CheckpointResult(
         meta_context=meta_context,
         head_hash=head_hash,
         squashed=squashed,
         tagged=tag_name,
+        decision=decision,
     )

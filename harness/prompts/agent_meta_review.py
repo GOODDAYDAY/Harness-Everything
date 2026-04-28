@@ -29,6 +29,29 @@ Guidelines:
     git delta and agent notes instead of score trends.
   * Keep the output under 500 words — the agent will read this every cycle
     until the next review.
+
+After the six analysis sections, you MUST output a JSON decision block on
+its own line, fenced in triple backticks with the ``json`` language tag:
+
+```json
+{"action": "continue", "reason": "scores are improving and current direction is productive"}
+```
+
+Valid actions:
+  * "continue" — the agent should keep going in the current direction.
+  * "pivot" — the agent should shift to a different focus area.  Include
+    a "pivot_direction" field with specific instructions (name files,
+    modules, or features to focus on next).
+  * "stop" — the mission is exhausted or the agent is stuck in an
+    unproductive loop.  The framework will terminate the agent gracefully.
+
+Decision criteria:
+  * "stop" when: 3+ cycles with no code changes AND no score improvement,
+    OR coverage is saturated AND scores are consistently high (>= 8).
+  * "pivot" when: coverage gaps show important untouched areas, OR scores
+    are declining on a specific dimension, OR the agent is repeating the
+    same work across cycles.
+  * "continue" in all other cases.
 """
 
 AGENT_META_REVIEW_USER = """\
@@ -39,6 +62,10 @@ $score_history
 ## Git Delta (since last review)
 
 $git_delta
+
+## Coverage Report (files touched across all cycles)
+
+$coverage_report
 
 ## Agent Notes (current)
 

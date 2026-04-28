@@ -2,7 +2,7 @@
 
 import pytest
 
-from harness.tools.path_utils import extract_written_paths, collect_changed_paths
+from harness.tools.path_utils import extract_written_paths, collect_changed_paths, collect_read_paths
 
 
 def test_extract_written_paths_single_path_tools():
@@ -326,6 +326,81 @@ def test_collect_changed_paths_empty_log():
     """Test collect_changed_paths with empty execution log."""
     assert collect_changed_paths([]) == []
     assert collect_changed_paths([], success_only=False) == []
+
+
+# ---------------------------------------------------------------------------
+# collect_read_paths tests
+# ---------------------------------------------------------------------------
+
+
+def test_collect_read_paths_empty_log():
+    """Test collect_read_paths with empty execution log."""
+    assert collect_read_paths([]) == []
+
+
+def test_collect_read_paths_read_file():
+    """Test collect_read_paths extracts paths from read_file entries."""
+    log = [
+        {"tool": "read_file", "input": {"path": "/tmp/a.py"}},
+        {"tool": "read_file", "input": {"path": "/tmp/b.py"}},
+    ]
+    assert collect_read_paths(log) == ["/tmp/a.py", "/tmp/b.py"]
+
+
+def test_collect_read_paths_batch_read_strings():
+    """Test collect_read_paths with batch_read using string paths."""
+    log = [
+        {"tool": "batch_read", "input": {"paths": ["/tmp/a.py", "/tmp/b.py"]}},
+    ]
+    assert collect_read_paths(log) == ["/tmp/a.py", "/tmp/b.py"]
+
+
+def test_collect_read_paths_batch_read_dicts():
+    """Test collect_read_paths with batch_read using dict paths."""
+    log = [
+        {
+            "tool": "batch_read",
+            "input": {
+                "paths": [
+                    {"path": "/tmp/a.py", "lines": "1-10"},
+                    {"path": "/tmp/b.py"},
+                ]
+            },
+        },
+    ]
+    assert collect_read_paths(log) == ["/tmp/a.py", "/tmp/b.py"]
+
+
+def test_collect_read_paths_deduplication():
+    """Test collect_read_paths deduplicates, preserving first-occurrence order."""
+    log = [
+        {"tool": "read_file", "input": {"path": "/tmp/a.py"}},
+        {"tool": "read_file", "input": {"path": "/tmp/b.py"}},
+        {"tool": "read_file", "input": {"path": "/tmp/a.py"}},  # duplicate
+        {"tool": "batch_read", "input": {"paths": ["/tmp/b.py", "/tmp/c.py"]}},
+    ]
+    assert collect_read_paths(log) == ["/tmp/a.py", "/tmp/b.py", "/tmp/c.py"]
+
+
+def test_collect_read_paths_ignores_write_tools():
+    """Test collect_read_paths ignores non-read tool entries."""
+    log = [
+        {"tool": "write_file", "input": {"path": "/tmp/w.py"}},
+        {"tool": "read_file", "input": {"path": "/tmp/r.py"}},
+        {"tool": "edit_file", "input": {"path": "/tmp/e.py"}},
+    ]
+    assert collect_read_paths(log) == ["/tmp/r.py"]
+
+
+def test_collect_read_paths_handles_missing_fields():
+    """Test collect_read_paths handles entries with missing input/path."""
+    log = [
+        {"tool": "read_file"},               # no input
+        {"tool": "read_file", "input": {}},   # no path
+        {"tool": "read_file", "input": {"path": ""}},  # empty path
+        {"tool": "batch_read", "input": {"paths": []}},  # empty list
+    ]
+    assert collect_read_paths(log) == []
 
 
 if __name__ == "__main__":

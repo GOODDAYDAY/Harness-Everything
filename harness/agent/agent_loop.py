@@ -45,7 +45,8 @@ from harness.core.hooks import (
 )
 from harness.evaluation.dual_evaluator import DualEvaluator
 from harness.tools import build_registry
-from harness.tools.path_utils import collect_changed_paths
+from harness.tools.path_utils import collect_changed_paths, collect_read_paths
+from harness.agent.coverage_tracker import CoverageTracker, collect_project_files
 from harness.agent.cycle_metrics import (
     collect_cycle_metrics,
     format_summary as format_metrics_summary,
@@ -184,7 +185,7 @@ class AgentResult:
 
     success: bool
     cycles_run: int
-    mission_status: str  # "complete" | "blocked" | "partial" | "exhausted"
+    mission_status: str  # "complete" | "blocked" | "partial" | "exhausted" | "stopped"
     total_tool_calls: int
     summary: str
     run_dir: str = ""
@@ -299,6 +300,7 @@ class AgentLoop:
         # Checkpoint state
         self._meta_review_context: str = ""
         self._last_review_hash: str = ""
+        self._coverage_tracker = CoverageTracker()
 
         self._install_signal_handlers()
 
@@ -546,7 +548,7 @@ class AgentLoop:
             system = self._build_system(cycle)
             user_msg = self._build_cycle_user_message(cycle)
             try:
-                text, exec_log = await self.llm.call_with_tools(
+                text, exec_log, llm_calls, conversation = await self.llm.call_with_tools(
                     [{"role": "user", "content": user_msg}],
                     self.registry,
                     system=system,
@@ -561,6 +563,8 @@ class AgentLoop:
             total_tool_calls += len(exec_log)
             elapsed = time.monotonic() - t_start
             changed_paths = collect_changed_paths(exec_log)
+            read_paths = collect_read_paths(exec_log)
+            self._coverage_tracker.update(read_paths, changed_paths)
             log.info(
                 "Agent cycle %d: %d tool calls in %.1fs",
                 cycles_run, len(exec_log), elapsed,
@@ -681,6 +685,17 @@ class AgentLoop:
             # actions (squash → tag) run sequentially with dependencies.
             interval = self.config.meta_review_interval
             if interval > 0 and cycles_run % interval == 0:
+                # Compute coverage report for meta-review (US-11)
+                coverage_report = ""
+                try:
+                    project_files = collect_project_files(
+                        self.config.harness.workspace,
+                    )
+                    cov = self._coverage_tracker.report(project_files)
+                    coverage_report = CoverageTracker.format_report(cov)
+                except Exception as exc:
+                    log.warning("Agent: coverage report failed: %s", exc)
+
                 cp = await agent_eval.run_checkpoint(
                     self.llm, cycle, self._score_history,
                     self._last_review_hash, self._read_notes(),
@@ -691,12 +706,41 @@ class AgentLoop:
                     tag_prefix=self.config.auto_tag_prefix,
                     tag_push=self.config.auto_tag_push,
                     push_remote=self.config.auto_push_remote,
+                    coverage_report=coverage_report,
                 )
                 self._meta_review_context = cp.meta_context
                 self._last_review_hash = cp.head_hash
 
+                # Enforce MetaReview decision (US-12)
+                if cp.decision is not None:
+                    if cp.decision.action == "stop":
+                        log.info(
+                            "Agent: MetaReview STOP: %s", cp.decision.reason,
+                        )
+                        mission_status = "stopped"
+                        final_summary = (
+                            f"MetaReview stopped the agent: {cp.decision.reason}"
+                        )
+                        break
+                    elif cp.decision.action == "pivot":
+                        log.info(
+                            "Agent: MetaReview PIVOT: %s → %s",
+                            cp.decision.reason,
+                            cp.decision.pivot_direction,
+                        )
+                        pivot_block = (
+                            f"**PIVOT DIRECTIVE**: {cp.decision.pivot_direction}\n"
+                            f"Reason: {cp.decision.reason}\n\n"
+                        )
+                        self._meta_review_context = (
+                            pivot_block + self._meta_review_context
+                        )
+
             # ── Phase 6: Persist ──
-            self._persist_cycle(cycle, text, exec_log, hook_failures)
+            self._persist_cycle(
+                cycle, text, exec_log, hook_failures,
+                llm_calls=llm_calls, conversation=conversation,
+            )
             summary = self._extract_cycle_summary(text, exec_log, hook_failures)
             if metrics_line:
                 summary = f"{metrics_line}\n{summary}"
@@ -761,6 +805,8 @@ class AgentLoop:
         text: str,
         exec_log: list[dict[str, Any]],
         hook_failures: list[str],
+        llm_calls: list[dict[str, Any]] | None = None,
+        conversation: list[dict[str, Any]] | None = None,
     ) -> None:
         seg = f"cycle_{cycle + 1}"
         try:
@@ -772,6 +818,16 @@ class AgentLoop:
             if hook_failures:
                 self.artifacts.write(
                     "\n".join(hook_failures), seg, "hook_failures.txt",
+                )
+            if llm_calls is not None:
+                self.artifacts.write(
+                    json.dumps(llm_calls, indent=2, default=str),
+                    seg, "llm_calls.json",
+                )
+            if conversation is not None:
+                self.artifacts.write(
+                    json.dumps(conversation, indent=2, default=str),
+                    seg, "conversation.json",
                 )
         except Exception as exc:
             log.warning("Agent: failed to persist cycle %d: %s", cycle + 1, exc)

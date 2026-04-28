@@ -99,3 +99,41 @@ As the notes file grows across many cycles, older entries become less actionable
 - Given the notes file has accumulated entries beyond the retention threshold, when compression runs at a checkpoint, then older entries are replaced with a condensed summary
 - Given compression produces output, when the notes file is rewritten, then the compressed summary precedes the retained recent entries
 - Given compression fails, when the error is caught, then the original notes file is left unchanged
+
+---
+
+## Structured MetaReview Decisions
+
+### US-10: As the evaluator, I need the strategic review to produce a structured decision (continue/pivot/stop) alongside its free-text analysis, so that the agent loop can enforce course corrections programmatically
+
+The MetaReview LLM outputs a JSON decision block in addition to the existing six free-text sections. The decision carries an action (`continue`, `pivot`, or `stop`), a reason, and an optional pivot direction. A fault-tolerant parser extracts this block; if parsing fails, the default is `continue` (preserving current behavior).
+
+#### Decision criteria
+- **stop**: 3+ consecutive cycles with no code changes AND no score improvement, OR coverage is saturated AND scores are consistently high (>= 8)
+- **pivot**: coverage gaps show important untouched areas, OR scores are declining on a specific dimension, OR the agent is repeating the same work
+- **continue**: all other cases
+
+#### Acceptance Criteria
+- Given the MetaReview LLM produces a valid JSON decision block, when the checkpoint parses the output, then a MetaReviewDecision with action/reason/pivot_direction is returned
+- Given the MetaReview LLM does not produce a valid JSON block, when parsing fails, then the default decision is `continue` and a warning is logged
+- Given the decision is `stop`, when the agent loop processes the checkpoint result, then the loop terminates with mission_status="stopped"
+- Given the decision is `pivot`, when the agent loop processes the checkpoint result, then a PIVOT DIRECTIVE is prepended to the strategic direction context
+- Given the decision is `continue`, when the agent loop processes the checkpoint result, then behavior is unchanged from before this feature
+
+### US-11: As the evaluator, I need cross-cycle file coverage tracking that reports which project files have been read or written across all cycles, so that MetaReview can make data-driven pivot decisions
+
+A CoverageTracker accumulates the set of files read and written across all cycles. At checkpoint time, it computes a coverage report comparing touched files against the full project file inventory. The report includes coverage ratio and a list of untouched important files (capped at 50). This report is injected into the MetaReview prompt.
+
+#### Acceptance Criteria
+- Given the agent has run N cycles, when a checkpoint occurs, then the coverage report reflects all files read or written across all N cycles (not just the latest)
+- Given a coverage report is computed, when it is formatted, then it includes total project files, files touched, coverage ratio, and up to 50 untouched files
+- Given the coverage report is formatted, when the MetaReview LLM runs, then the report appears in the user prompt between git delta and agent notes
+
+### US-12: As the framework, I need the agent loop to enforce MetaReview decisions as control-flow actions, so that diminishing returns are addressed without relying on the agent's own judgment
+
+After each checkpoint, the agent loop inspects the MetaReviewDecision. A `stop` decision terminates the loop gracefully (like MISSION COMPLETE but externally triggered). A `pivot` decision updates the strategic direction with a prominent directive. A `continue` decision leaves behavior unchanged.
+
+#### Acceptance Criteria
+- Given MetaReview returns action="stop", when the loop processes it, then the loop breaks with mission_status="stopped" and the reason is logged
+- Given MetaReview returns action="pivot" with a pivot_direction, when the loop processes it, then the next cycle's system prompt contains a PIVOT DIRECTIVE block before the existing strategic direction
+- Given MetaReview returns no decision (None), when the loop processes it, then behavior is identical to the pre-feature baseline

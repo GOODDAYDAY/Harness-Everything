@@ -45,6 +45,39 @@ def extract_written_paths(tool_name: str, params: dict[str, Any]) -> list[str]:
     return []
 
 
+def collect_read_paths(
+    execution_log: Iterable[dict[str, Any]],
+) -> list[str]:
+    """Dedupe the paths read across an entire tool-use log.
+
+    Extracts paths from ``batch_read`` and ``read_file`` tool calls.
+    Order-preserving: first occurrence wins.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for entry in execution_log:
+        tool = entry.get("tool", "")
+        inp = entry.get("input") or {}
+        paths: list[str] = []
+        if tool == "batch_read":
+            for fp in inp.get("paths", []):
+                if isinstance(fp, str):
+                    paths.append(fp)
+                elif isinstance(fp, dict):
+                    p = fp.get("path", "")
+                    if p:
+                        paths.append(p)
+        elif tool == "read_file":
+            p = inp.get("path", "")
+            if p:
+                paths.append(p)
+        for p in paths:
+            if p and p not in seen:
+                seen.add(p)
+                ordered.append(p)
+    return ordered
+
+
 def collect_changed_paths(
     execution_log: Iterable[dict[str, Any]],
     *,
