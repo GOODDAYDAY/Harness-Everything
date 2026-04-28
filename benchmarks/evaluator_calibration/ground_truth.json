@@ -1,0 +1,8 @@
+{
+  "excellent_cache_impl": 9.0,
+  "good_cache_with_issues": 6.5,
+  "mediocre_cache_wrong_eviction": 4.0,
+  "poor_cache_no_eviction": 2.5,
+  "very_poor_partial": 1.5,
+  "excellent_cleanup_impl": 8.5
+}
