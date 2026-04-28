@@ -9,9 +9,7 @@ from harness.pilot.feishu import (
     CardAction,
     FeishuClient,
     FeishuMessage,
-    build_no_action_card,
-    build_proposal_card,
-    build_report_card,
+    build_pilot_card,
 )
 
 
@@ -140,60 +138,81 @@ class TestDeduplication:
     def test_cache_eviction(self):
         """Oldest entries evicted when cache exceeds limit."""
         client = FeishuClient("a", "s")
-        # Fill cache beyond limit
         for i in range(1100):
             client._is_duplicate(f"msg_{i}")
-        # First entries should have been evicted
         assert client._is_duplicate("msg_0") is False
-        # Recent entries should still be cached
         assert client._is_duplicate("msg_1099") is True
 
 
-class TestCardBuilders:
-    """US-05: Feishu card construction."""
+class TestPilotCard:
+    """build_pilot_card — single card for all lifecycle phases."""
 
-    def test_US05_proposal_card_structure(self):
-        """US-05 AC-1: Proposal card has header, content, approve/reject buttons."""
-        card = build_proposal_card("## Findings\nscores dropped")
-        assert card["header"]["title"]["content"] == "Daily Improvement Proposal"
+    def test_discussing_card_has_buttons(self):
+        """Discussing status includes approve/reject buttons and branch info."""
+        card = build_pilot_card("## Findings\nscores dropped", "main", "discussing")
+        assert card["header"]["title"]["content"] == "每日改进提案"
         elements = card["elements"]
-        # First element is markdown content
-        assert elements[0]["tag"] == "markdown"
-        assert "scores dropped" in elements[0]["content"]
-        # Second element has action buttons
-        actions = elements[1]["actions"]
+        # Branch info
+        assert any("`main`" in e.get("content", "") for e in elements)
+        # Proposal content
+        assert any("scores dropped" in e.get("content", "") for e in elements)
+        # Action buttons
+        action_el = [e for e in elements if e.get("tag") == "action"][0]
+        actions = action_el["actions"]
         assert len(actions) == 2
         assert actions[0]["value"]["action"] == "approve"
         assert actions[1]["value"]["action"] == "reject"
 
-    def test_US05_report_card_complete_status(self):
-        """US-10: Report card shows execution summary."""
-        card = build_report_card(
-            cycles_run=30,
-            total_tool_calls=150,
-            mission_status="complete",
-            summary="Fixed error handling in dispatcher",
-        )
-        body = card["elements"][0]["content"]
-        assert "30" in body
-        assert "150" in body
-        assert "complete" in body
-        assert "Fixed error handling" in body
-        assert card["header"]["template"] == "green"
+    def test_approved_card_no_buttons(self):
+        """Approved status removes buttons, shows approval message."""
+        card = build_pilot_card("proposal text", "main", "approved")
+        assert "已批准" in card["header"]["title"]["content"]
+        assert not any(e.get("tag") == "action" for e in card["elements"])
 
-    def test_report_card_incomplete_status(self):
-        """Report card uses orange template for incomplete execution."""
-        card = build_report_card(
-            cycles_run=50,
-            total_tool_calls=200,
-            mission_status="cycle_limit",
-            summary="Partial progress",
+    def test_executing_card_shows_branch(self):
+        """Executing status shows the execution branch name."""
+        card = build_pilot_card(
+            "proposal text", "main", "executing",
+            result={"exec_branch": "pilot/20260428-0918"},
         )
-        assert card["header"]["template"] == "orange"
+        assert "执行中" in card["header"]["title"]["content"]
+        content = json.dumps(card, ensure_ascii=False)
+        assert "pilot/20260428-0918" in content
 
-    def test_US05_no_action_card(self):
-        """US-05 AC-3: No-action card is brief and green."""
-        card = build_no_action_card("All metrics within normal range.")
-        assert "All Clear" in card["header"]["title"]["content"]
+    def test_done_card_shows_results(self):
+        """Done status shows execution results and branch."""
+        card = build_pilot_card(
+            "proposal text", "main", "done",
+            result={
+                "exec_branch": "pilot/20260428-0918",
+                "cycles_run": 30,
+                "tool_calls": 150,
+                "mission_status": "complete",
+                "summary": "Fixed error handling",
+            },
+        )
+        assert "已完成" in card["header"]["title"]["content"]
         assert card["header"]["template"] == "green"
-        assert "normal range" in card["elements"][0]["content"]
+        content = json.dumps(card, ensure_ascii=False)
+        assert "30" in content
+        assert "150" in content
+        assert "Fixed error handling" in content
+        assert "pilot/20260428-0918" in content
+
+    def test_rejected_card(self):
+        """Rejected status shows rejection message."""
+        card = build_pilot_card("proposal text", "main", "rejected")
+        assert "已拒绝" in card["header"]["title"]["content"]
+        assert card["header"]["template"] == "red"
+        assert not any(e.get("tag") == "action" for e in card["elements"])
+
+    def test_expired_card(self):
+        """Expired status shows expiry message."""
+        card = build_pilot_card("proposal text", "main", "expired")
+        assert "已过期" in card["header"]["title"]["content"]
+
+    def test_no_action_card(self):
+        """No-action card is brief and green."""
+        card = build_pilot_card("All metrics normal", "main", "no_action")
+        assert "一切正常" in card["header"]["title"]["content"]
+        assert card["header"]["template"] == "green"

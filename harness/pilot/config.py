@@ -1,7 +1,8 @@
 """Pilot configuration — defines the complete config structure for the daily improvement loop.
 
-Separates Feishu credentials, schedule, diagnosis/execution agent configs, and discussion
-LLM settings into distinct sections.  Parsed from a single JSON file at startup.
+Projects, LLM settings, Feishu credentials, schedule, diagnosis/execution parameters,
+and discussion overrides are grouped into cohesive sections.  Parsed from a single JSON
+file at startup.
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULE_HOUR: int = 9
 _DEFAULT_SCHEDULE_MINUTE: int = 0
+_DEFAULT_DIAGNOSIS_MAX_CYCLES: int = 5
 _DEFAULT_EXECUTION_MAX_CYCLES: int = 50
 _DEFAULT_PROPOSAL_EXPIRY_HOURS: int = 24
 _DEFAULT_DISCUSSION_MAX_TOKENS: int = 8096
+_DEFAULT_MAX_TOKENS: int = 16384
 
 
 @dataclass
@@ -55,22 +58,42 @@ class ScheduleConfig:
 
 
 @dataclass
-class DiscussionConfig:
-    """LLM settings for the operator discussion phase."""
+class ProjectConfig:
+    """A single project that the pilot can analyze and modify."""
+
+    name: str
+    workspace: str
+    tools: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ProjectConfig:
+        """Parse a project config from a dict."""
+        if not data.get("name") or not data.get("workspace"):
+            raise ValueError("Each project must have 'name' and 'workspace'")
+        return cls(
+            name=data["name"],
+            workspace=data["workspace"],
+            tools=data.get("tools", {}),
+        )
+
+
+@dataclass
+class LLMConfig:
+    """Shared LLM settings used by diagnosis, execution, and discussion."""
 
     model: str = ""
     base_url: str = ""
     api_key: str = ""
-    max_tokens: int = _DEFAULT_DISCUSSION_MAX_TOKENS
+    max_tokens: int = _DEFAULT_MAX_TOKENS
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> DiscussionConfig:
-        """Parse discussion LLM config from a dict."""
+    def from_dict(cls, data: dict[str, Any]) -> LLMConfig:
+        """Parse LLM config from a dict."""
         return cls(
             model=data.get("model", ""),
             base_url=data.get("base_url", ""),
             api_key=data.get("api_key", ""),
-            max_tokens=data.get("max_tokens", _DEFAULT_DISCUSSION_MAX_TOKENS),
+            max_tokens=data.get("max_tokens", _DEFAULT_MAX_TOKENS),
         )
 
 
@@ -78,15 +101,20 @@ class DiscussionConfig:
 class PilotConfig:
     """Complete configuration for the pilot daemon.
 
-    Combines Feishu credentials, schedule, diagnosis agent config,
-    execution overrides, discussion LLM settings, and safety parameters.
+    Core structure:
+    - projects: list of repos to analyze/modify (workspace, tools per project)
+    - llm: shared LLM settings (model, base_url, api_key)
+    - feishu: notification channel
+    - schedule: when to trigger
+    - diagnosis/execution: agent run parameters (max_cycles, etc.)
     """
 
     feishu: FeishuConfig
     schedule: ScheduleConfig
-    diagnosis: dict[str, Any]
+    projects: list[ProjectConfig]
+    llm: LLMConfig
+    diagnosis: dict[str, Any] = field(default_factory=dict)
     execution: dict[str, Any] = field(default_factory=dict)
-    discussion: DiscussionConfig = field(default_factory=DiscussionConfig)
     proposal_expiry_hours: int = _DEFAULT_PROPOSAL_EXPIRY_HOURS
 
     @classmethod
@@ -95,94 +123,148 @@ class PilotConfig:
 
         Validates required sections and applies defaults for optional ones.
         """
-        # 1. Validate required sections
-        config = cls._validate_required_sections(data)
+        # 1. Strip comment keys
+        config = {k: v for k, v in data.items() if not str(k).startswith("//")}
 
-        # 2. Parse each section
+        # 2. Validate required sections
+        missing = []
+        if "feishu" not in config or not isinstance(config["feishu"], dict):
+            missing.append("feishu")
+        if "projects" not in config or not isinstance(config["projects"], list):
+            missing.append("projects")
+        if missing:
+            raise ValueError(f"Missing required pilot config sections: {', '.join(missing)}")
+
+        # 3. Parse each section
         feishu = FeishuConfig.from_dict(config["feishu"])
-        schedule = cls._parse_schedule(config.get("schedule", {}))
-        diagnosis = cls._parse_diagnosis(config["diagnosis"])
-        execution = config.get("execution", {})
-        discussion = DiscussionConfig.from_dict(config.get("discussion", {}))
+        schedule = ScheduleConfig(
+            hour=config.get("schedule", {}).get("hour", _DEFAULT_SCHEDULE_HOUR),
+            minute=config.get("schedule", {}).get("minute", _DEFAULT_SCHEDULE_MINUTE),
+        )
+        projects = [ProjectConfig.from_dict(p) for p in config["projects"]]
+        if not projects:
+            raise ValueError("At least one project is required")
+        llm = LLMConfig.from_dict(config.get("llm", {}))
 
-        # 3. Build config
+        # 4. Build config
         pilot = cls(
             feishu=feishu,
             schedule=schedule,
-            diagnosis=diagnosis,
-            execution=execution,
-            discussion=discussion,
+            projects=projects,
+            llm=llm,
+            diagnosis=config.get("diagnosis", {}),
+            execution=config.get("execution", {}),
             proposal_expiry_hours=config.get(
-                "proposal_expiry_hours", _DEFAULT_PROPOSAL_EXPIRY_HOURS
+                "proposal_expiry_hours", _DEFAULT_PROPOSAL_EXPIRY_HOURS,
             ),
         )
         log.info(
-            "PilotConfig loaded: schedule=%02d:%02d, execution_cycles=%d, expiry=%dh",
-            schedule.hour,
-            schedule.minute,
-            execution.get("max_cycles", _DEFAULT_EXECUTION_MAX_CYCLES),
-            pilot.proposal_expiry_hours,
+            "PilotConfig loaded: %d projects, schedule=%02d:%02d, expiry=%dh",
+            len(projects), schedule.hour, schedule.minute, pilot.proposal_expiry_hours,
         )
         return pilot
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  Agent config builders
+    # ══════════════════════════════════════════════════════════════════════
+
+    def build_diagnosis_agent_config(self, mission: str) -> dict[str, Any]:
+        """Build an AgentConfig-compatible dict for the diagnosis agent run.
+
+        The diagnosis agent has read-only tool access (file read, search, db_query)
+        so it can freely investigate production data and correlate with source code.
+        """
+        harness_cfg = self._build_harness_config()
+
+        # Restrict to read-only tools — diagnosis must not modify code
+        harness_cfg["allowed_tools"] = [
+            "batch_read", "grep_search", "glob_search", "tree",
+            "list_directory", "symbol_extractor", "code_analysis",
+            "cross_reference", "feature_search", "project_map",
+            "file_info", "data_flow", "call_graph",
+            "dependency_analyzer", "git_status", "git_diff", "git_log",
+            "context_budget", "scratchpad", "db_query",
+        ]
+
+        max_cycles = self.diagnosis.get("max_cycles", _DEFAULT_DIAGNOSIS_MAX_CYCLES)
+        return {
+            "harness": harness_cfg,
+            "mission": mission,
+            "max_cycles": max_cycles,
+            "auto_commit": False,
+            "auto_push": False,
+            "auto_evaluate": False,
+            "cycle_hooks": [],
+            "continuous": False,
+        }
 
     def build_execution_agent_config(self, mission: str) -> dict[str, Any]:
         """Build a complete AgentConfig-compatible dict for the execution run.
 
-        Merges execution overrides onto the diagnosis base (which provides
-        harness/workspace/tool settings), then sets the approved mission text.
+        Sets commit_repos so the agent commits in all project repos.
         """
-        cfg = dict(self.diagnosis)
-        cfg.update(self.execution)
-        cfg["mission"] = mission
-        cfg.setdefault("auto_commit", True)
-        cfg.setdefault("auto_push", False)
-        cfg.setdefault("max_cycles", _DEFAULT_EXECUTION_MAX_CYCLES)
-        cfg.setdefault("continuous", False)
-        log.debug("Built execution agent config, max_cycles=%d", cfg["max_cycles"])
-        return cfg
+        harness_cfg = self._build_harness_config()
+        execution = self.execution
+
+        # commit_repos: all project workspace paths (absolute)
+        commit_repos = [p.workspace for p in self.projects]
+
+        max_cycles = execution.get("max_cycles", _DEFAULT_EXECUTION_MAX_CYCLES)
+        return {
+            "harness": harness_cfg,
+            "mission": mission,
+            "max_cycles": max_cycles,
+            "commit_repos": commit_repos,
+            "auto_commit": execution.get("auto_commit", True),
+            "auto_push": execution.get("auto_push", False),
+            "auto_push_remote": execution.get("push_remote", "origin"),
+            "auto_push_branch": execution.get("push_branch", "main"),
+            "continuous": False,
+        }
 
     def build_discussion_harness_config(self) -> dict[str, Any]:
-        """Build a HarnessConfig-compatible dict for the discussion LLM.
-
-        Falls back to the diagnosis harness config for model/base_url/api_key
-        if the discussion section doesn't specify them.
-        """
-        diag_harness = self.diagnosis.get("harness", {})
+        """Build a HarnessConfig-compatible dict for the discussion LLM."""
         return {
-            "model": self.discussion.model or diag_harness.get("model", ""),
-            "base_url": self.discussion.base_url or diag_harness.get("base_url", ""),
-            "api_key": self.discussion.api_key or diag_harness.get("api_key", ""),
-            "max_tokens": self.discussion.max_tokens,
+            "model": self.llm.model,
+            "base_url": self.llm.base_url,
+            "api_key": self.llm.api_key,
+            "max_tokens": self.llm.max_tokens,
         }
 
     # ══════════════════════════════════════════════════════════════════════
     #  Private helpers
     # ══════════════════════════════════════════════════════════════════════
 
-    @staticmethod
-    def _validate_required_sections(data: dict[str, Any]) -> dict[str, Any]:
-        """Ensure required top-level sections exist."""
-        cleaned = {k: v for k, v in data.items() if not str(k).startswith("//")}
-        missing = []
-        if "feishu" not in cleaned or not isinstance(cleaned["feishu"], dict):
-            missing.append("feishu")
-        if "diagnosis" not in cleaned or not isinstance(cleaned["diagnosis"], dict):
-            missing.append("diagnosis")
-        if missing:
-            raise ValueError(f"Missing required pilot config sections: {', '.join(missing)}")
-        return cleaned
+    def _build_harness_config(self) -> dict[str, Any]:
+        """Build the common harness config section from projects + llm.
 
-    @staticmethod
-    def _parse_schedule(data: dict[str, Any]) -> ScheduleConfig:
-        """Parse schedule config with defaults."""
-        return ScheduleConfig(
-            hour=data.get("hour", _DEFAULT_SCHEDULE_HOUR),
-            minute=data.get("minute", _DEFAULT_SCHEDULE_MINUTE),
-        )
+        First project is the workspace; others are allowed_paths.
+        Tool configs from all projects are merged.
+        """
+        primary = self.projects[0]
+        harness: dict[str, Any] = {
+            "workspace": primary.workspace,
+            "model": self.llm.model,
+            "base_url": self.llm.base_url,
+            "api_key": self.llm.api_key,
+            "max_tokens": self.llm.max_tokens,
+        }
 
-    @staticmethod
-    def _parse_diagnosis(data: dict[str, Any]) -> dict[str, Any]:
-        """Validate diagnosis config has a harness section."""
-        if "harness" not in data or not isinstance(data["harness"], dict):
-            raise ValueError("diagnosis section must contain a 'harness' dict")
-        return data
+        # allowed_paths = all project workspaces
+        if len(self.projects) > 1:
+            harness["allowed_paths"] = [p.workspace for p in self.projects]
+
+        # Merge extra_tools and tool_config from all projects
+        extra_tools: list[str] = []
+        tool_config: dict[str, Any] = {}
+        for project in self.projects:
+            for tool_name, config in project.tools.items():
+                if tool_name not in extra_tools:
+                    extra_tools.append(tool_name)
+                tool_config[tool_name] = config
+
+        if extra_tools:
+            harness["extra_tools"] = extra_tools
+            harness["tool_config"] = tool_config
+
+        return harness

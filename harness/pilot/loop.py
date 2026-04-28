@@ -25,9 +25,7 @@ from harness.pilot.feishu import (
     CardAction,
     FeishuClient,
     FeishuMessage,
-    build_no_action_card,
-    build_proposal_card,
-    build_report_card,
+    build_pilot_card,
 )
 
 log = logging.getLogger(__name__)
@@ -67,6 +65,9 @@ class PilotLoop:
         self._approval_event = asyncio.Event()
         self._rejection_event = asyncio.Event()
         self._last_review_hash: str = ""
+        self._card_message_id: str | None = None
+        self._source_branch: str = ""
+        self._exec_branch: str = ""
 
     async def run(self) -> None:
         """Start the pilot daemon: connect to Feishu, schedule daily runs.
@@ -128,47 +129,51 @@ class PilotLoop:
         finally:
             self._transition(PilotState.IDLE)
 
-    # ── Phase: Diagnosis (meta-review) ──────────────────────────────────
+    # ── Phase: Diagnosis ──────────────────────────────────────────────────
 
     async def _run_diagnosis(self) -> tuple[str, str]:
-        """Run a checkpoint-style meta-review to produce an improvement proposal.
+        """Run a diagnosis agent to investigate production data and source code.
 
-        Reuses the harness meta-review mechanism: analyzes git delta and
-        proposal history to identify improvement opportunities.  No code
-        changes are made — this is a read-only analysis.
+        The agent has full tool access (db_query, file read, search) and freely
+        orchestrates its own investigation.  Returns (proposal, diagnostic_context).
         """
         self._transition(PilotState.DIAGNOSING)
 
-        # 1. Resolve workspace and load persistent state
-        repo_path = self._resolve_workspace()
-        since_hash = self._load_last_review_hash()
-        proposal_notes = self._format_proposal_history()
+        # 1. Get current branch for context
+        self._source_branch = await self._get_current_branch()
 
-        # 2. Gather git delta as diagnostic context
-        from harness.agent import agent_git
-        git_delta = await agent_git.get_review_git_delta(
-            repo_path, since_hash or "HEAD~20",
+        # 2. Build mission from template + proposal history + project list
+        from harness.pilot.prompts import DIAGNOSIS_MISSION
+        project_lines = []
+        for p in self._config.projects:
+            tools_note = f"（工具：{', '.join(p.tools.keys())}）" if p.tools else ""
+            project_lines.append(f"- **{p.name}**: `{p.workspace}` {tools_note}")
+        mission = DIAGNOSIS_MISSION.replace(
+            "$project_list", "\n".join(project_lines),
+        ).replace(
+            "$proposal_history", self._format_proposal_history(),
         )
 
-        # 3. Format score history (empty — pilot doesn't track eval scores)
-        from harness.agent.agent_eval import format_score_history
-        score_table = format_score_history([])
+        # 3. Run diagnosis agent
+        agent_config = self._config.build_diagnosis_agent_config(mission)
+        result = await self._run_agent(agent_config)
+        proposal = (result.summary or "").strip()
 
-        # 4. Run meta-review LLM
-        from harness.agent.agent_eval import _meta_review_llm
-        llm = self._create_discussion_llm()
-        proposal = await _meta_review_llm(llm, score_table, git_delta, proposal_notes)
-
-        # 5. Update review hash for next run
-        head_hash = await agent_git.get_head_hash(repo_path)
+        # 4. Update review hash
+        from harness.agent import agent_git
+        head_hash = await agent_git.get_head_hash(self._resolve_workspace())
         self._save_last_review_hash(head_hash)
         self._last_review_hash = head_hash
 
-        log.info(
-            "Diagnosis complete, proposal_len=%d, context_len=%d",
-            len(proposal), len(git_delta),
+        diagnostic_context = (
+            f"诊断 agent 运行了 {result.cycles_run} 轮，"
+            f"使用了 {result.total_tool_calls} 次工具调用。"
         )
-        return proposal, git_delta
+        log.info(
+            "Diagnosis complete, branch=%s, proposal_len=%d, cycles=%d, tool_calls=%d",
+            self._source_branch, len(proposal), result.cycles_run, result.total_tool_calls,
+        )
+        return proposal, diagnostic_context
 
     # ── Phase: Notification ──────────────────────────────────────────────
 
@@ -177,13 +182,15 @@ class PilotLoop:
         self._transition(PilotState.NOTIFYING)
         self._proposal = proposal
         self._proposal_timestamp = time.time()
-        card = build_proposal_card(proposal)
-        await self._feishu.send_card(self._config.feishu.chat_id, card)
+        card = build_pilot_card(proposal, self._source_branch, status="discussing")
+        self._card_message_id = await self._feishu.send_card(
+            self._config.feishu.chat_id, card,
+        )
         log.info("Proposal sent to Feishu, chat_id=%s", self._config.feishu.chat_id)
 
     async def _notify_no_action(self, summary: str) -> None:
         """Send a brief 'all clear' notification when no issues found."""
-        card = build_no_action_card(summary)
+        card = build_pilot_card(summary, self._source_branch, status="no_action")
         await self._feishu.send_card(self._config.feishu.chat_id, card)
         log.info("No-action notification sent")
 
@@ -194,7 +201,7 @@ class PilotLoop:
         stack traces into the Feishu chat.
         """
         sanitized = error_msg.split("\n")[0][:200]
-        text = f"⚠️ Improvement cycle failed: {sanitized}"
+        text = f"⚠️ 改进周期执行失败: {sanitized}"
         await self._feishu.send_text(self._config.feishu.chat_id, text)
 
     # ── Phase: Discussion ────────────────────────────────────────────────
@@ -246,10 +253,7 @@ class PilotLoop:
 
             if self._approval_event.is_set():
                 log.info("Proposal approved by operator")
-                await self._feishu.send_text(
-                    self._config.feishu.chat_id,
-                    "✅ Proposal approved. Starting execution...",
-                )
+                await self._update_card("approved")
                 return True
 
             if self._rejection_event.is_set():
@@ -258,10 +262,7 @@ class PilotLoop:
 
             # Timeout — proposal expired
             log.info("Proposal expired after %dh", self._config.proposal_expiry_hours)
-            await self._feishu.send_text(
-                self._config.feishu.chat_id,
-                f"⏰ Proposal expired (no response within {self._config.proposal_expiry_hours}h).",
-            )
+            await self._update_card("expired")
             return False
 
         except Exception as exc:
@@ -271,23 +272,34 @@ class PilotLoop:
     # ── Phase: Execution ─────────────────────────────────────────────────
 
     async def _run_execution(self) -> Any:
-        """Run a harness agent with the approved proposal as mission."""
+        """Run a harness agent with the approved proposal as mission.
+
+        Creates a new branch for isolation before executing, so that
+        changes can be reviewed and merged manually by the operator.
+        """
         self._transition(PilotState.EXECUTING)
 
+        # 1. Create isolated branch for execution
+        self._exec_branch = await self._create_exec_branch()
+        await self._update_card("executing", {"exec_branch": self._exec_branch})
+
+        # 2. Run agent on the new branch
         mission = self._discussion.current_proposal if self._discussion else self._proposal
         agent_config = self._config.build_execution_agent_config(mission)
         result = await self._run_agent(agent_config)
 
         log.info(
-            "Execution complete, cycles=%d, tool_calls=%d, status=%s",
-            result.cycles_run, result.total_tool_calls, result.mission_status,
+            "Execution complete, branch=%s, cycles=%d, tool_calls=%d, status=%s",
+            self._exec_branch, result.cycles_run, result.total_tool_calls,
+            result.mission_status,
         )
         return result
 
     async def _post_execution_cleanup(self) -> None:
-        """Squash commits and push to remote after execution completes.
+        """Squash commits on the execution branch after execution completes.
 
         Reuses the harness checkpoint mechanism for squash grouping.
+        Does NOT push or merge — the operator handles that manually.
         """
         from harness.agent import agent_eval, agent_git
 
@@ -308,36 +320,28 @@ class PilotLoop:
             auto_tag=False,
         )
         if cp.squashed:
-            log.info("Post-execution squash complete")
+            log.info("Post-execution squash complete on branch %s", self._exec_branch)
 
-        # 2. Push to remote
-        execution = self._config.execution
-        if execution.get("auto_push", True):
-            remote = execution.get("push_remote", "origin")
-            branch = execution.get("push_branch", "main")
-            pushed = await agent_git.push_head([repo_path], remote, branch, 0)
-            if pushed:
-                log.info("Pushed to %s/%s", remote, branch)
-            else:
-                log.warning("Push to %s/%s failed", remote, branch)
-
-        # 3. Update review hash
+        # 2. Update review hash (no push — operator handles merge manually)
         self._last_review_hash = cp.head_hash
         self._save_last_review_hash(cp.head_hash)
+
+        # 3. Checkout back to source branch
+        await self._checkout_branch(self._source_branch)
 
     # ── Phase: Reporting ─────────────────────────────────────────────────
 
     async def _report_results(self, result: Any) -> None:
-        """Send execution results back to the Feishu group."""
+        """Update the pilot card with execution results."""
         self._transition(PilotState.REPORTING)
-        card = build_report_card(
-            cycles_run=result.cycles_run,
-            total_tool_calls=result.total_tool_calls,
-            mission_status=result.mission_status,
-            summary=result.summary[:2000],
-        )
-        await self._feishu.send_card(self._config.feishu.chat_id, card)
-        log.info("Execution report sent to Feishu")
+        await self._update_card("done", {
+            "exec_branch": self._exec_branch,
+            "cycles_run": result.cycles_run,
+            "tool_calls": result.total_tool_calls,
+            "mission_status": result.mission_status,
+            "summary": result.summary or "",
+        })
+        log.info("Execution report updated on card")
 
     # ══════════════════════════════════════════════════════════════════════
     #  Feishu event handlers
@@ -348,27 +352,30 @@ class PilotLoop:
         if self._state == PilotState.DISCUSSING and self._discussion:
             await self._handle_discussion_message(msg)
         elif self._state in (PilotState.DIAGNOSING, PilotState.EXECUTING):
+            state_label = "正在诊断" if self._state == PilotState.DIAGNOSING else "正在执行"
             await self._feishu.send_text(
                 msg.chat_id,
-                f"⏳ Currently {self._state.value}. Please wait.",
+                f"⏳ {state_label}中，请稍候。",
             )
         else:
             await self._feishu.send_text(
                 msg.chat_id,
-                "💤 No active proposal. Next check at "
-                f"{self._config.schedule.hour:02d}:{self._config.schedule.minute:02d}.",
+                "💤 当前没有活跃提案。下次检查时间："
+                f"{self._config.schedule.hour:02d}:{self._config.schedule.minute:02d}",
             )
 
     async def _handle_discussion_message(self, msg: FeishuMessage) -> None:
         """Process a message during the discussion phase."""
+        # Acknowledge receipt with a reaction
+        await self._feishu.add_reaction(msg.message_id)
+
         text_lower = msg.text.lower().strip()
 
         # Check for text-based approval
         if text_lower in _APPROVAL_KEYWORDS:
             await self._feishu.send_text(
                 msg.chat_id,
-                "Detected approval keyword. Confirming: proceed with execution?  "
-                "Reply 'yes' or click Approve on the card.",
+                "检测到批准关键词，确认要执行吗？回复「确认」或点卡片上的「批准执行」按钮。",
             )
             return
 
@@ -391,10 +398,7 @@ class PilotLoop:
             self._approval_event.set()
         elif action.action == "reject":
             self._rejection_event.set()
-            await self._feishu.send_text(
-                self._config.feishu.chat_id,
-                "❌ Proposal rejected.",
-            )
+            await self._update_card("rejected")
         else:
             log.warning("Unknown card action: %s", action.action)
 
@@ -466,8 +470,102 @@ class PilotLoop:
         return LLM(harness_cfg)
 
     def _resolve_workspace(self) -> Path:
-        """Resolve the target project workspace path from diagnosis config."""
-        return Path(self._config.diagnosis["harness"]["workspace"])
+        """Resolve the primary project workspace path (first project)."""
+        return Path(self._config.projects[0].workspace)
+
+    def _resolve_workspaces(self) -> list[Path]:
+        """Resolve all project workspace paths."""
+        return [Path(p.workspace) for p in self._config.projects]
+
+    async def _update_card(
+        self, status: str, result: dict[str, Any] | None = None,
+    ) -> None:
+        """Update the pilot card to reflect a new lifecycle status."""
+        if not self._card_message_id:
+            log.warning("No card message_id to update")
+            return
+        card = build_pilot_card(
+            self._proposal, self._source_branch, status=status, result=result,
+        )
+        await self._feishu.update_card(self._card_message_id, card)
+
+    async def _get_current_branch(self) -> str:
+        """Get the current branch name of the workspace repo."""
+        repo = self._resolve_workspace()
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=str(repo),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        branch = stdout.decode().strip() if stdout else "unknown"
+        log.debug("Current branch: %s", branch)
+        return branch
+
+    async def _pull_latest(self) -> None:
+        """Force pull the latest code from remote for all projects.
+
+        Ensures the execution branch is based on the most recent upstream state.
+        """
+        for repo in self._resolve_workspaces():
+            proc = await asyncio.create_subprocess_exec(
+                "git", "pull", "--ff-only",
+                cwd=str(repo),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode != 0:
+                branch = self._source_branch
+                log.warning("git pull --ff-only failed in %s, trying reset to origin/%s", repo, branch)
+                proc2 = await asyncio.create_subprocess_exec(
+                    "git", "reset", "--hard", f"origin/{branch}",
+                    cwd=str(repo),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc2.communicate()
+            log.info("Pulled latest in %s", repo.name)
+
+    async def _create_exec_branch(self) -> str:
+        """Pull latest and create a new branch in all projects for execution isolation.
+
+        Branch name format: pilot/YYYYMMDD-HHMM
+        """
+        await self._pull_latest()
+
+        branch_name = f"pilot/{datetime.now().strftime('%Y%m%d-%H%M')}"
+        for repo in self._resolve_workspaces():
+            proc = await asyncio.create_subprocess_exec(
+                "git", "checkout", "-b", branch_name,
+                cwd=str(repo),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                err = stderr.decode().strip() if stderr else "unknown error"
+                log.error("Failed to create branch %s in %s: %s", branch_name, repo.name, err)
+                raise RuntimeError(f"无法创建执行分支 {branch_name} ({repo.name}): {err}")
+            log.info("Created execution branch %s in %s", branch_name, repo.name)
+        return branch_name
+
+    async def _checkout_branch(self, branch: str) -> None:
+        """Checkout an existing branch in all project repos."""
+        for repo in self._resolve_workspaces():
+            proc = await asyncio.create_subprocess_exec(
+                "git", "checkout", branch,
+                cwd=str(repo),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                err = stderr.decode().strip() if stderr else "unknown error"
+                log.warning("Failed to checkout %s in %s: %s", branch, repo.name, err)
+            else:
+                log.info("Checked out %s in %s", branch, repo.name)
 
     def _transition(self, new_state: PilotState) -> None:
         """Transition to a new state, logging the change."""

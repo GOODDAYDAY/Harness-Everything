@@ -17,10 +17,7 @@ def _minimal_config() -> PilotConfig:
     """Create a minimal PilotConfig for testing."""
     return PilotConfig.from_dict({
         "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-        "diagnosis": {
-            "harness": {"model": "test", "workspace": "/tmp/test-workspace"},
-            "mission": "diagnose",
-        },
+        "projects": [{"name": "TestProject", "workspace": "/tmp/test-workspace"}],
         "proposal_expiry_hours": 1,
     })
 
@@ -88,35 +85,63 @@ class TestScheduler:
 
 
 class TestDiagnosis:
-    """US-03, US-04: Diagnosis via meta-review."""
+    """US-03, US-04: Diagnosis via agent run."""
 
     @pytest.mark.asyncio
-    async def test_US03_diagnosis_calls_meta_review(self):
-        """US-03: Diagnosis runs meta-review LLM instead of full AgentLoop."""
+    async def test_US03_diagnosis_runs_agent(self):
+        """US-03: Diagnosis runs an agent with tools to investigate freely."""
         loop = PilotLoop(_minimal_config())
-        loop._create_discussion_llm = MagicMock(return_value=MagicMock())
 
-        with patch("harness.agent.agent_git.get_review_git_delta", new_callable=AsyncMock, return_value="git log delta...") as mock_delta, \
-             patch("harness.agent.agent_git.get_head_hash", new_callable=AsyncMock, return_value="def456"), \
-             patch("harness.agent.agent_eval.format_score_history", return_value="(no scores)"), \
-             patch("harness.agent.agent_eval._meta_review_llm", new_callable=AsyncMock, return_value="## Direction\nFix errors") as mock_mr, \
-             patch.object(loop, "_load_last_review_hash", return_value="abc123"), \
+        mock_result = _make_agent_result(
+            summary="### 发现\n错误处理有问题",
+            cycles_run=3,
+            total_tool_calls=15,
+            mission_status="complete",
+        )
+
+        with patch("harness.agent.agent_git.get_head_hash", new_callable=AsyncMock, return_value="def456"), \
              patch.object(loop, "_format_proposal_history", return_value="(No previous)"), \
              patch.object(loop, "_save_last_review_hash"), \
-             patch.object(loop, "_resolve_workspace", return_value=Path("/tmp/ws")):
+             patch.object(loop, "_resolve_workspace", return_value=Path("/tmp/ws")), \
+             patch.object(loop, "_get_current_branch", new_callable=AsyncMock, return_value="main"), \
+             patch.object(loop, "_run_agent", new_callable=AsyncMock, return_value=mock_result) as mock_agent:
 
             proposal, context = await loop._run_diagnosis()
 
-            # Meta-review was called with correct inputs
-            mock_mr.assert_called_once()
-            call_args = mock_mr.call_args
-            assert call_args[0][1] == "(no scores)"  # score_table
-            assert call_args[0][2] == "git log delta..."  # git_delta
-            assert call_args[0][3] == "(No previous)"  # notes
+            # Agent was run with diagnosis mission
+            mock_agent.assert_called_once()
+            agent_config = mock_agent.call_args[0][0]
+            mission = agent_config["mission"]
+            assert "改进顾问" in mission
+            assert "(No previous)" in mission
+            assert agent_config["auto_commit"] is False
+            assert agent_config["auto_evaluate"] is False
 
-            # Returns proposal and git delta as context
-            assert proposal == "## Direction\nFix errors"
-            assert context == "git log delta..."
+            # Returns proposal from agent summary
+            assert proposal == "### 发现\n错误处理有问题"
+            assert "3 轮" in context
+
+            # Branch was captured
+            assert loop._source_branch == "main"
+
+    @pytest.mark.asyncio
+    async def test_US03_diagnosis_builds_config_with_db_query(self):
+        """US-03: Diagnosis agent config includes db_query tool."""
+        config = PilotConfig.from_dict({
+            "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
+            "projects": [{
+                "name": "TestProject",
+                "workspace": "/tmp/test-workspace",
+                "tools": {"db_query": {"dsn": "postgresql://user:pass@host/db"}},
+            }],
+            "diagnosis": {"max_cycles": 3},
+        })
+
+        agent_cfg = config.build_diagnosis_agent_config("test mission")
+        assert "db_query" in agent_cfg["harness"]["extra_tools"]
+        assert agent_cfg["harness"]["tool_config"]["db_query"]["dsn"] == "postgresql://user:pass@host/db"
+        assert agent_cfg["max_cycles"] == 3
+        assert agent_cfg["auto_commit"] is False
 
     def test_US04_no_action_detection(self):
         """US-04 AC-2: Detects 'no action needed' proposals."""
@@ -125,20 +150,19 @@ class TestDiagnosis:
 
 
 class TestPostExecution:
-    """Post-execution squash + push via checkpoint."""
+    """Post-execution squash (no push — operator handles manually)."""
 
     @pytest.mark.asyncio
-    async def test_post_execution_squash_and_push(self):
-        """Execution cleanup calls checkpoint squash + push_head."""
+    async def test_post_execution_squash_no_push(self):
+        """Execution cleanup calls checkpoint squash but does NOT push."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": "/tmp/ws"},
-            },
+            "projects": [{"name": "TestProject", "workspace": "/tmp/ws"}],
             "execution": {"auto_push": True, "push_remote": "origin", "push_branch": "main"},
         })
         loop = PilotLoop(config)
         loop._last_review_hash = "abc123"
+        loop._exec_branch = "pilot/20260428-0918"
         loop._create_discussion_llm = MagicMock(return_value=MagicMock())
 
         mock_cp_result = MagicMock()
@@ -146,8 +170,9 @@ class TestPostExecution:
         mock_cp_result.head_hash = "new_hash"
 
         with patch("harness.agent.agent_eval.run_checkpoint", new_callable=AsyncMock, return_value=mock_cp_result) as mock_cp, \
-             patch("harness.agent.agent_git.push_head", new_callable=AsyncMock, return_value=True) as mock_push, \
-             patch.object(loop, "_save_last_review_hash"):
+             patch("harness.agent.agent_git.push_head", new_callable=AsyncMock) as mock_push, \
+             patch.object(loop, "_save_last_review_hash"), \
+             patch.object(loop, "_checkout_branch", new_callable=AsyncMock) as mock_checkout:
 
             await loop._post_execution_cleanup()
 
@@ -156,37 +181,11 @@ class TestPostExecution:
             call_kwargs = mock_cp.call_args
             assert call_kwargs[1]["auto_squash"] is True
 
-            # Push was called
-            mock_push.assert_called_once()
-            push_args = mock_push.call_args[0]
-            assert push_args[1] == "origin"
-            assert push_args[2] == "main"
-
-    @pytest.mark.asyncio
-    async def test_post_execution_no_push_when_disabled(self):
-        """No push when auto_push is false."""
-        config = PilotConfig.from_dict({
-            "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": "/tmp/ws"},
-            },
-            "execution": {"auto_push": False},
-        })
-        loop = PilotLoop(config)
-        loop._last_review_hash = "abc123"
-        loop._create_discussion_llm = MagicMock(return_value=MagicMock())
-
-        mock_cp_result = MagicMock()
-        mock_cp_result.squashed = False
-        mock_cp_result.head_hash = "hash2"
-
-        with patch("harness.agent.agent_eval.run_checkpoint", new_callable=AsyncMock, return_value=mock_cp_result), \
-             patch("harness.agent.agent_git.push_head", new_callable=AsyncMock) as mock_push, \
-             patch.object(loop, "_save_last_review_hash"):
-
-            await loop._post_execution_cleanup()
-
+            # Push was NOT called (operator handles manually)
             mock_push.assert_not_called()
+
+            # Checked out back to source branch
+            mock_checkout.assert_called_once()
 
 
 class TestProposalHistory:
@@ -196,9 +195,7 @@ class TestProposalHistory:
         """Proposal records are persisted and retrievable."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": str(tmp_path)},
-            },
+            "projects": [{"name": "TestProject", "workspace": str(tmp_path)}],
         })
         loop = PilotLoop(config)
 
@@ -218,9 +215,7 @@ class TestProposalHistory:
         """History is formatted as notes for meta-review LLM."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": str(tmp_path)},
-            },
+            "projects": [{"name": "TestProject", "workspace": str(tmp_path)}],
         })
         loop = PilotLoop(config)
 
@@ -235,9 +230,7 @@ class TestProposalHistory:
         """Empty history returns placeholder text."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": str(tmp_path)},
-            },
+            "projects": [{"name": "TestProject", "workspace": str(tmp_path)}],
         })
         loop = PilotLoop(config)
         assert "No previous" in loop._format_proposal_history()
@@ -246,9 +239,7 @@ class TestProposalHistory:
         """Review hash is persisted across saves."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": str(tmp_path)},
-            },
+            "projects": [{"name": "TestProject", "workspace": str(tmp_path)}],
         })
         loop = PilotLoop(config)
 
@@ -259,9 +250,7 @@ class TestProposalHistory:
         """History is bounded to _MAX_PROPOSAL_HISTORY entries."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {
-                "harness": {"model": "test", "workspace": str(tmp_path)},
-            },
+            "projects": [{"name": "TestProject", "workspace": str(tmp_path)}],
         })
         loop = PilotLoop(config)
 
@@ -295,11 +284,14 @@ class TestApprovalFlow:
 
     @pytest.mark.asyncio
     async def test_US08_card_reject(self):
-        """US-08 AC-2: Card 'Reject' button sets rejection event."""
+        """US-08 AC-2: Card 'Reject' button sets rejection event and updates card."""
         loop = PilotLoop(_minimal_config())
         loop._state = PilotState.DISCUSSING
+        loop._proposal = "test proposal"
+        loop._source_branch = "main"
+        loop._card_message_id = "msg_card_1"
         loop._feishu = MagicMock()
-        loop._feishu.send_text = AsyncMock()
+        loop._feishu.update_card = AsyncMock(return_value=True)
 
         action = CardAction(
             action="reject",
@@ -310,6 +302,8 @@ class TestApprovalFlow:
         )
         await loop._handle_feishu_card_action(action)
         assert loop._rejection_event.is_set()
+        # Card should be updated to rejected status
+        loop._feishu.update_card.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_US08_card_action_ignored_outside_discussion(self):
@@ -335,6 +329,7 @@ class TestApprovalFlow:
         loop._discussion = MagicMock()
         loop._feishu = MagicMock()
         loop._feishu.send_text = AsyncMock()
+        loop._feishu.add_reaction = AsyncMock()
 
         # Step 1: keyword detected → asks for confirmation
         msg = FeishuMessage(
@@ -380,7 +375,7 @@ class TestMessageRouting:
         )
         await loop._handle_feishu_message(msg)
         call_text = loop._feishu.send_text.call_args[0][1]
-        assert "No active proposal" in call_text
+        assert "没有活跃提案" in call_text
 
     @pytest.mark.asyncio
     async def test_message_during_execution(self):
@@ -399,7 +394,7 @@ class TestMessageRouting:
         )
         await loop._handle_feishu_message(msg)
         call_text = loop._feishu.send_text.call_args[0][1]
-        assert "executing" in call_text.lower() or "wait" in call_text.lower()
+        assert "正在执行" in call_text or "稍候" in call_text
 
     @pytest.mark.asyncio
     async def test_message_during_discussion_routed_to_llm(self):
@@ -410,6 +405,7 @@ class TestMessageRouting:
         loop._discussion.respond = AsyncMock(return_value="LLM answer")
         loop._feishu = MagicMock()
         loop._feishu.send_markdown = AsyncMock()
+        loop._feishu.add_reaction = AsyncMock()
 
         msg = FeishuMessage(
             chat_id="oc_test",
@@ -431,12 +427,56 @@ class TestProposalExpiry:
         """US-11: Proposal expires when timeout elapses without decision."""
         config = PilotConfig.from_dict({
             "feishu": {"app_id": "a", "app_secret": "s", "chat_id": "oc_test"},
-            "diagnosis": {"harness": {"model": "test", "workspace": "/tmp/ws"}, "mission": "x"},
+            "projects": [{"name": "TestProject", "workspace": "/tmp/ws"}],
             "proposal_expiry_hours": 0,
         })
         loop = PilotLoop(config)
+        loop._proposal = "test"
+        loop._source_branch = "main"
+        loop._card_message_id = "msg_card_1"
         loop._feishu = MagicMock()
-        loop._feishu.send_text = AsyncMock()
+        loop._feishu.update_card = AsyncMock(return_value=True)
 
         result = await loop._wait_for_decision()
         assert result is False
+        # Card should be updated to expired status
+        loop._feishu.update_card.assert_called_once()
+
+
+class TestBranchOperations:
+    """Execution branch creation for isolation."""
+
+    @pytest.mark.asyncio
+    async def test_create_exec_branch_name_format(self):
+        """Branch name follows pilot/YYYYMMDD-HHMM pattern."""
+        loop = PilotLoop(_minimal_config())
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_exec.return_value = mock_proc
+
+            branch = await loop._create_exec_branch()
+
+            assert branch.startswith("pilot/")
+            # Verify git checkout -b was called
+            call_args = mock_exec.call_args[0]
+            assert call_args[0] == "git"
+            assert call_args[1] == "checkout"
+            assert call_args[2] == "-b"
+            assert call_args[3] == branch
+
+    @pytest.mark.asyncio
+    async def test_get_current_branch(self):
+        """Gets the current branch name from git."""
+        loop = PilotLoop(_minimal_config())
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate = AsyncMock(return_value=(b"feat/harness\n", b""))
+            mock_exec.return_value = mock_proc
+
+            branch = await loop._get_current_branch()
+            assert branch == "feat/harness"

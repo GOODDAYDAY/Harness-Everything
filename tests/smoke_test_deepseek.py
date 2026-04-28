@@ -61,7 +61,7 @@ async def main() -> int:
     print(f"Expected:   {expected_lines} lines")
     print()
 
-    final_text, exec_log = await llm.call_with_tools(
+    final_text, exec_log, _llm_calls, _conv = await llm.call_with_tools(
         messages=[{"role": "user", "content": prompt}],
         registry=registry,
     )

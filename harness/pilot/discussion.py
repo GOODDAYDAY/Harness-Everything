@@ -12,35 +12,16 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT_TEMPLATE = """\
-You are discussing an improvement proposal for a software project.
+_SYSTEM_PROMPT_TEMPLATE: str = ""  # loaded from prompts module at runtime
 
-## Original Proposal
 
-{proposal}
-
-## Diagnostic Data
-
-The following data was collected during the diagnostic phase (database queries,
-log analysis, code inspection results).  Use it to answer the operator's
-questions with specific numbers and evidence.
-
-{diagnostic_context}
-
-## Instructions
-
-- Answer questions grounded in the diagnostic data above.
-- If the operator requests changes to the proposal (e.g., "skip module X",
-  "focus on error handling"), acknowledge the change and present the revised
-  proposal clearly.
-- When presenting a revised proposal, use the same structure as the original
-  (Findings, Proposed Actions, Rationale, Expected Impact, Risk Assessment).
-- If asked "what's the current plan?", show the latest version of the proposal.
-- Be concise.  The operator is technical and does not need hand-holding.
-"""
+def _get_system_prompt_template() -> str:
+    """Lazy-load discussion system prompt from pilot prompts module."""
+    from harness.pilot.prompts import DISCUSSION_SYSTEM
+    return DISCUSSION_SYSTEM
 
 _MAX_CONTEXT_CHARS: int = 100_000
-_PROPOSAL_UPDATE_MARKER = "## Proposed Actions"
+_PROPOSAL_UPDATE_MARKER = "### 建议改进"
 
 
 class Discussion:
@@ -60,7 +41,10 @@ class Discussion:
         self._original_proposal = proposal
         self._current_proposal = proposal
         self._llm = llm
-        self._system_prompt = self._build_system_prompt(proposal, diagnostic_context)
+        self._system_prompt = _get_system_prompt_template().format(
+            proposal=proposal,
+            diagnostic_context=diagnostic_context[:_MAX_CONTEXT_CHARS],
+        )
         self._messages: list[dict[str, Any]] = []
         log.info(
             "Discussion created, proposal_len=%d, context_len=%d",
@@ -96,23 +80,6 @@ class Discussion:
     # ══════════════════════════════════════════════════════════════════════
     #  Private methods
     # ══════════════════════════════════════════════════════════════════════
-
-    def _build_system_prompt(self, proposal: str, diagnostic_context: str) -> str:
-        """Construct the system prompt with proposal and diagnostic data."""
-        truncated_context = diagnostic_context[:_MAX_CONTEXT_CHARS]
-        if len(diagnostic_context) > _MAX_CONTEXT_CHARS:
-            truncated_context += f"\n\n... (truncated, {len(diagnostic_context)} total chars)"
-            log.warning(
-                "Diagnostic context truncated from %d to %d chars",
-                len(diagnostic_context),
-                _MAX_CONTEXT_CHARS,
-            )
-        prompt = _SYSTEM_PROMPT_TEMPLATE.format(
-            proposal=proposal,
-            diagnostic_context=truncated_context,
-        )
-        log.debug("System prompt built, len=%d", len(prompt))
-        return prompt
 
     def _append_user_message(self, text: str) -> None:
         """Add a user message to the conversation history."""

@@ -3,9 +3,10 @@
 import pytest
 
 from harness.pilot.config import (
-    DiscussionConfig,
     FeishuConfig,
+    LLMConfig,
     PilotConfig,
+    ProjectConfig,
     ScheduleConfig,
 )
 
@@ -18,10 +19,9 @@ def _minimal_config() -> dict:
             "app_secret": "secret",
             "chat_id": "oc_test",
         },
-        "diagnosis": {
-            "harness": {"model": "test-model", "base_url": "http://localhost"},
-            "mission": "diagnose",
-        },
+        "projects": [
+            {"name": "TestProject", "workspace": "/tmp/test-workspace"},
+        ],
     }
 
 
@@ -35,6 +35,8 @@ class TestPilotConfigParsing:
         assert cfg.schedule.hour == 9
         assert cfg.schedule.minute == 0
         assert cfg.proposal_expiry_hours == 24
+        assert len(cfg.projects) == 1
+        assert cfg.projects[0].name == "TestProject"
 
     def test_from_dict_custom_schedule(self):
         """Custom schedule overrides defaults."""
@@ -51,19 +53,50 @@ class TestPilotConfigParsing:
         with pytest.raises(ValueError, match="feishu"):
             PilotConfig.from_dict(raw)
 
-    def test_missing_diagnosis_raises(self):
-        """Missing diagnosis section raises ValueError."""
+    def test_missing_projects_raises(self):
+        """Missing projects section raises ValueError."""
         raw = _minimal_config()
-        del raw["diagnosis"]
-        with pytest.raises(ValueError, match="diagnosis"):
+        del raw["projects"]
+        with pytest.raises(ValueError, match="projects"):
             PilotConfig.from_dict(raw)
 
-    def test_missing_harness_in_diagnosis_raises(self):
-        """Diagnosis without harness subsection raises ValueError."""
+    def test_empty_projects_raises(self):
+        """Empty projects list raises ValueError."""
         raw = _minimal_config()
-        del raw["diagnosis"]["harness"]
-        with pytest.raises(ValueError, match="harness"):
+        raw["projects"] = []
+        with pytest.raises(ValueError, match="At least one project"):
             PilotConfig.from_dict(raw)
+
+    def test_multi_project(self):
+        """Multiple projects are parsed correctly."""
+        raw = _minimal_config()
+        raw["projects"].append({"name": "Second", "workspace": "/tmp/second"})
+        cfg = PilotConfig.from_dict(raw)
+        assert len(cfg.projects) == 2
+        assert cfg.projects[1].name == "Second"
+
+
+class TestProjectConfig:
+    """Project config validation."""
+
+    def test_missing_name_raises(self):
+        with pytest.raises(ValueError, match="name"):
+            ProjectConfig.from_dict({"workspace": "/tmp/ws"})
+
+    def test_missing_workspace_raises(self):
+        with pytest.raises(ValueError, match="workspace"):
+            ProjectConfig.from_dict({"name": "X"})
+
+    def test_tools_optional(self):
+        p = ProjectConfig.from_dict({"name": "X", "workspace": "/tmp"})
+        assert p.tools == {}
+
+    def test_tools_parsed(self):
+        p = ProjectConfig.from_dict({
+            "name": "X", "workspace": "/tmp",
+            "tools": {"db_query": {"dsn": "pg://host/db"}},
+        })
+        assert p.tools["db_query"]["dsn"] == "pg://host/db"
 
 
 class TestFeishuConfig:
@@ -93,35 +126,59 @@ class TestScheduleConfig:
 
 
 class TestBuilderMethods:
-    """Config builder methods for execution/discussion."""
+    """Config builder methods for diagnosis/execution/discussion."""
 
-    def test_US09_execution_config_merges_overrides(self):
-        """US-09: Execution config merges execution overrides onto diagnosis base."""
+    def test_diagnosis_config_with_tools(self):
+        """Diagnosis config merges tools from projects."""
+        raw = _minimal_config()
+        raw["projects"][0]["tools"] = {"db_query": {"dsn": "pg://host/db"}}
+        raw["diagnosis"] = {"max_cycles": 3}
+        cfg = PilotConfig.from_dict(raw)
+        diag = cfg.build_diagnosis_agent_config("test mission")
+        assert diag["mission"] == "test mission"
+        assert diag["max_cycles"] == 3
+        assert diag["auto_commit"] is False
+        assert "db_query" in diag["harness"]["extra_tools"]
+        assert diag["harness"]["tool_config"]["db_query"]["dsn"] == "pg://host/db"
+
+    def test_diagnosis_config_multi_project_paths(self):
+        """Diagnosis config sets workspace + allowed_paths for multi-project."""
+        raw = _minimal_config()
+        raw["projects"].append({"name": "Second", "workspace": "/tmp/second"})
+        cfg = PilotConfig.from_dict(raw)
+        diag = cfg.build_diagnosis_agent_config("mission")
+        assert diag["harness"]["workspace"] == "/tmp/test-workspace"
+        assert "/tmp/test-workspace" in diag["harness"]["allowed_paths"]
+        assert "/tmp/second" in diag["harness"]["allowed_paths"]
+
+    def test_execution_config(self):
+        """Execution config merges execution overrides."""
         raw = _minimal_config()
         raw["execution"] = {"max_cycles": 50, "auto_commit": True}
         cfg = PilotConfig.from_dict(raw)
-        exe = cfg.build_execution_agent_config("approved mission text")
-        assert exe["mission"] == "approved mission text"
+        exe = cfg.build_execution_agent_config("approved mission")
+        assert exe["mission"] == "approved mission"
         assert exe["max_cycles"] == 50
         assert exe["auto_commit"] is True
-        # Inherits harness from diagnosis
         assert "harness" in exe
 
-    def test_discussion_config_falls_back_to_diagnosis(self):
-        """Discussion LLM config inherits from diagnosis if not specified."""
-        cfg = PilotConfig.from_dict(_minimal_config())
+    def test_execution_config_commit_repos(self):
+        """Execution config sets commit_repos for all projects."""
+        raw = _minimal_config()
+        raw["projects"].append({"name": "Second", "workspace": "/tmp/second"})
+        cfg = PilotConfig.from_dict(raw)
+        exe = cfg.build_execution_agent_config("mission")
+        assert "/tmp/test-workspace" in exe["commit_repos"]
+        assert "/tmp/second" in exe["commit_repos"]
+
+    def test_discussion_config_from_llm(self):
+        """Discussion LLM config uses shared llm settings."""
+        raw = _minimal_config()
+        raw["llm"] = {"model": "test-model", "base_url": "http://localhost"}
+        cfg = PilotConfig.from_dict(raw)
         disc = cfg.build_discussion_harness_config()
         assert disc["model"] == "test-model"
         assert disc["base_url"] == "http://localhost"
-
-    def test_discussion_config_overrides(self):
-        """Discussion section overrides diagnosis LLM settings."""
-        raw = _minimal_config()
-        raw["discussion"] = {"model": "override-model", "max_tokens": 4096}
-        cfg = PilotConfig.from_dict(raw)
-        disc = cfg.build_discussion_harness_config()
-        assert disc["model"] == "override-model"
-        assert disc["max_tokens"] == 4096
 
     def test_comment_keys_stripped(self):
         """Keys starting with // are ignored."""

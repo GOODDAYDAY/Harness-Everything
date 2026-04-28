@@ -145,14 +145,13 @@ _MEDIUM_SIGNAL_TOOLS: frozenset[str] = frozenset({
 _SHORT_RESPONSE_CHARS: int = 50
 
 # ---------------------------------------------------------------------------
-# execution_log memory cap
+# execution_log — full output, no truncation
 # ---------------------------------------------------------------------------
 # Each tool call's output is stored in execution_log for artifact writing
-# (tool_log.json).  Large file reads can produce 50 KB+ per entry; with 200+
-# calls per cycle, the list alone can consume 10+ MB.  Cap per-entry output
-# to keep peak memory bounded.  Full content is already in the conversation
-# (with its own pruning) — tool_log.json is a debugging aid, not an archive.
-_EXEC_LOG_MAX_OUTPUT_CHARS: int = 4000
+# (tool_log.json).  Previous versions capped output at 4 000 chars to save
+# memory, but this discarded ~34% of tool output data — making post-run
+# analysis incomplete.  Now we keep full output so tool_log.json is a
+# faithful archive of every tool interaction.
 
 # Maximum scratchpad notes kept in memory.  Older notes are evicted when
 # this cap is reached; the most recent entries are retained.
@@ -1067,16 +1066,21 @@ class LLM:
         *,
         system: str = "",
         max_turns: int = 30,
-    ) -> tuple[str, list[dict[str, Any]]]:
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         """Run a full tool_use agent loop.
 
-        Returns (final_text, execution_log) where execution_log is a list of
-        {"tool": name, "input": {...}, "output": "..."} dicts.
+        Returns ``(final_text, execution_log, llm_calls, conversation)``
+        where:
+
+        - *execution_log* — list of tool call records
+        - *llm_calls* — per-turn LLM API metadata (tokens, latency, model)
+        - *conversation* — full message list at loop exit (post-pruning)
         """
         cached_registry = _CachedToolRegistry(registry)
         tools_schema = cached_registry.to_api_schema()
         conversation = list(messages)
         execution_log: list[dict[str, Any]] = []
+        llm_calls: list[dict[str, Any]] = []
         loop_start = time.monotonic()
         total_in_tokens: int = 0
         total_out_tokens: int = 0
@@ -1109,15 +1113,34 @@ class LLM:
             resp = await self.call(conversation, system=effective_system, tools=tools_schema)
             turn_elapsed = time.monotonic() - turn_start
 
-            # Accumulate token counts for the end-of-loop summary
+            # Accumulate token counts and capture per-turn LLM metadata
+            turn_meta: dict[str, Any] = {
+                "turn": turn + 1,
+                "model": self.config.model,
+                "stop_reason": resp.stop_reason,
+                "elapsed_s": round(turn_elapsed, 2),
+                "tool_calls": len(resp.tool_calls),
+                "text_len": len(resp.text) if resp.text else 0,
+            }
             if resp.raw is not None:
                 _u = getattr(resp.raw, "usage", None)
                 if _u is not None:
-                    total_in_tokens += getattr(_u, "input_tokens", 0) or 0
-                    total_out_tokens += getattr(_u, "output_tokens", 0) or 0
+                    in_tok = getattr(_u, "input_tokens", 0) or 0
+                    out_tok = getattr(_u, "output_tokens", 0) or 0
+                    total_in_tokens += in_tok
+                    total_out_tokens += out_tok
+                    turn_meta["input_tokens"] = in_tok
+                    turn_meta["output_tokens"] = out_tok
+                    cache_read = getattr(_u, "cache_read_input_tokens", None)
+                    cache_create = getattr(_u, "cache_creation_input_tokens", None)
+                    if cache_read:
+                        turn_meta["cache_read_input_tokens"] = cache_read
+                    if cache_create:
+                        turn_meta["cache_creation_input_tokens"] = cache_create
                 # Release the full Anthropic Message object — usage has been
                 # extracted and nothing else needs the raw response.
                 resp.raw = None
+            llm_calls.append(turn_meta)
 
             log.debug(
                 "tool_loop turn=%d stop=%s calls=%d total_tools=%d "
@@ -1193,7 +1216,7 @@ class LLM:
                     total_out_tokens,
                     elapsed,
                 )
-                return resp.text, execution_log
+                return resp.text, execution_log, llm_calls, conversation
 
             # Classify this turn's tool calls into three lanes:
             #   scratchpad  — intercepted here (no I/O); the note gets saved
@@ -1332,13 +1355,6 @@ class LLM:
                         call_detail,
                     )
                 raw_output = result.output or result.error
-                if isinstance(raw_output, str) and len(raw_output) > _EXEC_LOG_MAX_OUTPUT_CHARS:
-                    half = _EXEC_LOG_MAX_OUTPUT_CHARS // 2
-                    raw_output = (
-                        raw_output[:half]
-                        + f"\n\n… [{len(raw_output) - _EXEC_LOG_MAX_OUTPUT_CHARS} chars truncated] …\n\n"
-                        + raw_output[-half:]
-                    )
                 execution_log.append(
                     {
                         "tool": tc["name"],
@@ -1425,4 +1441,4 @@ class LLM:
             f"Reduce plan scope or raise max_tool_turns in HarnessConfig.\n"
             f"STATUS: PARTIAL"
         )
-        return partial_summary, execution_log
+        return partial_summary, execution_log, llm_calls, conversation

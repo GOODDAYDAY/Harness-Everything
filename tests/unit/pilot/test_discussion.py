@@ -55,12 +55,12 @@ class TestProposalModification:
 
     @pytest.mark.asyncio
     async def test_US07_proposal_updated_when_marker_present(self):
-        """US-07: Proposal updates when LLM response contains '## Proposed Actions'."""
+        """US-07: Proposal updates when LLM response contains '### 建议改进'."""
         revised = (
-            "Here is the revised plan:\n"
-            "## Proposed Actions\n"
-            "- Only fix error handling\n"
-            "- Skip module X"
+            "修订后的方案：\n"
+            "### 建议改进\n"
+            "- 只修复错误处理\n"
+            "- 跳过模块 X"
         )
         llm = _make_llm(revised)
         disc = Discussion("original plan", "data", llm)
@@ -88,9 +88,9 @@ class TestProposalModification:
             call_count += 1
             resp = MagicMock()
             if call_count == 1:
-                resp.text = "## Proposed Actions\n- Revised v1"
+                resp.text = "### 建议改进\n- Revised v1"
             elif call_count == 2:
-                resp.text = "## Proposed Actions\n- Revised v2"
+                resp.text = "### 建议改进\n- Revised v2"
             else:
                 resp.text = "No changes."
             return resp
@@ -119,5 +119,6 @@ class TestContextTruncation:
         # Verify system prompt was passed to LLM
         call_args = llm.call.call_args
         system_prompt = call_args[1]["system"]
-        assert "truncated" in system_prompt
+        # Context is truncated to 100k chars
+        assert len(system_prompt) < 110_000
         assert len(system_prompt) < 150_000

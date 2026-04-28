@@ -31,10 +31,20 @@ def setup_logging(level: str = "INFO") -> None:
     )
 
 
-async def run_pilot(config: PilotConfig) -> None:
-    """Create and run the pilot loop until shutdown signal."""
+async def run_pilot(config: PilotConfig, run_now: bool = False) -> None:
+    """Create and run the pilot loop.
+
+    Args:
+        run_now: If True, run one improvement cycle immediately instead of
+                 waiting for the daily schedule.  Useful for testing.
+    """
     loop = PilotLoop(config)
-    await loop.run()
+    if run_now:
+        await loop._connect_feishu()
+        await loop._run_improvement_cycle()
+        await loop._shutdown()
+    else:
+        await loop.run()
 
 
 def main() -> None:
@@ -44,11 +54,14 @@ def main() -> None:
 
     args = sys.argv[1:]
     if not args:
-        print("Usage: python pilot.py <pilot_config.json>")
+        print("Usage: python pilot.py <pilot_config.json> [--now]")
         sys.exit(1)
 
+    run_now = "--now" in args
+    config_args = [a for a in args if a != "--now"]
+
     # 1. Load config file
-    config_path = Path(args[0])
+    config_path = Path(config_args[0])
     if not config_path.exists():
         print(f"Config file not found: {config_path}")
         sys.exit(1)
@@ -58,9 +71,10 @@ def main() -> None:
         raw = json.load(f)
     config = PilotConfig.from_dict(raw)
 
-    # 3. Start daemon
-    log.info("Pilot starting, config=%s", config_path)
-    asyncio.run(run_pilot(config))
+    # 3. Start
+    mode = "immediate" if run_now else "daemon"
+    log.info("Pilot starting, config=%s, mode=%s", config_path, mode)
+    asyncio.run(run_pilot(config, run_now=run_now))
     log.info("Pilot exited")
 
 
