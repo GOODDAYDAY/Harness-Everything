@@ -1,0 +1,49 @@
+{
+  "//": "=== Pilot config for daily improvement loop ===",
+  "// purpose": "Minimal example for the Pilot (Feishu-integrated daily improvement daemon). Copy to pilot_config.json and fill in credentials.",
+
+  "feishu": {
+    "app_id": "",
+    "app_secret": "",
+    "chat_id": ""
+  },
+
+  "schedule": {
+    "hour": 9,
+    "minute": 0
+  },
+
+  "llm": {
+    "model": "vertex/claude-sonnet-4-6",
+    "base_url": "",
+    "max_tokens": 16384
+  },
+
+  "projects": [
+    {
+      "name": "MyProject",
+      "workspace": "/path/to/MyProject",
+      "tools": {
+        "db_query": {
+          "dsn": "postgresql://user:pass@host:5432/dbname",
+          "timeout": 30,
+          "max_rows": 100
+        }
+      }
+    }
+  ],
+
+  "diagnosis": {
+    "max_cycles": 5
+  },
+
+  "execution": {
+    "max_cycles": 50,
+    "auto_commit": true,
+    "auto_push": false,
+    "push_remote": "origin",
+    "push_branch": "feat/harness"
+  },
+
+  "proposal_expiry_hours": 24
+}

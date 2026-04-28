@@ -1,0 +1,29 @@
+[Unit]
+Description=Harness self-improvement loop
+Documentation=https://github.com/GOODDAYDAY/Harness-Everything
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/harness-everything
+EnvironmentFile=/home/user/.config/harness/env
+ExecStart=/home/user/harness-venv/bin/python main.py --agent /home/user/harness-everything/agent_server.json
+
+# Clean exit (code 0 after outer_rounds completes) → service stops, waits for CI to restart it.
+# Crash exits → 3 retries 60s apart; if all fail, systemd gives up to avoid bad-code restart loops.
+Restart=on-failure
+RestartSec=60s
+StartLimitBurst=3
+StartLimitIntervalSec=600
+
+# Append all output to a single rotating log file so we don't fill journald.
+StandardOutput=append:/home/user/harness-everything/logs/harness.log
+StandardError=append:/home/user/harness-everything/logs/harness.log
+
+# Never let a single chunk run forever (safety net — pipeline should self-exit well within this).
+TimeoutStartSec=infinity
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target
