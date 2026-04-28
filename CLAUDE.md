@@ -14,7 +14,7 @@ Harness-Everything is an AI coding harness that uses any Anthropic-compatible LL
 
 ```bash
 # Run agent mode
-python main.py <config.json>
+python -m harness.cli <config.json>
 
 # Syntax check all harness code
 python -m py_compile harness/*.py harness/tools/*.py
@@ -28,12 +28,12 @@ python -c "from harness.agent import AgentConfig, AgentLoop; print('OK')"
 - **Tool pattern**: Every tool is a `Tool` subclass in `harness/tools/`. Must implement `name`, `description`, `input_schema()`, `async execute(config, **params) -> ToolResult`. Register in `tools/__init__.py` `_ALL_TOOLS`.
 - **Path security**: Any tool that accesses the filesystem must call `self._check_path(config, path)` before reading/writing. Never bypass this.
 - **Config is data**: All project-specific content (prompts, paths, API URLs) lives in JSON configs, not in code. Code is generic.
-- **Async**: All LLM calls and tool executions are async. Use `asyncio.run()` only at the entry point (`main.py`).
+- **Async**: All LLM calls and tool executions are async. Use `asyncio.run()` only at the entry point (`harness/cli.py`).
 
 ## File Layout
 
 ```
-main.py                    # CLI entry point (agent-only)
+harness/cli.py             # CLI entry point (agent-only)
 harness/
   core/
     config.py              # HarnessConfig

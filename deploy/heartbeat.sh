@@ -33,7 +33,7 @@ if [ "$state" = "failed" ]; then
 fi
 
 # Zombie clean-exit detection: service exited with status 0 (so it's "inactive",
-# not "failed") but the last run produced no real work. main.py now exits 2 on
+# not "failed") but the last run produced no real work. harness.cli exits 2 on
 # such runs — which lands in the is-failed branch above — but we keep this
 # defensive branch so older deployments or a regressed exit-code path still
 # recover within one cron tick. One extra restart per broken deploy is cheap;

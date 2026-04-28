@@ -1,8 +1,7 @@
 """Harness-Everything — autonomous agent for codebase improvement.
 
 Usage:
-  python main.py <config.json>
-  python main.py --agent <config.json>   (legacy form, still supported)
+  python -m harness.cli <config.json>
 """
 
 from __future__ import annotations
@@ -63,7 +62,7 @@ def main() -> None:
         args.remove("--agent")
 
     if not args:
-        print("Usage: python main.py <config.json>")
+        print("Usage: python -m harness.cli <config.json>")
         sys.exit(1)
 
     config_path = Path(args[0])

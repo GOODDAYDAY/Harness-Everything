@@ -1,7 +1,7 @@
 {
   "//": "=== Agent mode example — V5 autonomous single-LLM runtime ===",
   "// purpose": "Minimal example showing the shape of an agent config. Copy and edit for your own mission. The agent decides what to work on — no phases or pipelines.",
-  "// run": "python main.py config/agent_example.json",
+  "// run": "python -m harness.cli config/agent_example.json",
   "harness": {
     "model": "bedrock/claude-sonnet-4-6",
     "// max_tokens": "Leave headroom below the model's ceiling; 16K is safe for Sonnet-class models.",

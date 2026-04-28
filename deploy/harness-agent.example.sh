@@ -36,10 +36,8 @@ HARNESS_DIR="$SCRIPT_DIR"
 VENV="$HARNESS_DIR/.venv"
 PYTHON="$VENV/bin/python"
 
-# Agent or pipeline config JSON:
-#   Agent mode:  python main.py --agent config/agent_example.json
-#   Pipeline:    python main.py --pipeline config/pipeline_example_self_improve.json
-# See config/pipeline_example_self_improve.json for V5 features:
+# Agent config JSON:
+#   python -m harness.cli config/agent_example.json
 #   - evaluation_engine: "multi_axis" (5-dim vector scoring)
 #   - exploration_interval (novelty-weighted exploration phases)
 #   - meta_agent_interval (strategy layer running every N rounds)
@@ -112,7 +110,7 @@ cmd_start() {
     echo "  log    : $LOG_FILE"
     echo ""
 
-    nohup "$PYTHON" "$HARNESS_DIR/main.py" --agent "$AGENT_CONFIG" \
+    nohup "$PYTHON" -m harness.cli "$AGENT_CONFIG" \
         >"$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
 

@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/home/user/harness-everything
 EnvironmentFile=/home/user/.config/harness/env
-ExecStart=/home/user/harness-venv/bin/python main.py --agent /home/user/harness-everything/agent_server.json
+ExecStart=/home/user/harness-venv/bin/python -m harness.cli /home/user/harness-everything/agent_server.json
 
 # Clean exit (code 0 after outer_rounds completes) → service stops, waits for CI to restart it.
 # Crash exits → 3 retries 60s apart; if all fail, systemd gives up to avoid bad-code restart loops.

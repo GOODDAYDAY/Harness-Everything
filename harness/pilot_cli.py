@@ -1,7 +1,7 @@
 """Pilot — daily improvement daemon with Feishu human-in-the-loop approval.
 
 Usage:
-  python pilot.py <pilot_config.json>
+  python -m harness.pilot_cli <pilot_config.json>
 
 Starts a long-running daemon that connects to Feishu via WebSocket,
 schedules daily diagnosis runs, and manages the improvement lifecycle.
@@ -54,7 +54,7 @@ def main() -> None:
 
     args = sys.argv[1:]
     if not args:
-        print("Usage: python pilot.py <pilot_config.json> [--now]")
+        print("Usage: python -m harness.pilot_cli <pilot_config.json> [--now]")
         sys.exit(1)
 
     run_now = "--now" in args

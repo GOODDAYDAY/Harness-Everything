@@ -20,7 +20,7 @@ Harness 工作区布局:
 
 harness/                          ← 工作区根目录
 ├── Harness-Everything/           ← 框架本体
-│   ├── main.py                   ← 入口: python main.py <config.json>
+│   ├── harness/cli.py            ← 入口: python -m harness.cli <config.json>
 │   ├── config/
 │   │   ├── agent_example.json    ← 模板（复制这个开始）
 │   │   └── agent_<project>.json  ← 你的项目配置
@@ -481,7 +481,7 @@ cmd_start() {
     echo ""
 
     # caffeinate -i 防止 macOS 休眠时节流 asyncio
-    nohup caffeinate -i "$PYTHON" "$HARNESS_DIR/main.py" "$AGENT_CONFIG" \
+    nohup caffeinate -i "$PYTHON" -m harness.cli "$AGENT_CONFIG" \
         >"$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
 
@@ -613,7 +613,7 @@ esac
 ```
 启动流程:
   check not running → check venv → load API key → start proxy → switch branch
-  → nohup caffeinate -i python main.py <config> → save PID → tail logs
+  → nohup caffeinate -i python -m harness.cli <config> → save PID → tail logs
 
 停机流程 (三级优雅停机):
   SIGINT  → agent 完成当前 cycle 后退出（等 120s）

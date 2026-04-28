@@ -15,4 +15,5 @@ pilot = ["lark-oapi>=1.3.0"]
 include = ["harness*"]
 
 [project.scripts]
-harness = "main:main"
+harness = "harness.cli:main"
+pilot = "harness.pilot_cli:main"

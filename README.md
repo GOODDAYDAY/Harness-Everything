@@ -10,7 +10,7 @@ Works with any LLM supporting the Anthropic API format (Claude, DeepSeek, Gemini
 pip install anthropic>=0.40.0
 export HARNESS_API_KEY=your-api-key
 
-python main.py config/agent_example.json
+python -m harness.cli config/agent_example.json
 ```
 
 ## Architecture
@@ -138,7 +138,7 @@ systemctl --user enable harness.service
 ## Project Structure
 
 ```
-main.py                              # CLI entry point
+harness/cli.py                       # CLI entry point
 config/
   agent_example.json                 # Minimal example
   agent_self_improve.json            # Local self-improvement
