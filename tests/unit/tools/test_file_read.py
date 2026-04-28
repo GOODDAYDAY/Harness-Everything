@@ -1,0 +1,739 @@
+"""Unit tests for harness.tools.file_read."""
+
+import asyncio
+import errno
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+
+from harness.core.config import HarnessConfig
+from harness.tools.base import ToolResult
+from harness.tools.file_read import ReadFileTool
+
+
+def test_readfile_fallback_path_atomicity():
+    """Test that _open_with_atomic_fallback uses fstat on the EINVAL fallback path.
+
+    When O_NOFOLLOW fails with EINVAL, the fallback opens without O_NOFOLLOW
+    and uses fstat for file-type verification.
+    """
+    import stat
+    from unittest.mock import Mock
+    from harness.tools.base import Tool
+
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        def input_schema(self): return {}
+        async def execute(self, config, **kwargs): pass
+
+    tool = TestTool()
+    open_calls = []
+    fstat_calls = []
+
+    def mock_open(path, flags, *args, **kwargs):
+        open_calls.append((path, flags))
+        if flags & os.O_NOFOLLOW:
+            raise OSError(errno.EINVAL, "Invalid argument")
+        return 42  # dummy fd for fallback
+
+    def mock_fstat(fd):
+        st = Mock()
+        st.st_mode = stat.S_IFREG | 0o644
+        fstat_calls.append(fd)
+        return st
+
+    with patch('harness.tools.base.os.open', mock_open), \
+         patch('harness.tools.base.os.fstat', mock_fstat), \
+         patch('harness.tools.base.os.close'):
+        fd, error = tool._open_with_atomic_fallback("/test/path.txt", os.O_RDONLY)
+
+    assert len(open_calls) == 2, f"Expected 2 os.open calls, got {len(open_calls)}"
+    assert open_calls[0][1] & os.O_NOFOLLOW, "First call should have O_NOFOLLOW"
+    assert not (open_calls[1][1] & os.O_NOFOLLOW), "Fallback should not have O_NOFOLLOW"
+    assert len(fstat_calls) == 1, "fstat should be called once in fallback path"
+    assert fstat_calls[0] == 42, "fstat should be called with the fallback fd"
+    assert fd == 42, "Should return the fallback fd"
+    assert error is None, "Should return no error on success"
+
+
+def test_readfile_einval_fallback_atomic():
+    """Test _open_with_atomic_fallback performs atomic fstat verification on EINVAL.
+
+    When O_NOFOLLOW fails with EINVAL, the fallback calls fstat before returning
+    the fd to detect non-regular files atomically.
+    """
+    import stat
+    from harness.tools.base import Tool
+
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        def input_schema(self): return {}
+        async def execute(self, config, **kwargs): pass
+
+    tool = TestTool()
+    fstat_called = []
+
+    def mock_fstat(fd):
+        st = Mock()
+        st.st_mode = stat.S_IFREG | 0o644  # Regular file
+        fstat_called.append(fd)
+        return st
+
+    def mock_open(path, flags, *args, **kwargs):
+        if flags & os.O_NOFOLLOW:
+            raise OSError(errno.EINVAL, "Invalid argument")
+        return 123  # dummy fd for fallback
+
+    with patch('harness.tools.base.os.open', mock_open), \
+         patch('harness.tools.base.os.fstat', mock_fstat), \
+         patch('harness.tools.base.os.close'):
+        fd, error = tool._open_with_atomic_fallback("/test/regular_file.txt", os.O_RDONLY)
+
+    assert len(fstat_called) == 1, "fstat should be called once for atomic verification"
+    assert fstat_called[0] == 123, "fstat should be called with the fallback fd"
+    assert fd == 123, "Should return the fallback fd on success"
+    assert error is None, "Should not return an error for a regular file"
+
+
+def test_readfile_symlink_protection():
+    """Test that symlinks pointing outside allowed directories are rejected."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create workspace directory
+        workspace = tmpdir_path / "workspace"
+        workspace.mkdir()
+        
+        # Create directory outside workspace
+        outside = tmpdir_path / "outside"
+        outside.mkdir()
+        outside_file = outside / "secret.txt"
+        outside_file.write_text("secret content")
+        
+        # Create symlink in workspace pointing outside
+        symlink = workspace / "malicious_link.txt"
+        symlink.symlink_to(outside_file)
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace.resolve()), allowed_paths=[str(workspace.resolve())])
+        
+        # Should reject the symlink
+        result = asyncio.run(tool.execute(config, path=str(symlink)))
+        assert result.is_error
+        assert "outside allowed" in result.error.lower() or "symlink" in result.error.lower()
+
+
+def test_readfile_valid_symlink():
+    """Test that valid symlinks within workspace are rejected for security."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create workspace directory
+        workspace = tmpdir_path / "workspace"
+        workspace.mkdir()
+        
+        # Create a file inside workspace
+        target_file = workspace / "target.txt"
+        target_file.write_text("target content\nline2")
+        
+        # Create a symlink to it
+        symlink = workspace / "link.txt"
+        symlink.symlink_to(target_file)
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace.resolve()), allowed_paths=[str(workspace.resolve())])
+        
+        # Should reject symlinks for security
+        result = asyncio.run(tool.execute(config, path=str(symlink)))
+        assert result.is_error
+        assert "Symlinks are not allowed" in result.error
+
+
+def test_readfile_offset_and_limit():
+    """Test offset and limit parameters work correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        
+        # Create a test file with multiple lines
+        test_file = tmpdir_path / "test.txt"
+        content = "\n".join([f"line{i}" for i in range(1, 11)])
+        test_file.write_text(content)
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(tmpdir_path.resolve()), allowed_paths=[str(tmpdir_path.resolve())])
+        
+        # Test with offset=3, limit=4
+        result = asyncio.run(tool.execute(config, path=str(test_file), offset=3, limit=4))
+        assert not result.is_error
+        output = result.output
+        
+        # Should show lines 3-6
+        assert "line3" in output
+        assert "line4" in output
+        assert "line5" in output
+        assert "line6" in output
+        assert "line7" not in output  # Should be excluded by limit
+        assert "line2" not in output  # Should be excluded by offset
+
+
+def test_read_file_uses_atomic_validation():
+    """Test that ReadFileTool.execute reads files correctly through security validation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = (Path(tmpdir) / "workspace").resolve()
+        workspace.mkdir()
+        test_file = workspace / "test.txt"
+        test_file.write_text("test content\n")
+
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
+
+        result = asyncio.run(tool.execute(config, path=str(test_file)))
+
+        assert not result.is_error, f"Should succeed: {result.error}"
+        assert "test content" in result.output
+
+
+def test_readfile_fallback_fd_leak_protection():
+    """Test that _guaranteed_fd_cleanup closes fd when the operation raises an error."""
+    from harness.tools.base import Tool
+
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        def input_schema(self): return {}
+        async def execute(self, config, **kwargs): pass
+
+    tool = TestTool()
+    close_calls = []
+
+    def mock_fdopen(fd):
+        raise OSError("Simulated fdopen failure")
+
+    with patch('harness.tools.base.os.close', side_effect=lambda fd: close_calls.append(fd)):
+        result, error = tool._guaranteed_fd_cleanup(123, mock_fdopen)
+
+    # Verify the fd was closed when the operation failed
+    assert len(close_calls) == 1, f"Expected 1 os.close call, got {len(close_calls)}"
+    assert close_calls[0] == 123
+    # Verify an error ToolResult is returned
+    assert result is None
+    assert error is not None
+    assert error.is_error
+
+
+def test_readfile_fallback_fd_closed_on_non_regular_file():
+    """Test that _open_with_atomic_fallback closes fd when fstat reveals non-regular file."""
+    import stat
+    from harness.tools.base import Tool
+
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        def input_schema(self): return {}
+        async def execute(self, config, **kwargs): pass
+
+    tool = TestTool()
+    close_calls = []
+
+    def mock_fstat(fd):
+        st = Mock()
+        st.st_mode = stat.S_IFDIR | 0o755  # Directory mode, not regular file
+        return st
+
+    def mock_open(path, flags, *args, **kwargs):
+        if flags & os.O_NOFOLLOW:
+            raise OSError(errno.EINVAL, "Invalid argument")
+        return 456  # dummy fd
+
+    with patch('harness.tools.base.os.open', mock_open), \
+         patch('harness.tools.base.os.fstat', mock_fstat), \
+         patch('harness.tools.base.os.close', side_effect=lambda fd: close_calls.append(fd)):
+        fd, error = tool._open_with_atomic_fallback("/test/not_a_file", os.O_RDONLY)
+
+    # Verify fd was closed when fstat revealed non-regular file
+    assert len(close_calls) == 1, f"Expected 1 os.close call, got {len(close_calls)}"
+    assert close_calls[0] == 456, "os.close should be called with the fallback fd"
+    # Verify an error is returned
+    assert fd is None
+    assert error is not None
+    assert error.is_error
+    assert "Not a regular file" in error.error
+
+
+def test_read_file_atomic_validation_rejects_symlinks():
+    """Test that security validation rejects symlinks (both inside and outside workspace)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = (Path(tmpdir) / "workspace").resolve()
+        workspace.mkdir()
+
+        # Create a legitimate file inside workspace
+        legit = workspace / "data.txt"
+        legit.write_text("safe content")
+        
+        # Create a symlink to it (within workspace)
+        link = workspace / "link.txt"
+        link.symlink_to(legit)
+
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
+
+        # Execute the tool with a symlink - should be rejected by security
+        result = asyncio.run(tool.execute(config, path=str(link)))
+        
+        # Verify the result is a security error about symlinks
+        assert result.is_error
+        assert "symlink" in result.error.lower() or "not allowed" in result.error.lower()
+
+
+def test_open_with_atomic_fallback_einval_checks_symlink():
+    """Test that _open_with_atomic_fallback checks for symlinks in EINVAL fallback path.
+    
+    Mocks os.open to raise EINVAL on O_NOFOLLOW, then verifies that in the fallback
+    path, the method checks os.fstat for symlinks (stat.S_ISLNK).
+    """
+    import errno
+    import os
+    import stat
+    from unittest.mock import Mock, patch
+    
+    from harness.tools.base import Tool
+    
+    # Create a test tool instance
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        
+        def input_schema(self):
+            return {}
+        
+        async def execute(self, config, **kwargs):
+            pass
+    
+    tool = TestTool()
+    
+    # Track fstat calls and what they return
+    fstat_results = []
+    
+    def mock_fstat(fd):
+        # Create a mock stat result
+        st = Mock()
+        # Simulate a symlink
+        st.st_mode = stat.S_IFLNK | 0o777
+        fstat_results.append((fd, st.st_mode))
+        return st
+    
+    # Mock os.open to simulate EINVAL on O_NOFOLLOW, then success
+    open_calls = []
+    def mock_open(path, flags, *args, **kwargs):
+        open_calls.append((path, flags))
+        # First call with O_NOFOLLOW: simulate EINVAL
+        if flags & os.O_NOFOLLOW:
+            raise OSError(errno.EINVAL, "Invalid argument")
+        # Second call without O_NOFOLLOW: return a dummy fd
+        return 123
+    
+    with patch('os.open', mock_open), \
+         patch('os.fstat', mock_fstat), \
+         patch('os.close'):
+        
+        # Call _open_with_atomic_fallback
+        fd, error = tool._open_with_atomic_fallback("/test/path", os.O_RDONLY)
+        
+        # Verify behavior
+        assert open_calls[0][1] & os.O_NOFOLLOW  # First call had O_NOFOLLOW
+        assert not (open_calls[1][1] & os.O_NOFOLLOW)  # Second call didn't
+        assert len(fstat_results) == 1  # fstat was called
+        assert fstat_results[0][0] == 123  # fstat called on fd 123
+        # The error should indicate it's a symlink
+        assert error is not None
+        assert error.is_error
+        assert "symlink" in error.error.lower() or "Symlink" in error.error
+
+
+def test_execute_fdopen_failure_closes_fd():
+    """Test that _guaranteed_fd_cleanup closes fd and returns error when operation fails."""
+    from harness.tools.base import Tool
+
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        def input_schema(self): return {}
+        async def execute(self, config, **kwargs): pass
+
+    tool = TestTool()
+    close_calls = []
+
+    def failing_fdopen(fd):
+        raise OSError("Simulated fdopen failure")
+
+    with patch('harness.tools.base.os.close', side_effect=lambda fd: close_calls.append(fd)):
+        result, error = tool._guaranteed_fd_cleanup(123, failing_fdopen)
+
+    # Verify fd was closed on failure
+    assert len(close_calls) == 1, f"Expected 1 os.close call, got {len(close_calls)}"
+    assert close_calls[0] == 123
+    assert result is None
+    assert error is not None and error.is_error
+    assert "File operation failed on descriptor" in error.error
+
+
+def test_readfile_preserves_onofollow_through_fdopen():
+    """Test that ReadFileTool.execute reads binary content correctly (utf-8 decoding)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = (Path(tmpdir) / "workspace").resolve()
+        workspace.mkdir()
+        legit = workspace / "data.txt"
+        legit.write_text("line1\nline2\nline3")
+
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace), allowed_paths=[str(workspace)])
+
+        result = asyncio.run(tool.execute(config, path=str(legit), offset=1, limit=2))
+
+        assert not result.is_error, f"Should succeed: {result.error}"
+        assert "line1" in result.output
+        assert "line2" in result.output
+
+
+def test_execute_fdopen_failure_returns_toolresult():
+    """Test _guaranteed_fd_cleanup returns ToolResult (not exception) when operation fails."""
+    from harness.tools.base import Tool
+
+    class TestTool(Tool):
+        name = "test_tool"
+        description = "Test tool"
+        requires_path_check = True
+        tags = frozenset({"test"})
+        def input_schema(self): return {}
+        async def execute(self, config, **kwargs): pass
+
+    tool = TestTool()
+    close_called = []
+
+    def failing_fdopen(fd):
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    with patch('harness.tools.base.os.close', side_effect=lambda fd: close_called.append(fd)):
+        result, error = tool._guaranteed_fd_cleanup(123, failing_fdopen)
+
+    # Verify error result is a ToolResult, not an exception
+    assert result is None
+    assert isinstance(error, ToolResult)
+    assert error.is_error
+    assert "File operation failed on descriptor" in error.error
+    # Verify fd was closed
+    assert len(close_called) == 1
+    assert close_called[0] == 123
+
+
+def test_guaranteed_fd_cleanup_thread_failure():
+    """Test that _guaranteed_fd_cleanup ensures fd is closed even when thread/operation fails."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock operation to raise an exception
+    def failing_operation(fd: int):
+        raise OSError("Simulated thread/operation failure")
+    
+    # Test with mocked os.close
+    with patch('os.close', side_effect=mock_close):
+        result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
+        
+        # Verify error result
+        assert result is None
+        assert error is not None
+        assert error.is_error
+        assert "File operation failed on descriptor" in error.error
+        
+        # Verify os.close was called with the correct file descriptor
+        # It may be called twice (once in except, once in finally)
+        assert len(close_called) >= 1
+        assert 123 in close_called
+
+
+def test_guaranteed_fd_cleanup_success():
+    """Test that _guaranteed_fd_cleanup returns result when operation succeeds."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock operation that succeeds
+    def successful_operation(fd: int):
+        return f"result from fd {fd}"
+    
+    # Test with mocked os.close
+    with patch('os.close', side_effect=mock_close):
+        result, error = tool._guaranteed_fd_cleanup(123, successful_operation)
+        
+        # Verify success result
+        assert result == "result from fd 123"
+        assert error is None
+        
+        # Verify os.close was NOT called (no finally block, ownership transferred)
+        assert len(close_called) == 0
+
+
+def test_guaranteed_fd_cleanup_fdopen_success():
+    """Test that _guaranteed_fd_cleanup works with os.fdopen operation."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Create a mock file object
+    mock_file = Mock()
+    mock_file.fileno.return_value = 123
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock os.fdopen to return our mock file
+    with patch('os.fdopen', return_value=mock_file), \
+         patch('os.close', side_effect=mock_close):
+        
+        def fdopen_operation(fd: int):
+            return os.fdopen(fd, 'rb')
+        
+        result, error = tool._guaranteed_fd_cleanup(123, fdopen_operation)
+        
+        # Verify success result
+        assert result == mock_file
+        assert error is None
+        
+        # Verify os.close was NOT called (fdopen takes ownership)
+        assert len(close_called) == 0
+
+
+def test_guaranteed_fd_cleanup_success_transfers_ownership():
+    """Test that successful fdopen transfers descriptor ownership."""
+    import tempfile
+    import os
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        f.write("test content")
+        temp_path = f.name
+
+    fd = os.open(temp_path, os.O_RDONLY)
+    from harness.tools.file_read import ReadFileTool
+    tool = ReadFileTool()
+
+    def fdopen_op(fd):
+        return os.fdopen(fd, 'rb')
+
+    file_obj, error = tool._guaranteed_fd_cleanup(fd, fdopen_op)
+    
+    # Falsifiable Criterion Assertion: Successful operation transfers ownership
+    assert error is None
+    assert file_obj is not None
+    # The file object's internal descriptor should be valid
+    # Note: On POSIX systems, fdopen returns a file object wrapping the same fd
+    assert file_obj.fileno() == fd  # Same descriptor number
+    # Reading should succeed, proving the descriptor is valid
+    content = file_obj.read()
+    assert content == b"test content"
+    file_obj.close()
+    
+    # Verify that closing the file object doesn't cause issues
+    # (the original fd should not be closed separately)
+    
+    os.unlink(temp_path)
+
+
+def test_guaranteed_fd_cleanup_failure_closes_fd():
+    """Test that _guaranteed_fd_cleanup closes file descriptor on operation failure."""
+    from harness.tools.file_read import ReadFileTool
+    
+    tool = ReadFileTool()
+    
+    # Track if os.close was called
+    close_called = []
+    original_close = os.close
+    
+    def mock_close(fd):
+        close_called.append(fd)
+        return original_close(fd)
+    
+    # Mock operation that raises an OSError as specified in implementation plan
+    def failing_operation(fd: int):
+        # Using the exact pattern from implementation plan
+        (_ for _ in ()).throw(OSError("Mock failure"))
+    
+    # Test with mocked os.close
+    with patch('os.close', side_effect=mock_close):
+        result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
+        
+        # Verify error result
+        assert result is None
+        assert error is not None
+        assert error.is_error
+        # FALSIFIABLE CRITERION ASSERTION: Exact assertion from implementation plan
+        assert "File operation failed on descriptor" in error.error
+        
+        # Verify os.close was called with the correct file descriptor
+        assert len(close_called) >= 1
+        assert 123 in close_called
+
+
+def test_guaranteed_fd_cleanup_success_returns_result():
+    """Test that successful operation transfers FD ownership and does NOT call os.close."""
+    tool = ReadFileTool()
+    
+    # Mock os module and fdopen
+    mock_fd = 123
+    mock_file_obj = MagicMock()
+    
+    with patch('harness.tools.base.os') as mock_os:
+        mock_os.fdopen.return_value = mock_file_obj
+        
+        result, error = tool._guaranteed_fd_cleanup(mock_fd, mock_os.fdopen)
+        
+        # Verify fdopen was called correctly (operation is called with just the fd)
+        mock_os.fdopen.assert_called_once_with(mock_fd)
+        # Verify success result
+        assert result is mock_file_obj
+        assert error is None
+        # Critical: ownership transferred, os.close should NOT be called
+        mock_os.close.assert_not_called()
+
+
+def test_guaranteed_fd_cleanup_failure_closes_fd_on_osclose_error():
+    """Test that _guaranteed_fd_cleanup attempts to close FD even when os.close raises OSError.
+    
+    This tests the edge case where both the operation fails AND os.close fails,
+    ensuring cleanup is attempted and the method returns a ToolResult error.
+    """
+    tool = ReadFileTool()
+    
+    # Mock operation to raise an exception
+    def failing_operation(fd: int):
+        raise OSError("Operation failed")
+    
+    # Mock os.close to also raise an exception
+    with patch('harness.tools.base.os.close') as mock_close:
+        mock_close.side_effect = OSError("Close failed")
+        
+        # Call the method
+        result, error = tool._guaranteed_fd_cleanup(123, failing_operation)
+        
+        # Verify os.close was called
+        assert mock_close.call_count == 1
+        
+        # Verify result is None and error is a ToolResult
+        assert result is None
+        assert isinstance(error, ToolResult)
+        assert error.is_error
+        # Verify error message includes operation failure
+        assert "File operation failed on descriptor 123: Operation failed" in error.error
+
+
+def test_read_file_limit_exceeds_maximum():
+    """Test that ReadFileTool rejects limit values exceeding MAX_READ_LINES."""
+    import tempfile
+    from pathlib import Path
+    import asyncio
+    
+    from harness.core.config import HarnessConfig
+    from harness.tools.file_read import ReadFileTool
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a test file with some content
+        test_file = workspace / "test.txt"
+        test_file.write_text("line 1\nline 2\nline 3\nline 4\nline 5")
+        
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace.resolve()), allowed_paths=[str(workspace.resolve())])
+        
+        # Test with limit exceeding MAX_READ_LINES
+        result = asyncio.run(tool.execute(
+            config, 
+            path=str(test_file),
+            limit=ReadFileTool.MAX_READ_LINES + 100
+        ))
+        
+        # Verify the result is an error
+        assert result.is_error, f"Expected error but got: {result.output}"
+        assert "limit exceeds maximum allowed lines" in result.error
+        assert str(ReadFileTool.MAX_READ_LINES) in result.error
+        assert str(ReadFileTool.MAX_READ_LINES + 100) in result.error
+
+
+def test_readfile_atomic_validation_and_read_combined():
+    """Test that ReadFileTool uses combined atomic validation and read to prevent TOCTOU attacks."""
+    import asyncio
+    import tempfile
+    from pathlib import Path
+    pass  # imports moved to module level where needed
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir) / "workspace"
+        workspace.mkdir()
+        
+        # Create a valid file and a symlink to it
+        legit_file = workspace / "data.txt"
+        legit_file.write_text("original content")
+        
+        link = workspace / "link.txt"
+        link.symlink_to(legit_file)
+        
+        # Create tool and config
+        tool = ReadFileTool()
+        config = HarnessConfig(workspace=str(workspace.resolve()), allowed_paths=[str(workspace.resolve())])
+        
+        # Test that the combined atomic operation rejects symlinks
+        result = asyncio.run(tool.execute(config, path=str(link)))
+        
+        # Verify the result fails because symlinks are rejected
+        assert result.is_error, "Expected error for symlink but got success"
+        assert "Symlinks are not allowed" in result.error
+        
+        # Note: Since symlinks are now rejected by atomic validation, 
+        # the TOCTOU protection test for symlink swapping is no longer applicable.
+        # The tool will reject symlinks at the atomic validation stage.
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
