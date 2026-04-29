@@ -70,8 +70,8 @@ _TURN_STALL_WARN_SECS: float = 90.0
 # Heuristic: 4 chars ≈ 1 token.  The threshold is set at 600 K chars (~150 K
 # tokens) — comfortably inside the 200 K-token context window while leaving
 # headroom for the system prompt, the final answer, and the tools schema.
-_CONV_PRUNE_THRESHOLD_CHARS: int = 300_000   # trigger pruning above this total
-_CONV_PRUNE_TARGET_CHARS: int = 200_000      # prune down to this target
+_CONV_PRUNE_THRESHOLD_CHARS: int = 1_500_000  # trigger pruning above this (~375K tokens)
+_CONV_PRUNE_TARGET_CHARS: int = 1_000_000     # prune down to this (~250K tokens)
 # Number of *trailing* message pairs (assistant + user) kept verbatim.
 # Keeping the most recent turns intact ensures the model still sees the fresh
 # tool output it just received; only older outputs are compressed.
@@ -582,7 +582,7 @@ class _CachedToolRegistry:
 _COMPACT_MIN_TURNS: int = 6       # keep first N turns fully intact
 _COMPACT_KEEP_RECENT: int = 3     # always keep last N assistant+user pairs
 _COMPACT_MIN_TEXT_LEN: int = 500  # only compact results above this size
-_COMPACT_PREVIEW_CHARS: int = 300  # chars of preview to keep in compact stub
+_COMPACT_PREVIEW_CHARS: int = 800  # chars of preview to keep in compact stub
 
 # Tools whose output is pure listings (file paths, tree nodes, log lines).
 # For these, showing a 300-char preview adds zero signal — the LLM already
