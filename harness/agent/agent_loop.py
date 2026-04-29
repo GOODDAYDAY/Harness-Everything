@@ -585,12 +585,29 @@ class AgentLoop:
             # ── Phase 1: Execute ──
             system = self._build_system(cycle)
             user_msg = self._build_cycle_user_message(cycle)
+
+            # Set up JSONL streaming writers so data hits disk immediately
+            seg = f"cycle_{cycle + 1}"
+            self.artifacts.write(system, seg, "system_prompt.txt")
+            llm_jsonl_path = Path(self.artifacts.run_dir) / seg / "llm_calls.jsonl"
+            tool_jsonl_path = Path(self.artifacts.run_dir) / seg / "tool_log.jsonl"
+
+            def _write_jsonl(path: Path, record: dict) -> None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, default=str) + "\n")
+
+            def on_llm(meta: dict) -> None: _write_jsonl(llm_jsonl_path, meta)
+            def on_tool(rec: dict) -> None: _write_jsonl(tool_jsonl_path, rec)
+
             try:
                 text, exec_log, llm_calls, conversation, raw_conversation = await self.llm.call_with_tools(
                     [{"role": "user", "content": user_msg}],
                     self.registry,
                     system=system,
                     max_turns=self.config.harness.max_tool_turns,
+                    on_llm_call=on_llm,
+                    on_tool_done=on_tool,
                 )
             except Exception as exc:
                 log.error("Agent cycle %d crashed: %s", cycles_run, exc, exc_info=True)

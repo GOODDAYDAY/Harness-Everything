@@ -10,7 +10,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import anthropic
 from anthropic._exceptions import OverloadedError
@@ -1074,6 +1074,8 @@ class LLM:
         *,
         system: str = "",
         max_turns: int = 30,
+        on_llm_call: Callable[[dict[str, Any]], Any] | None = None,
+        on_tool_done: Callable[[dict[str, Any]], Any] | None = None,
     ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         """Run a full tool_use agent loop.
 
@@ -1152,6 +1154,9 @@ class LLM:
                 # extracted and nothing else needs the raw response.
                 resp.raw = None
             llm_calls.append(turn_meta)
+            if on_llm_call:
+                try: on_llm_call(turn_meta)
+                except Exception: pass
 
             log.debug(
                 "tool_loop turn=%d stop=%s calls=%d total_tools=%d "
@@ -1367,15 +1372,17 @@ class LLM:
                         call_detail,
                     )
                 raw_output = result.output or result.error
-                execution_log.append(
-                    {
-                        "tool": tc["name"],
-                        "input": tc["input"],
-                        "output": raw_output,
-                        "duration_ms": round(result.elapsed_s * 1000),
-                        "is_error": result.is_error,
-                    }
-                )
+                tool_record = {
+                    "tool": tc["name"],
+                    "input": tc["input"],
+                    "output": raw_output,
+                    "duration_ms": round(result.elapsed_s * 1000),
+                    "is_error": result.is_error,
+                }
+                execution_log.append(tool_record)
+                if on_tool_done:
+                    try: on_tool_done(tool_record)
+                    except Exception: pass
                 tool_results.append(
                     {
                         "type": "tool_result",
