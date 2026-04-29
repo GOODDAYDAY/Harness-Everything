@@ -23,7 +23,9 @@ import logging
 import os
 import signal
 import shutil
+import socket
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,7 +36,7 @@ _active_bridges: set["GameBridge"] = set()
 log = logging.getLogger(__name__)
 
 DEFAULT_PORT = 19840
-DEFAULT_HOST = "localhost"
+DEFAULT_HOST = "127.0.0.1"
 
 
 @dataclass
@@ -80,6 +82,9 @@ class GameBridge:
         if godot is None:
             log.error("Godot executable not found: %s", self.godot_path)
             return False
+
+        # Wait for the port to be free (TIME_WAIT cleanup on Windows)
+        self._wait_port_free(self.port, timeout=5.0)
 
         log.info("Launching Godot: %s --path %s", godot, self.project_path)
         self._process = await asyncio.create_subprocess_exec(
@@ -334,6 +339,22 @@ class GameBridge:
             if c is not None and os.path.isfile(c) and os.access(c, os.X_OK):
                 return c
         return None
+
+    @staticmethod
+    def _wait_port_free(port: int, timeout: float = 5.0) -> None:
+        """Block until *port* is not in TIME_WAIT or other bound state."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+                sock.close()
+                return  # port is free
+            except OSError:
+                sock.close()
+                time.sleep(0.5)
+        log.warning("Port %d still in use after %.1fs — proceeding anyway", port, timeout)
 
     async def _wait_for_connection(self, timeout: float) -> bool:
         """Retry TCP connection until success or timeout."""
