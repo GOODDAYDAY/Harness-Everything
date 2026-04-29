@@ -141,15 +141,28 @@ class GameBridge:
         finally:
             self._disconnect()
 
-        # Fallback: terminate
-        log.warning("Sending SIGTERM to game (PID %d)", self._process.pid)
-        self._process.terminate()
+        # Fallback: force-kill (Windows: SIGTERM unreliable, use taskkill)
+        pid = self._process.pid
+        log.warning("Force-killing game (PID %d)", pid)
         try:
-            await asyncio.wait_for(self._process.wait(), timeout=5.0)
-        except asyncio.TimeoutError:
-            log.warning("Sending SIGKILL to game (PID %d)", self._process.pid)
             self._process.kill()
-            await self._process.wait()
+            await asyncio.wait_for(self._process.wait(), timeout=3.0)
+        except (asyncio.TimeoutError, OSError):
+            # Windows fallback: direct taskkill
+            import platform
+            if platform.system() == "Windows":
+                try:
+                    subprocess.run(
+                        ["taskkill", "/f", "/pid", str(pid)],
+                        capture_output=True, timeout=10,
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
 
         self._process = None
         _active_bridges.discard(self)

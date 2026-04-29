@@ -185,17 +185,23 @@ class GameScreenshotTool(Tool):
         state_resp = await bridge.get_state()
         if state_resp.ok:
             state = state_resp.data.get("state", {})
-            text_parts.append(f"Score: {state.get('score', 0)}")
-            text_parts.append(f"Round: {state.get('round', 0)}")
-            text_parts.append(f"Trees placed: {state.get('total_trees', 0)}")
+            text_parts.append(f"Phase: {state.get('phase', '?')}")
+            text_parts.append(f"Round: {state.get('round', 0)}  Day: {state.get('day', 0)}")
             text_parts.append(
-                f"Weather: {state.get('weather', {}).get('name', 'none')} "
-                f"{state.get('weather', {}).get('icon', '')}"
+                f"Alive: {state.get('alive_count', 0)} "
+                f"(Good: {state.get('alive_good_count', 0)}, "
+                f"Evil: {state.get('alive_evil_count', 0)})"
             )
-            hand = state.get("hand", [])
-            tree_names = {-1: ".", 0: "E", 1: "F", 2: "B", 3: "S", 4: "W"}
-            hand_str = " ".join(tree_names.get(t, "?") for t in hand)
-            text_parts.append(f"Hand: {hand_str} ({len(hand)} seeds)")
+            players = state.get("players", [])
+            role_icons = {
+                "werewolf": "🐺", "seer": "🔮", "witch": "🧪",
+                "hunter": "🏹", "guard": "🛡️", "villager": "👤", "none": "❓",
+            }
+            player_summary = " ".join(
+                f"[{role_icons.get(p.get('role','none'),'?')}{'💀' if not p.get('alive') else ''}]"
+                for p in players[:12]
+            )
+            text_parts.append(f"Players: {player_summary}")
 
         return ToolResult(
             output="\n".join(text_parts),
@@ -303,9 +309,10 @@ class GameStateTool(Tool):
 
     name = "game_state"
     description = (
-        "Query the internal state of the running game: current score, "
-        "round number, grid contents, player hand, active bonds, and "
-        "weather. Use this to verify game logic after making changes "
+        "Query the internal state of the running game: current phase, "
+        "round/day numbers, player list with roles/teams/status, "
+        "alive counts by faction, sheriff, game log, and winner. "
+        "Use this to verify game logic after making changes "
         "or after sending input. The game must be launched first with "
         "game_launch."
     )
@@ -330,48 +337,56 @@ class GameStateTool(Tool):
 
         state = resp.data.get("state", {})
 
-        # Format for readability
+        # ── Werewolf game state formatting ───────────────────────────
+        role_icons = {
+            "werewolf": "🐺", "seer": "🔮", "witch": "🧪",
+            "hunter": "🏹", "guard": "🛡️", "villager": "👤", "none": "❓",
+        }
+        phase_icons = {
+            "setup": "⚙️", "day_sheriff_election": "⭐",
+            "night_guard": "🛡️", "night_werewolf": "🐺",
+            "night_witch": "🧪", "night_seer": "🔮",
+            "day_announce": "📢", "day_discussion": "💬",
+            "day_vote": "🗳️", "day_result": "🏆", "game_over": "🎮",
+        }
+
+        phase = state.get("phase", "?")
+        pi = phase_icons.get(phase, "")
         lines = [
-            f"Score: {state.get('score', 0)}",
-            f"Round: {state.get('round', 0)}",
-            f"Trees placed: {state.get('total_trees', 0)}",
-            f"Selected seed: {state.get('selected_seed', -1)}",
-            f"Weather: {state.get('weather', {}).get('name', 'none')} "
-            f"{state.get('weather', {}).get('icon', '')}",
-            "",
-            f"Grid ({state.get('grid_cols', 4)}x{state.get('grid_rows', 3)}):",
+            f"{pi} Phase: {phase} (enum={state.get('phase_enum', '?')})",
+            f"Round: {state.get('round', 0)}  Day: {state.get('day', 0)}",
+            f"Alive: {state.get('alive_count', 0)}  "
+            f"Good: {state.get('alive_good_count', 0)}  "
+            f"Evil: {state.get('alive_evil_count', 0)}",
         ]
 
-        tree_names = {-1: ".", 0: "E", 1: "F", 2: "B", 3: "S", 4: "W"}
-        grid = state.get("grid", [])
-        cols = state.get("grid_cols", 4)
-        for row_idx in range(state.get("grid_rows", 3)):
-            row_cells = []
-            for col_idx in range(cols):
-                idx = row_idx * cols + col_idx
-                if idx < len(grid):
-                    cell = grid[idx]
-                    if cell.get("blocked"):
-                        row_cells.append("X")
-                    else:
-                        row_cells.append(tree_names.get(cell.get("type", -1), "?"))
-                else:
-                    row_cells.append("?")
-            lines.append("  " + " ".join(row_cells))
+        sheriff = state.get("sheriff", -1)
+        if sheriff >= 0:
+            lines.append(f"Sheriff: Player {sheriff}")
 
-        hand = state.get("hand", [])
-        hand_names = [tree_names.get(t, "?") for t in hand]
-        lines.append(f"\nHand: {' '.join(hand_names)} ({len(hand)} seeds)")
+        winner = state.get("winner", "")
+        if winner:
+            lines.append(f"Winner: {winner}")
 
-        bonds = state.get("bonds", [])
-        if bonds:
-            lines.append(f"\nBonds ({len(bonds)}):")
-            for b in bonds:
-                lines.append(
-                    f"  {b.get('bond_name', '?')}: "
-                    f"({b['cell_a'][0]},{b['cell_a'][1]}) - "
-                    f"({b['cell_b'][0]},{b['cell_b'][1]})"
-                )
+        lines.append("")
+        lines.append("Players:")
+        for p in state.get("players", []):
+            role = p.get("role", "none")
+            icon = role_icons.get(role, "❓")
+            status = "💀" if not p.get("alive") else "  "
+            sheriff_flag = "⭐" if p.get("is_sheriff") else "  "
+            human_flag = "👤" if p.get("is_human") else "  "
+            lines.append(
+                f"  [{p['index']:2d}] {icon} {status} {sheriff_flag} {human_flag} "
+                f"{role:>10s} ({p.get('team','?'):>4s})  {p.get('name','')}"
+            )
+
+        game_log = state.get("game_log", [])
+        if game_log:
+            lines.append("")
+            lines.append(f"Game Log ({len(game_log)} entries):")
+            for entry in game_log[-10:]:  # Last 10 entries
+                lines.append(f"  {entry}")
 
         return ToolResult(
             output="\n".join(lines),

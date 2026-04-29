@@ -278,6 +278,7 @@ class AgentLoop:
         self.registry = build_registry(
             config.harness.allowed_tools or None,
             extra_tools=extra or None,
+            custom_tools_path=config.harness.custom_tools_path or None,
         )
 
         # ── Skills system ──
