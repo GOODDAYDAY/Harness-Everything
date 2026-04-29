@@ -585,7 +585,7 @@ class AgentLoop:
             system = self._build_system(cycle)
             user_msg = self._build_cycle_user_message(cycle)
             try:
-                text, exec_log, llm_calls, conversation = await self.llm.call_with_tools(
+                text, exec_log, llm_calls, conversation, raw_conversation = await self.llm.call_with_tools(
                     [{"role": "user", "content": user_msg}],
                     self.registry,
                     system=system,
@@ -776,7 +776,9 @@ class AgentLoop:
             # ── Phase 6: Persist ──
             self._persist_cycle(
                 cycle, text, exec_log, hook_failures,
+                system=system,
                 llm_calls=llm_calls, conversation=conversation,
+                raw_conversation=raw_conversation,
             )
             summary = self._extract_cycle_summary(text, exec_log, hook_failures)
             if metrics_line:
@@ -842,8 +844,11 @@ class AgentLoop:
         text: str,
         exec_log: list[dict[str, Any]],
         hook_failures: list[str],
+        *,
+        system: str = "",
         llm_calls: list[dict[str, Any]] | None = None,
         conversation: list[dict[str, Any]] | None = None,
+        raw_conversation: list[dict[str, Any]] | None = None,
     ) -> None:
         seg = f"cycle_{cycle + 1}"
         try:
@@ -856,6 +861,8 @@ class AgentLoop:
                 self.artifacts.write(
                     "\n".join(hook_failures), seg, "hook_failures.txt",
                 )
+            if system:
+                self.artifacts.write(system, seg, "system_prompt.txt")
             if llm_calls is not None:
                 self.artifacts.write(
                     json.dumps(llm_calls, indent=2, default=str),
@@ -865,6 +872,11 @@ class AgentLoop:
                 self.artifacts.write(
                     json.dumps(conversation, indent=2, default=str),
                     seg, "conversation.json",
+                )
+            if raw_conversation is not None:
+                self.artifacts.write(
+                    json.dumps(raw_conversation, indent=2, default=str),
+                    seg, "conversation_raw.json",
                 )
         except Exception as exc:
             log.warning("Agent: failed to persist cycle %d: %s", cycle + 1, exc)

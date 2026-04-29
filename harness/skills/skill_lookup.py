@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from harness.core.config import HarnessConfig
 from harness.tools.base import Tool, ToolResult
+
+log = logging.getLogger(__name__)
 
 
 class SkillLookupTool(Tool):
@@ -70,9 +73,11 @@ class SkillLookupTool(Tool):
             index = registry.compact_index()
             if not index:
                 return ToolResult(output="No on-demand skills available.")
+            log.info("skills: skill_lookup — listing index (%d skills)", len(registry.names))
             return ToolResult(output=index)
 
         # Look up the requested skill.
+        log.info("skills: skill_lookup — loading skill %r", name)
         skill = registry.get(name)
         if skill is None:
             available = sorted(registry.names)
