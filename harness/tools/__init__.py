@@ -36,6 +36,7 @@ All other tools in this module (no network access required) plus the new
 """
 
 import logging
+from pathlib import Path
 
 from harness.tools.base import Tool
 from harness.tools.registry import ToolRegistry
@@ -172,9 +173,85 @@ ALL_TOOLS: list[Tool] = DEFAULT_TOOLS + OPTIONAL_TOOLS
 _ALL_TOOLS_BY_NAME: dict[str, Tool] = {t.name: t for t in ALL_TOOLS}
 
 
+def _load_custom_tools(custom_tools_path: str) -> list[Tool]:
+    """Load Tool subclass instances from .py files in *custom_tools_path*.
+
+    Scans the directory (shallow) for ``.py`` files, imports each via
+    ``importlib``, and instantiates any concrete ``Tool`` subclass found.
+    Non-init files without a ``Tool`` subclass are silently skipped.
+
+    Returns a list of instantiated ``Tool`` objects ready for registration.
+    """
+    import importlib.util
+    import inspect
+    import sys
+
+    tools: list[Tool] = []
+    scan_path = Path(custom_tools_path)
+
+    if not scan_path.is_dir():
+        log.warning(
+            "custom_tools_path %r is not a directory — skipping custom tools",
+            custom_tools_path,
+        )
+        return tools
+
+    py_files = sorted(
+        f for f in scan_path.iterdir()
+        if f.is_file() and f.suffix == ".py" and f.name != "__init__.py"
+    )
+    if not py_files:
+        return tools
+
+    _added = str(scan_path) not in sys.path
+    if _added:
+        sys.path.insert(0, str(scan_path))
+    try:
+        for py_file in py_files:
+            module_name = f"_custom_tool_{py_file.stem}"
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, py_file)
+                if spec is None or spec.loader is None:
+                    log.warning("custom_tools: cannot load %s — skipping", py_file.name)
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                try:
+                    spec.loader.exec_module(module)
+                finally:
+                    sys.modules.pop(module_name, None)
+                for _name, _cls in inspect.getmembers(module, inspect.isclass):
+                    if (
+                        _cls is not Tool
+                        and issubclass(_cls, Tool)
+                        and not inspect.isabstract(_cls)
+                    ):
+                        try:
+                            instance = _cls()
+                            tools.append(instance)
+                            log.info(
+                                "custom_tools: loaded %r from %s",
+                                instance.name, py_file.name,
+                            )
+                        except Exception as exc:
+                            log.warning(
+                                "custom_tools: failed to instantiate %s from %s: %s",
+                                _name, py_file.name, exc,
+                            )
+            except Exception as exc:
+                log.warning("custom_tools: error loading %s: %s", py_file.name, exc)
+    finally:
+        if _added:
+            sys.path.pop(0)
+
+    return tools
+
+
 def build_registry(
     allowed_tools: list[str] | None = None,
     extra_tools: list[str] | None = None,
+    *,
+    custom_tools_path: str | None = None,
 ) -> ToolRegistry:
     """Create a ToolRegistry pre-loaded with built-in tools.
 
@@ -219,5 +296,17 @@ def build_registry(
         if registry.get(name) is None:
             registry.register(tool_instance)
             log.debug("extra_tools: registered %r", name)
+
+    # Register custom tools from an external directory
+    if custom_tools_path:
+        for tool in _load_custom_tools(custom_tools_path):
+            if registry.get(tool.name) is None:
+                registry.register(tool)
+                log.info("custom_tools: registered %r in registry", tool.name)
+            else:
+                log.warning(
+                    "custom_tools: tool %r conflicts with built-in — skipping",
+                    tool.name,
+                )
 
     return registry

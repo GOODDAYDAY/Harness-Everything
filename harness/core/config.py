@@ -56,6 +56,11 @@ class HarnessConfig:
     # The harness does not validate these — each tool validates its own
     # section at execution time.  See architecture.md "Adding tool-specific
     # config for an optional tool" for the convention.
+    custom_tools_path: str = ""
+    # External directory of custom Tool subclasses to auto-load.
+    # Each .py file in this directory is scanned for concrete Tool subclasses
+    # which are instantiated and registered in the tool registry automatically.
+    # The directory is relative to workspace (or absolute).  Default "" = off.
     bash_command_denylist: list[str] = field(default_factory=list)
     # Shell commands (or leading tokens) that BashTool will refuse to execute.
     # Each entry is matched against the first whitespace-separated token of the
@@ -93,6 +98,10 @@ class HarnessConfig:
         if not self.allowed_paths:
             self.allowed_paths = [self.workspace]
         self.allowed_paths = [str(Path(p).resolve()) for p in self.allowed_paths]
+        if self.custom_tools_path:
+            self.custom_tools_path = str(
+                (Path(self.workspace) / self.custom_tools_path).resolve()
+            )
         
         # --- initialize homoglyph blocklist if empty ---
         if not self.homoglyph_blocklist:
