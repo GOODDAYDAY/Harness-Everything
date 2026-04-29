@@ -163,7 +163,10 @@ class GameScreenshotTool(Tool):
                 is_error=True,
             )
 
-        path = params.get("output_path", "/tmp/game_screenshot.png")
+        tool_cfg = config.tool_config.get("game_screenshot", {})
+        default_dir = tool_cfg.get("output_dir", "/tmp")
+        default_path = str(Path(default_dir) / "game_screenshot.png")
+        path = params.get("output_path", default_path)
         resp = await bridge.screenshot(path)
         if not resp.ok:
             return ToolResult(error=f"Screenshot failed: {resp.error}", is_error=True)
