@@ -100,4 +100,14 @@ def resolve_cycle_skills(
     else:
         index_text = ""
 
+    # Cycle summary log
+    auto_loaded_names = [s.name for s in auto_skills if s not in demoted]
+    demand_names = [s.name for s in index_entries]
+    log.info(
+        "skills: cycle resolution — %d auto-loaded (%s), %d on-demand available",
+        len(auto_loaded_names),
+        ", ".join(auto_loaded_names) if auto_loaded_names else "(none)",
+        len(demand_names),
+    )
+
     return auto_text, index_text

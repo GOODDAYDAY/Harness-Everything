@@ -46,6 +46,10 @@ def discover_skills(workspace: str) -> list[Skill]:
         try:
             skill = load_skill(skill_file)
             skills.append(skill)
+            log.info(
+                "skills: discovered %s (auto_load=%s, ~%d chars)",
+                skill.name, skill.auto_load, skill.char_count,
+            )
         except Exception as exc:
             log.warning("skills: failed to load %s — %s", skill_file, exc)
     return skills

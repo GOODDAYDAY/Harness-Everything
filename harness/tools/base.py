@@ -562,7 +562,7 @@ class Tool(ABC):
         resolved = validated
 
         # 2. Atomic open with O_NOFOLLOW to prevent symlink traversal
-        flags = os.O_RDONLY | os.O_NOFOLLOW
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
         if directory:
             flags |= getattr(os, 'O_DIRECTORY', 0)  # O_DIRECTORY may not exist on all platforms
         
@@ -832,7 +832,7 @@ class Tool(ABC):
         """
         try:
             # First attempt: open with O_NOFOLLOW to prevent symlink swapping
-            fd = os.open(path, flags | os.O_NOFOLLOW)
+            fd = os.open(path, flags | getattr(os, 'O_NOFOLLOW', 0))
             return fd, None
         except OSError as exc:
             if exc.errno == errno.EINVAL:

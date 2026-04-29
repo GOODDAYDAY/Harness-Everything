@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 import random
@@ -972,6 +973,11 @@ class LLM:
             kwargs["system"] = system
         if tools:
             kwargs["tools"] = tools
+        # DeepSeek V4 models have thinking mode enabled by default.
+        # The harness doesn't pass thinking blocks back to the API, which
+        # causes a 400 error on subsequent turns. Disable thinking explicitly.
+        if (self.config.model or "").lower().startswith("deepseek"):
+            kwargs["thinking"] = {"type": "disabled"}
 
         t0 = time.monotonic()
         # Gate every API call through the per-process semaphore so the
@@ -1068,19 +1074,21 @@ class LLM:
         *,
         system: str = "",
         max_turns: int = 30,
-    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         """Run a full tool_use agent loop.
 
-        Returns ``(final_text, execution_log, llm_calls, conversation)``
+        Returns ``(final_text, execution_log, llm_calls, conversation, raw_conversation)``
         where:
 
         - *execution_log* — list of tool call records
         - *llm_calls* — per-turn LLM API metadata (tokens, latency, model)
-        - *conversation* — full message list at loop exit (post-pruning)
+        - *conversation* — full message list at loop exit (post-pruning / compaction)
+        - *raw_conversation* — full message list without any compaction (original tool outputs)
         """
         cached_registry = _CachedToolRegistry(registry)
         tools_schema = cached_registry.to_api_schema()
         conversation = list(messages)
+        raw_conversation: list[dict[str, Any]] = copy.deepcopy(messages)
         execution_log: list[dict[str, Any]] = []
         llm_calls: list[dict[str, Any]] = []
         loop_start = time.monotonic()
@@ -1123,6 +1131,7 @@ class LLM:
                 "elapsed_s": round(turn_elapsed, 2),
                 "tool_calls": len(resp.tool_calls),
                 "text_len": len(resp.text) if resp.text else 0,
+                "text_preview": (resp.text or "")[:300],
             }
             if resp.raw is not None:
                 _u = getattr(resp.raw, "usage", None)
@@ -1206,6 +1215,7 @@ class LLM:
                 )
                 assistant_content.append({"type": "text", "text": "(no output)"})
             conversation.append({"role": "assistant", "content": assistant_content})
+            raw_conversation.append({"role": "assistant", "content": copy.deepcopy(assistant_content)})
 
             if not resp.tool_calls:
                 elapsed = time.monotonic() - loop_start
@@ -1218,7 +1228,7 @@ class LLM:
                     total_out_tokens,
                     elapsed,
                 )
-                return resp.text, execution_log, llm_calls, conversation
+                return resp.text, execution_log, llm_calls, conversation, raw_conversation
 
             # Classify this turn's tool calls into three lanes:
             #   scratchpad  — intercepted here (no I/O); the note gets saved
@@ -1375,6 +1385,7 @@ class LLM:
                     }
                 )
             conversation.append({"role": "user", "content": tool_results})
+            raw_conversation.append({"role": "user", "content": copy.deepcopy(tool_results)})
 
             # Prune old tool-result text when the conversation grows large.
             # This prevents context-window overflow (HTTP 400 "prompt too long")
@@ -1443,4 +1454,4 @@ class LLM:
             f"Reduce plan scope or raise max_tool_turns in HarnessConfig.\n"
             f"STATUS: PARTIAL"
         )
-        return partial_summary, execution_log, llm_calls, conversation
+        return partial_summary, execution_log, llm_calls, conversation, raw_conversation
