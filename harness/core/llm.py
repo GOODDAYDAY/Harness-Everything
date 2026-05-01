@@ -8,6 +8,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -941,11 +942,12 @@ class LLM:
         api_key = config.api_key or os.environ.get("HARNESS_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY") or ""
         if api_key:
             kwargs["api_key"] = api_key
-        # Hard HTTP-level timeout — prevents asyncio.wait_for from leaking
-        # on Windows where ProactorEventLoop can't cancel in-flight socket ops.
-        kwargs.setdefault("timeout", 120.0)
+        # Structured HTTP timeout: prevents slow-dribble hangs from DeepSeek.
+        # connect=10s, read=90s (no data in 90s → fail), total=180s hard cap.
+        import httpx
+        kwargs.setdefault("timeout", httpx.Timeout(10.0, read=90.0, write=30.0, pool=10.0, connect=10.0))
         kwargs.setdefault("max_retries", 1)
-        log.info("LLM client: base_url=%s model=%s timeout=%.0fs", base_url or "(default)", config.model, kwargs["timeout"])
+        log.info("LLM client: base_url=%s model=%s", base_url or "(default)", config.model)
         self.client = anthropic.AsyncAnthropic(**kwargs)
         # API-concurrency cap: clamp the configured value into [1, 20] so a
         # misconfigured 0 doesn't deadlock every caller and an accidentally-huge
@@ -984,16 +986,24 @@ class LLM:
             kwargs["thinking"] = {"type": "disabled"}
 
         t0 = time.monotonic()
-        # Gate every API call through the per-process semaphore so the
-        # provider's rate limit is respected even when multiple concurrent
-        # tasks (dual evaluators, parallel tool calls) fire simultaneously.
-        async with self._api_semaphore:
-            resp = await _call_with_retry(
-                lambda: asyncio.wait_for(
-                    self.client.messages.create(**kwargs),
-                    timeout=timeout,
+        # Watchdog: if the API call doesn't return within timeout+60s,
+        # force-kill the process.  This is the last-resort safety net for
+        # Windows where asyncio.wait_for leaks in-flight socket ops.
+        wd_deadline = timeout + 60
+        wd = threading.Timer(wd_deadline, lambda: os._exit(99))
+        wd.daemon = True
+        wd.start()
+        try:
+            # Gate every API call through the per-process semaphore.
+            async with self._api_semaphore:
+                resp = await _call_with_retry(
+                    lambda: asyncio.wait_for(
+                        self.client.messages.create(**kwargs),
+                        timeout=timeout,
+                    )
                 )
-            )
+        finally:
+            wd.cancel()
         elapsed = time.monotonic() - t0
 
         text_parts: list[str] = []
