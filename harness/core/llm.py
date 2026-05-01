@@ -941,7 +941,11 @@ class LLM:
         api_key = config.api_key or os.environ.get("HARNESS_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY") or ""
         if api_key:
             kwargs["api_key"] = api_key
-        log.info("LLM client: base_url=%s model=%s", base_url or "(default)", config.model)
+        # Hard HTTP-level timeout — prevents asyncio.wait_for from leaking
+        # on Windows where ProactorEventLoop can't cancel in-flight socket ops.
+        kwargs.setdefault("timeout", 120.0)
+        kwargs.setdefault("max_retries", 1)
+        log.info("LLM client: base_url=%s model=%s timeout=%.0fs", base_url or "(default)", config.model, kwargs["timeout"])
         self.client = anthropic.AsyncAnthropic(**kwargs)
         # API-concurrency cap: clamp the configured value into [1, 20] so a
         # misconfigured 0 doesn't deadlock every caller and an accidentally-huge
