@@ -25,6 +25,7 @@ import signal
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,7 +71,7 @@ class GameBridge:
     # ── Process management ────────────────────────────────────────────────
 
     async def launch(self, timeout: float = 15.0) -> bool:
-        """Start Godot and wait for the TestHarness TCP server to be ready.
+        """Start the game and wait for the TCP server to be ready.
 
         Returns True if the game launched and responded to ping.
         """
@@ -78,20 +79,17 @@ class GameBridge:
             log.warning("Game already running (PID %d)", self._process.pid)
             return True
 
-        godot = self._resolve_godot_path()
-        if godot is None:
-            log.error("Godot executable not found: %s", self.godot_path)
-            return False
-
         # Wait for the port to be free (TIME_WAIT cleanup on Windows)
         self._wait_port_free(self.port, timeout=5.0)
 
-        log.info("Launching Godot: %s --path %s", godot, self.project_path)
-        self._process = await asyncio.create_subprocess_exec(
-            godot, "--path", self.project_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        game_type = os.environ.get("HARNESS_GAME_TYPE", "godot")
+
+        if game_type == "python":
+            self._process = await self._launch_python()
+        else:
+            self._process = await self._launch_godot()
+        if self._process is None:
+            return False
         log.info("Godot started with PID %d", self._process.pid)
 
         # Wait for TestHarness TCP server to accept connections
@@ -111,6 +109,32 @@ class GameBridge:
         log.info("Game launched and responding (engine: %s)",
                  resp.data.get("version", "?"))
         return True
+
+    async def _launch_python(self) -> asyncio.subprocess.Process | None:
+        """Launch the Python game entry point."""
+        entry = os.environ.get("HARNESS_GAME_ENTRY", "main.py")
+        python = sys.executable
+        cwd = self.project_path
+        log.info("Launching Python: %s %s (cwd=%s)", python, entry, cwd)
+        return await asyncio.create_subprocess_exec(
+            python, entry,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+    async def _launch_godot(self) -> asyncio.subprocess.Process | None:
+        """Launch the Godot project."""
+        godot = self._resolve_godot_path()
+        if godot is None:
+            log.error("Godot executable not found: %s", self.godot_path)
+            return None
+        log.info("Launching Godot: %s --path %s", godot, self.project_path)
+        return await asyncio.create_subprocess_exec(
+            godot, "--path", self.project_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
     async def stop(self) -> None:
         """Stop the game process gracefully."""
